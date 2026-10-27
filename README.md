@@ -1,1 +1,1 @@
-# college_erp
+# school erp
