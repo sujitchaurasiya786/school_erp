@@ -4,27 +4,102 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}School ERP System{% endblock %}</title>
+    <!-- Google Fonts & Bootstrap 5.3 & Bootstrap Icons -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #f8fafc;
+            color: #1e293b;
+        }
+        .navbar-custom {
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+        }
+        .nav-brand-title {
+            letter-spacing: -0.5px;
+            font-weight: 700;
+        }
+        .badge-academic {
+            background: rgba(59, 130, 246, 0.15);
+            color: #3b82f6;
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            font-weight: 600;
+        }
+        .footer {
+            font-size: 0.875rem;
+            color: #64748b;
+        }
+    </style>
     {% block extra_css %}{% endblock %}
 </head>
-<body class="bg-light">
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
-        <div class="container-fluid">
-            <a class="navbar-brand fw-bold" href="#">School ERP</a>
-            <div class="collapse navbar-collapse">
-                <ul class="navbar-nav ms-auto">
-                    {% if user.is_authenticated %}
-                        <li class="nav-item">
-                            <span class="nav-link text-white">{{ user.username }} ({{ user.user_type }})</span>
-                        </li>
-                    {% endif %}
+<body class="d-flex flex-column min-vh-100">
+
+    <!-- Top Navigation Bar -->
+    <nav class="navbar navbar-expand-lg navbar-dark navbar-custom py-3">
+        <div class="container-fluid px-4">
+            <a class="navbar-brand d-flex align-items-center gap-2 nav-brand-title" href="/">
+                <i class="bi bi-mortarboard-fill text-primary fs-4"></i>
+                <span>School ERP</span>
+                <span class="badge badge-academic rounded-pill px-2.5 py-1 ms-2 fs-7">CBSE Edition</span>
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarContent">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarContent">
+                <ul class="navbar-nav me-auto mb-2 mb-lg-0 ms-lg-4">
+                    <li class="nav-item">
+                        <a class="nav-link active fw-medium" href="/"><i class="bi bi-speedometer2 me-1"></i> Dashboard</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link fw-medium" href="/api/v1/" target="_blank"><i class="bi bi-braces me-1"></i> REST API v1</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link fw-medium" href="/admin/" target="_blank"><i class="bi bi-shield-lock me-1"></i> Admin Console</a>
+                    </li>
                 </ul>
+                <div class="d-flex align-items-center gap-3">
+                    <span class="badge bg-success-subtle text-success border border-success-subtle px-3 py-2 rounded-pill">
+                        <i class="bi bi-check-circle-fill me-1"></i> MySQL Connected
+                    </span>
+                    {% if user.is_authenticated %}
+                        <div class="dropdown">
+                            <button class="btn btn-dark btn-sm dropdown-toggle rounded-pill px-3 py-1.5" type="button" data-bs-toggle="dropdown">
+                                <i class="bi bi-person-circle me-1"></i> {{ user.username }}
+                            </button>
+                            <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+                                <li><a class="dropdown-item" href="/admin/"><i class="bi bi-gear me-2"></i> Admin Panel</a></li>
+                                <li><hr class="dropdown-divider"></li>
+                                <li><a class="dropdown-item text-danger" href="/admin/logout/"><i class="bi bi-box-arrow-right me-2"></i> Log out</a></li>
+                            </ul>
+                        </div>
+                    {% else %}
+                        <a href="/admin/login/" class="btn btn-outline-light btn-sm rounded-pill px-3 py-1.5">
+                            <i class="bi bi-box-arrow-in-right me-1"></i> Sign In
+                        </a>
+                    {% endif %}
+                </div>
             </div>
         </div>
     </nav>
-    <div class="container my-4">
+
+    <!-- Main Container -->
+    <main class="flex-grow-1 container-fluid px-4 py-4">
         {% block content %}{% endblock %}
-    </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer bg-white border-top py-3 mt-auto">
+        <div class="container-fluid px-4 d-flex justify-content-between align-items-center">
+            <span>&copy; 2026 CBSE School ERP System. All rights reserved.</span>
+            <span>Modular Monolith with Django REST Framework</span>
+        </div>
+    </footer>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     {% block extra_js %}{% endblock %}
 </body>

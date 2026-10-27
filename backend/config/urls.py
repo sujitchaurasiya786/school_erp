@@ -57,7 +57,10 @@ api_v1_patterns = [
     path('analytics/', include('apps.analytics.urls')),
 ]
 
+from config.views import dashboard_view
+
 urlpatterns = [
+    path('', dashboard_view, name='home-dashboard'),
     path('admin/', admin.site.urls),
     path('api/v1/', include(api_v1_patterns)),
 ]
