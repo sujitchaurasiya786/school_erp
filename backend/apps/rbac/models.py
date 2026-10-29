@@ -5,6 +5,7 @@ from common.models import TimeStampedModel
 
 
 class ModuleCode(models.TextChoices):
+    IDENTITY = 'identity', _('User & Identity Management')
     ADMISSIONS = 'admissions', _('Admissions')
     STUDENTS = 'students', _('Students')
     ACADEMICS = 'academics', _('Academics')

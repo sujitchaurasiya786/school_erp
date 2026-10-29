@@ -36,7 +36,7 @@
   <link rel="stylesheet" href="{% static 'admin/assets/css/style.css' %}" id="main-style-link">
   <link rel="stylesheet" href="{% static 'admin/assets/css/style-preset.css' %}">
   <!-- my css -->
-   <link rel="stylesheet" href="{% static 'css/my.css' %}">
+    <link rel="stylesheet" href="{% static 'css/my.css' %}">
 
 </head>
 <!-- [Head] end -->
@@ -181,33 +181,37 @@
           <li class="dropdown pc-h-item header-user-profile">
             <a class="pc-head-link dropdown-toggle arrow-none me-0" data-bs-toggle="dropdown" href="#" role="button"
               aria-haspopup="false" data-bs-auto-close="outside" aria-expanded="false">
+              {% if request.user.avatar %}
+              <img src="{{ request.user.avatar.url }}" alt="user-image" class="user-avtar">
+              {% else %}
               <img src="{% static 'admin/assets/images/user/avatar-2.jpg' %}" alt="user-image" class="user-avtar">
-              <span>Admin</span>
+              {% endif %}
+              <span>{{ request.user.full_name|default:request.user.username|default:"Account" }}</span>
             </a>
             <div class="dropdown-menu dropdown-user-profile dropdown-menu-end pc-h-dropdown">
               <div class="dropdown-header">
-                <div class="d-flex mb-1">
+                <div class="d-flex mb-1 align-items-center">
                   <div class="flex-shrink-0">
+                    {% if request.user.avatar %}
+                    <img src="{{ request.user.avatar.url }}" alt="user-image" class="user-avtar wid-35 rounded-circle">
+                    {% else %}
                     <img src="{% static 'admin/assets/images/user/avatar-2.jpg' %}" alt="user-image"
                       class="user-avtar wid-35">
+                    {% endif %}
                   </div>
                   <div class="flex-grow-1 ms-3">
-                    <h6 class="mb-1">Admin</h6>
-                    <span>{{adminid}}</span>
+                    <h6 class="mb-0 fw-bold">{{ request.user.full_name|default:request.user.username }}</h6>
+                    <small class="badge bg-light-primary text-primary mt-1">{{ request.user.get_user_type_display|default:"User" }}</small>
                   </div>
                   <!-- LOGOUT -->
-                  <a href="#" class="pc-head-link bg-transparent"><i class="ti ti-power text-danger"></i></a>
+                  <a href="{% url 'logout' %}" class="pc-head-link bg-transparent" title="Logout"><i class="ti ti-power text-danger fs-5"></i></a>
                 </div>
               </div>
 
               <div class="tab-content" id="mysrpTabContent">
                 <div class="tab-pane fade show active" id="drp-tab-1" role="tabpanel" aria-labelledby="drp-t1"
                   tabindex="0">
-                  <a href="#" class="dropdown-item">
-                    <i class="ti ti-edit-circle"></i>
-                    <span>Change Password</span>
-                  </a>
-                  <a href="#" class="dropdown-item">
+                  <a href="{% url 'logout' %}" class="dropdown-item text-danger">
                     <i class="ti ti-power"></i>
                     <span>Logout</span>
                   </a>

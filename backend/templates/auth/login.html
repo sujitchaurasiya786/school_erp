@@ -1,0 +1,243 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=0, minimal-ui">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>Login | {{ school_profile.school_name|default:"CBSE School ERP" }}</title>
+
+    <!-- [Favicon] icon -->
+    <link rel="icon" href="{% static 'admin/assets/images/favicon.svg' %}" type="image/x-icon">
+
+    <!-- [Google Font] Family -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@300;400;500;600;700;800&display=swap" id="main-font-link">
+
+    <!-- [Icons] -->
+    <link rel="stylesheet" href="{% static 'admin/assets/fonts/tabler-icons.min.css' %}">
+    <link rel="stylesheet" href="{% static 'admin/assets/fonts/feather.css' %}">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!-- [Template CSS Files] -->
+    <link rel="stylesheet" href="{% static 'admin/assets/css/style.css' %}" id="main-style-link">
+    <link rel="stylesheet" href="{% static 'admin/assets/css/style-preset.css' %}">
+
+    <!-- [Application Custom CSS] -->
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+</head>
+
+<body class="auth-body">
+    <div class="auth-wrapper">
+        <div class="card auth-card">
+            <div class="row g-0">
+                <!-- Left: School Branding & Features -->
+                <div class="col-lg-5 d-none d-lg-flex auth-side-banner">
+                    <div>
+                        <div class="school-badge">
+                            <i class="bi bi-mortarboard-fill"></i>
+                            <span>{{ school_profile.board|default:"CBSE" }} Affiliated</span>
+                        </div>
+                        <h2 class="fw-bold text-white mb-2" style="font-size: 1.85rem; line-height: 1.25;">
+                            {{ school_profile.school_name|default:"CBSE Model Senior Secondary School" }}
+                        </h2>
+                        <p class="text-white text-opacity-75 mb-4" style="font-size: 0.95rem;">
+                            Unified School Management & Academic Operations ERP
+                        </p>
+
+                        <div class="mt-4 pt-2">
+                            <div class="feature-item">
+                                <div class="feature-icon">
+                                    <i class="bi bi-person-badge"></i>
+                                </div>
+                                <div>
+                                    <h6 class="text-white mb-0 fw-semibold">Academic & Attendance</h6>
+                                    <small class="text-white text-opacity-75">Nursery to Class 12 management</small>
+                                </div>
+                            </div>
+
+                            <div class="feature-item">
+                                <div class="feature-icon">
+                                    <i class="bi bi-cash-coin"></i>
+                                </div>
+                                <div>
+                                    <h6 class="text-white mb-0 fw-semibold">Fee Collection & Accounts</h6>
+                                    <small class="text-white text-opacity-75">Receipts, dues and concessions</small>
+                                </div>
+                            </div>
+
+                            <div class="feature-item">
+                                <div class="feature-icon">
+                                    <i class="bi bi-award"></i>
+                                </div>
+                                <div>
+                                    <h6 class="text-white mb-0 fw-semibold">Exams & Assessment</h6>
+                                    <small class="text-white text-opacity-75">Report cards and grade calculation</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="pt-4 border-top border-white border-opacity-20 d-flex justify-content-between align-items-center">
+                        <small class="text-white text-opacity-75">
+                            <i class="bi bi-calendar-check me-1"></i> Academic Session: <strong>{{ current_year.name|default:"2026-2027" }}</strong>
+                        </small>
+                        <span class="badge bg-white bg-opacity-20 text-white rounded-pill px-3 py-1 text-uppercase" style="font-size: 0.7rem;">
+                            v1.0 Online
+                        </span>
+                    </div>
+                </div>
+
+                <!-- Right: Login Form -->
+                <div class="col-lg-7 d-flex align-items-center">
+                    <div class="auth-form-wrap w-100">
+                        <!-- Top Mobile Branding -->
+                        <div class="d-lg-none mb-4 text-center">
+                            <div class="d-inline-flex p-3 rounded-circle bg-primary bg-opacity-10 text-primary mb-2">
+                                <i class="bi bi-mortarboard-fill fs-2"></i>
+                            </div>
+                            <h4 class="fw-bold mb-1">{{ school_profile.school_name|default:"CBSE School ERP" }}</h4>
+                            <p class="text-muted small">Sign in to access your portal</p>
+                        </div>
+
+                        <div class="mb-4">
+                            <h3 class="fw-bold text-dark mb-1">Welcome back</h3>
+                            <p class="text-muted">Enter your credentials to access your School ERP account</p>
+                        </div>
+
+                        <!-- Messages / Alert Display -->
+                        {% if messages %}
+                            {% for message in messages %}
+                                <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %} alert-dismissible fade show rounded-3 py-2 px-3 mb-3 d-flex align-items-center gap-2" role="alert">
+                                    {% if message.tags == 'error' %}
+                                        <i class="bi bi-exclamation-triangle-fill text-danger fs-5"></i>
+                                    {% elif message.tags == 'success' %}
+                                        <i class="bi bi-check-circle-fill text-success fs-5"></i>
+                                    {% else %}
+                                        <i class="bi bi-info-circle-fill text-info fs-5"></i>
+                                    {% endif %}
+                                    <div class="flex-grow-1 small fw-medium">{{ message }}</div>
+                                    <button type="button" class="btn-close py-2" data-bs-dismiss="alert" aria-label="Close"></button>
+                                </div>
+                            {% endfor %}
+                        {% endif %}
+
+                        <!-- Login Form -->
+                        <form method="POST" action="{% url 'login' %}" autocomplete="on" id="loginForm">
+                            {% csrf_token %}
+                            <input type="hidden" name="next" value="{{ next }}">
+
+                            <!-- Username / Email Field -->
+                            <div class="form-floating mb-3 position-relative">
+                                <i class="bi bi-person input-icon"></i>
+                                <input type="text" 
+                                       class="form-control" 
+                                       id="usernameInput" 
+                                       name="username" 
+                                       placeholder="Username or Email" 
+                                       value="{{ username|default:'' }}" 
+                                       required 
+                                       autofocus>
+                                <label for="usernameInput">Username or Email Address</label>
+                            </div>
+
+                            <!-- Password Field -->
+                            <div class="form-floating mb-3 position-relative">
+                                <i class="bi bi-shield-lock input-icon"></i>
+                                <input type="password" 
+                                       class="form-control" 
+                                       id="passwordInput" 
+                                       name="password" 
+                                       placeholder="Password" 
+                                       required>
+                                <label for="passwordInput">Password</label>
+                                <button type="button" 
+                                        class="btn-toggle-password" 
+                                        id="togglePasswordBtn" 
+                                        tabindex="-1"
+                                        title="Show / hide password"
+                                        aria-label="Toggle password visibility">
+                                    <i class="bi bi-eye" id="togglePasswordIcon"></i>
+                                </button>
+                            </div>
+
+                            <!-- Remember Me & Forgot Password -->
+                            <div class="d-flex justify-content-between align-items-center mb-4">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" name="remember_me" id="rememberMeCheck" checked>
+                                    <label class="form-check-label text-muted small user-select-none" for="rememberMeCheck">
+                                        Keep me signed in
+                                    </label>
+                                </div>
+                                <a href="javascript:void(0)" 
+                                   class="text-primary text-decoration-none small fw-semibold" 
+                                   onclick="alert('Please contact the School IT Administrator or Principal Office to reset your credentials.');">
+                                    Forgot password?
+                                </a>
+                            </div>
+
+                            <!-- Submit Button -->
+                            <div class="d-grid mb-4">
+                                <button type="submit" class="btn btn-signin" id="submitBtn">
+                                    <span id="btnText"><i class="bi bi-box-arrow-in-right me-2"></i>Sign In to Portal</span>
+                                    <span id="btnSpinner" class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+                                </button>
+                            </div>
+
+                            <!-- Supported Roles Info -->
+                            <div class="pt-3 border-top">
+                                <span class="text-muted small d-block mb-2">Access permitted for school roles:</span>
+                                <div>
+                                    <span class="role-pill"><i class="bi bi-shield-shaded me-1"></i>Admin</span>
+                                    <span class="role-pill"><i class="bi bi-person-workspace me-1"></i>Principal</span>
+                                    <span class="role-pill"><i class="bi bi-easel me-1"></i>Teacher</span>
+                                    <span class="role-pill"><i class="bi bi-calculator me-1"></i>Accountant</span>
+                                    <span class="role-pill"><i class="bi bi-people me-1"></i>Parent</span>
+                                    <span class="role-pill"><i class="bi bi-backpack me-1"></i>Student</span>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="text-center mt-4">
+            <p class="text-white text-opacity-50 small mb-0">
+                &copy; {{ current_year.start_date.year|default:"2026" }} {{ school_profile.school_name|default:"CBSE School ERP" }}. All rights reserved.
+            </p>
+        </div>
+    </div>
+
+    <!-- Required Scripts -->
+    <script src="{% static 'admin/assets/js/plugins/popper.min.js' %}"></script>
+    <script src="{% static 'admin/assets/js/plugins/bootstrap.min.js' %}"></script>
+
+    <script>
+        // Password toggle show/hide
+        const toggleBtn = document.getElementById('togglePasswordBtn');
+        const passwordInput = document.getElementById('passwordInput');
+        const toggleIcon = document.getElementById('togglePasswordIcon');
+
+        toggleBtn.addEventListener('click', function () {
+            const isPassword = passwordInput.getAttribute('type') === 'password';
+            passwordInput.setAttribute('type', isPassword ? 'text' : 'password');
+            toggleIcon.classList.toggle('bi-eye', !isPassword);
+            toggleIcon.classList.toggle('bi-eye-slash', isPassword);
+        });
+
+        // Submit button loading indicator
+        const loginForm = document.getElementById('loginForm');
+        const submitBtn = document.getElementById('submitBtn');
+        const btnText = document.getElementById('btnText');
+        const btnSpinner = document.getElementById('btnSpinner');
+
+        loginForm.addEventListener('submit', function () {
+            submitBtn.disabled = true;
+            btnText.textContent = ' Signing in...';
+            btnSpinner.classList.remove('d-none');
+        });
+    </script>
+</body>
+</html>
+
