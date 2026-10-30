@@ -61,10 +61,10 @@ from config.views import dashboard_view
 from apps.identity.auth_views import login_view, logout_view
 
 urlpatterns = [
+    path('admin/', admin.site.urls),
     path('', dashboard_view, name='home-dashboard'),
     path('login/', login_view, name='login'),
     path('logout/', logout_view, name='logout'),
-    path('admin/', admin.site.urls),
     path('api/v1/', include(api_v1_patterns)),
 ]
 

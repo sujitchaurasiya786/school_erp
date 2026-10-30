@@ -55,15 +55,21 @@ class HasDynamicPermission(BasePermission):
             self.message = "Your account has been deactivated."
             return False
 
+        view_action = getattr(view, "action", None)
+
         # Gate 3: must_change_password enforcement
         if getattr(user, "must_change_password", False):
             # Only allow the "me" endpoint for PATCH (password change)
-            view_action = getattr(view, "action", None)
-            if not (view_action == "me" and request.method == "PATCH"):
-                self.message = (
-                    "You must change your password before accessing this resource."
-                )
-                return False
+            if view_action == "me" and request.method == "PATCH":
+                return True
+            self.message = (
+                "You must change your password before accessing this resource."
+            )
+            return False
+
+        # Any authenticated, active user can access their own "me" profile
+        if view_action == "me":
+            return True
 
         # Gate 4: Explicit permission codename declared on view
         required_permission = getattr(view, "required_permission", None)

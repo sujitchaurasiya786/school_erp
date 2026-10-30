@@ -113,6 +113,20 @@ class LoginView(APIView):
         user = authenticate(request, username=username, password=password)
 
         if user is None:
+            # Check if user exists with correct password but has been deactivated
+            try:
+                candidate = User.objects.get(username=username)
+                if candidate.check_password(password) and not candidate.is_active:
+                    return Response(
+                        {
+                            "status": "error",
+                            "message": "This account has been deactivated. Contact the administrator.",
+                        },
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+            except User.DoesNotExist:
+                pass
+
             return Response(
                 {"status": "error", "message": "Invalid credentials."},
                 status=status.HTTP_401_UNAUTHORIZED,

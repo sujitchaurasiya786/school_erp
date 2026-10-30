@@ -51,6 +51,25 @@ def login_view(request):
                 user = None
 
         if user is None:
+            # Check if candidate exists with valid password but is deactivated
+            candidate = None
+            try:
+                if '@' in identifier:
+                    candidate = User.objects.filter(email__iexact=identifier).first()
+                else:
+                    candidate = User.objects.filter(username=identifier).first()
+            except Exception:
+                pass
+
+            if candidate and candidate.check_password(password) and not candidate.is_active:
+                messages.error(request, 'Your account has been deactivated. Please contact school administration.')
+                return render(request, 'auth/login.html', {
+                    'school_profile': school_profile,
+                    'current_year': current_year,
+                    'username': identifier,
+                    'next': next_url,
+                })
+
             messages.error(request, 'Invalid credentials. Please verify your username and password.')
             return render(request, 'auth/login.html', {
                 'school_profile': school_profile,

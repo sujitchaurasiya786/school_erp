@@ -110,12 +110,18 @@ class UserRoleAssignment(TimeStampedModel):
         max_length=50,
         blank=True,
         null=True,
+        default='',
         help_text=_("Identifier for scope, e.g. section_id or class_id.")
     )
 
     class Meta:
         db_table = 'rbac_user_roles'
         unique_together = ('user', 'role', 'scope_type', 'scope_id')
+
+    def save(self, *args, **kwargs):
+        if self.scope_id is None:
+            self.scope_id = ''
+        super().save(*args, **kwargs)
 
     def __str__(self):
         scope_str = f" ({self.scope_type}:{self.scope_id})" if self.scope_id else f" ({self.scope_type})"

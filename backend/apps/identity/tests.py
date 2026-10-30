@@ -63,7 +63,7 @@ def assign_role(user, role, scope_type=ScopeType.GLOBAL, scope_id=None, is_activ
         user=user,
         role=role,
         scope_type=scope_type,
-        scope_id=scope_id,
+        scope_id=scope_id or '',
         is_active=is_active,
     )
 
@@ -632,10 +632,11 @@ class RBACAPITests(TestCase):
         # Create a user with rbac management permissions
         self.manager_perm = make_permission("rbac.role.view", "rbac", "view")
         self.manage_perm = make_permission("rbac.role.manage", "rbac", "add")
+        self.delete_perm = make_permission("rbac.role.delete", "rbac", "delete")
         self.assign_perm = make_permission("users.membership.manage", "rbac", "approve")
         self.manager_role = make_role(
             "rbac-manager",
-            permissions=[self.manager_perm, self.manage_perm, self.assign_perm],
+            permissions=[self.manager_perm, self.manage_perm, self.delete_perm, self.assign_perm],
         )
         self.manager = make_user("rbac_manager")
         assign_role(self.manager, self.manager_role)

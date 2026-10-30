@@ -97,20 +97,42 @@ class RBACService:
     def has_module_action(cls, user, module, action, scope_type=None, scope_id=None):
         """
         Convenience method: checks if user has permission for a (module, action) pair.
-        Checks codename formats: 'module.action', 'module:action', 'module_action'.
-
-        This covers the three common codename styles used across the registry.
+        Checks:
+          1. Direct codename matches: 'module.action', 'module:action', 'module_action'
+          2. Three-part codenames: 'module.*.action' (e.g. 'students.profile.view')
+          3. DB Permission records: module=module, action=action within active user permissions
         """
         if not user or not getattr(user, "is_authenticated", False):
             return False
         if not getattr(user, "is_active", False):
             return False
 
-        return (
-            cls.has_permission(user, f"{module}.{action}", scope_type, scope_id)
-            or cls.has_permission(user, f"{module}:{action}", scope_type, scope_id)
-            or cls.has_permission(user, f"{module}_{action}", scope_type, scope_id)
-        )
+        user_perms = cls.get_user_permissions(user, scope_type=scope_type, scope_id=scope_id)
+        if not user_perms:
+            return False
+
+        # 1. Exact module-action format matches
+        if (
+            f"{module}.{action}" in user_perms
+            or f"{module}:{action}" in user_perms
+            or f"{module}_{action}" in user_perms
+        ):
+            return True
+
+        # 2. Granular 3-part codenames like 'students.profile.view'
+        mod_prefix = f"{module}."
+        act_suffix = f".{action}"
+        if any(p.startswith(mod_prefix) and p.endswith(act_suffix) for p in user_perms):
+            return True
+
+        # 3. Model-level module & action fields
+        from apps.rbac.models import Permission
+        return Permission.objects.filter(
+            codename__in=user_perms,
+            module=module,
+            action=action,
+            is_active=True,
+        ).exists()
 
     @classmethod
     def get_user_roles(cls, user):
