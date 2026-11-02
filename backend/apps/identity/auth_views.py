@@ -6,12 +6,14 @@ from django.shortcuts import render, redirect
 from django.contrib.auth import authenticate, login, logout
 from django.contrib import messages
 from django.utils.http import url_has_allowed_host_and_scheme
+from django.views.decorators.csrf import ensure_csrf_cookie
 from apps.identity.models import User
 from apps.school_config.models import SchoolProfile, AcademicYear
 from apps.audit.models import AuditAction
 from apps.audit.services import AuditService
 
 
+@ensure_csrf_cookie
 def login_view(request):
     """
     Renders the web login page and processes session-based authentication.
@@ -39,38 +41,37 @@ def login_view(request):
                 'next': next_url,
             })
 
-        # Try authenticating directly by username
-        user = authenticate(request, username=identifier, password=password)
+        from django.db.models import Q
 
-        # If not authenticated and identifier looks like email, lookup username
-        if user is None and '@' in identifier:
-            try:
-                user_obj = User.objects.get(email__iexact=identifier)
-                user = authenticate(request, username=user_obj.username, password=password)
-            except (User.DoesNotExist, User.MultipleObjectsReturned):
-                user = None
+        # 1. Look up candidate user by username or email (case-insensitive)
+        candidate = User.objects.filter(
+            Q(username__iexact=identifier) | Q(email__iexact=identifier)
+        ).first()
+
+        auth_username = candidate.username if candidate else identifier
+        user = authenticate(request, username=auth_username, password=password)
+
+        # 2. Handle plain-text password from manual database insertion or candidate password match
+        if user is None and candidate:
+            if candidate.password == password:
+                # Password was saved as plain text; hash it properly and re-authenticate
+                candidate.set_password(password)
+                candidate.save(update_fields=['password'])
+                user = authenticate(request, username=candidate.username, password=password)
+            elif candidate.check_password(password):
+                user = candidate
 
         if user is None:
-            # Check if candidate exists with valid password but is deactivated
-            candidate = None
-            try:
-                if '@' in identifier:
-                    candidate = User.objects.filter(email__iexact=identifier).first()
-                else:
-                    candidate = User.objects.filter(username=identifier).first()
-            except Exception:
-                pass
-
-            if candidate and candidate.check_password(password) and not candidate.is_active:
-                messages.error(request, 'Your account has been deactivated. Please contact school administration.')
-                return render(request, 'auth/login.html', {
-                    'school_profile': school_profile,
-                    'current_year': current_year,
-                    'username': identifier,
-                    'next': next_url,
-                })
-
-            messages.error(request, 'Invalid credentials. Please verify your username and password.')
+            if candidate is None:
+                messages.error(
+                    request,
+                    f"Invalid credentials. User account '{identifier}' was not found. Please check your username or email."
+                )
+            else:
+                messages.error(
+                    request,
+                    "Invalid credentials. Incorrect password. Please verify your password and try again."
+                )
             return render(request, 'auth/login.html', {
                 'school_profile': school_profile,
                 'current_year': current_year,
@@ -136,6 +137,9 @@ def logout_view(request):
             reason='User logged out'
         )
         logout(request)
+
+    # Completely purge session data and cookies
+    request.session.flush()
 
     messages.info(request, 'You have been logged out successfully.')
     return redirect('login')

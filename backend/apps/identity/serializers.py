@@ -6,6 +6,7 @@ from apps.identity.models import User
 
 class UserSerializer(serializers.ModelSerializer):
     full_name = serializers.ReadOnlyField()
+    password = serializers.CharField(write_only=True, required=False)
 
     class Meta:
         model = User
@@ -13,6 +14,7 @@ class UserSerializer(serializers.ModelSerializer):
             "id",
             "username",
             "email",
+            "password",
             "first_name",
             "last_name",
             "full_name",
@@ -25,9 +27,26 @@ class UserSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "date_joined"]
         extra_kwargs = {
-            # Never expose password hash in any response
             "password": {"write_only": True},
         }
+
+    def create(self, validated_data):
+        password = validated_data.pop("password", None)
+        user = User(**validated_data)
+        if password:
+            user.set_password(password)
+        else:
+            user.set_unusable_password()
+        user.save()
+        return user
+
+    def update(self, instance, validated_data):
+        password = validated_data.pop("password", None)
+        user = super().update(instance, validated_data)
+        if password:
+            user.set_password(password)
+            user.save()
+        return user
 
 
 class UserProfileSerializer(serializers.ModelSerializer):
