@@ -35,8 +35,8 @@
   <!-- [Template CSS Files] -->
   <link rel="stylesheet" href="{% static 'admin/assets/css/style.css' %}" id="main-style-link">
   <link rel="stylesheet" href="{% static 'admin/assets/css/style-preset.css' %}">
-  <!-- my css -->
-    <link rel="stylesheet" href="{% static 'css/my.css' %}">
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="{% static 'css/style.css' %}">
 
 </head>
 <!-- [Head] end -->
@@ -54,79 +54,341 @@
   <nav class="pc-sidebar">
     <div class="navbar-wrapper">
       <div class="m-header">
-        <a href="#" class="b-brand text-primary">
-          <!-- ========   Change your logo from here   ============ -->
-          <img src="{% static 'img/smartbuild_Logo_dark.png' %}" alt="" height="60px" width="80px">
-          SmartBuildHub
+        <a href="{% url 'home-dashboard' %}" class="b-brand text-primary d-flex align-items-center gap-2">
+          <i class="bi bi-mortarboard-fill fs-2 text-primary"></i>
+          <span class="fs-5 fw-bold text-dark text-truncate">{{ school_profile.school_name|default:"School ERP" }}</span>
         </a>
       </div>
       <div class="navbar-content">
         <ul class="pc-navbar">
-          <li class="pc-item">
-            <a href="#" class="pc-link">
+          <!-- 1. Dashboard -->
+          <li class="pc-item active">
+            <a href="{% url 'home-dashboard' %}" class="pc-link">
               <span class="pc-micon"><i class="ti ti-dashboard"></i></span>
               <span class="pc-mtext">Dashboard</span>
             </a>
           </li>
 
-          <li class="pc-item pc-caption">
-            <label>Manage</label>
-            <i class="ti ti-dashboard"></i>
-          </li>
-
-          <!-- Categrories -->
+          <!-- 2. Academics -->
           <li class="pc-item pc-hasmenu">
-            <a href="#" class="pc-link">
-              <span class="pc-micon"><i class="ti ti-user"></i></span>
-              <span class="pc-mtext">Manage Contractors</span>
+            <a href="#!" class="pc-link">
+              <span class="pc-micon"><i class="ti ti-school"></i></span>
+              <span class="pc-mtext">Academics</span>
+              <span class="pc-arrow"><i class="ti ti-chevron-right"></i></span>
             </a>
-            <!-- <ul class="pc-submenu">
-              <li class="pc-item"><a class="pc-link" href="">Home Owner</a></li>
-              <li class="pc-item"><a class="pc-link" href="">Contractor</a></li>
-              <li class="pc-item"><a class="pc-link" href="">Add Client</a></li>
-              <li class="pc-item"><a class="pc-link" href="">View Clients</a></li>
-            </ul> -->
+            <ul class="pc-submenu">
+              <li class="pc-item"><a class="pc-link" href="/api/v1/academics/classes/">Classes & Sections</a></li>
+              <li class="pc-item"><a class="pc-link" href="/api/v1/academics/subjects/">Subjects</a></li>
+              <li class="pc-item"><a class="pc-link" href="/api/v1/academics/timetable/">Timetable</a></li>
+            </ul>
           </li>
 
-
-          <!-- Books -->
+          <!-- 3. Academics Assmnt -->
           <li class="pc-item pc-hasmenu">
-            <a href="#" class="pc-link">
-              <span class="pc-micon"><i class="ti ti-home"></i></span>
-              <span class="pc-mtext">Manage Homeowners</span>
+            <a href="#!" class="pc-link">
+              <span class="pc-micon"><i class="ti ti-book"></i></span>
+              <span class="pc-mtext">Academics Assmnt</span>
+              <span class="pc-arrow"><i class="ti ti-chevron-right"></i></span>
             </a>
-            <!-- <ul class="pc-submenu">
-              <li class="pc-item"><a class="pc-link" href="">Add Projects</a></li>
-              <li class="pc-item"><a class="pc-link" href="">View Projects</a></li>
-            </ul> -->
+            <ul class="pc-submenu">
+              <li class="pc-item"><a class="pc-link" href="/api/v1/examinations/assessments/">Assessments</a></li>
+              <li class="pc-item"><a class="pc-link" href="/api/v1/examinations/marks/">Marks Entry</a></li>
+              <li class="pc-item"><a class="pc-link" href="/api/v1/examinations/results/">Results & Reports</a></li>
+            </ul>
           </li>
 
-          <li class="pc-item">
-            <a href="#" class="pc-link">
-              <span class="pc-micon"><i class="ti ti-typography"></i></span>
-              <span class="pc-mtext">Enquiries</span>
+          <!-- 4. Admin -->
+          <li class="pc-item pc-hasmenu">
+            <a href="#!" class="pc-link">
+              <span class="pc-micon"><i class="ti ti-user-circle"></i></span>
+              <span class="pc-mtext">Admin</span>
+              <span class="pc-arrow"><i class="ti ti-chevron-right"></i></span>
             </a>
+            <ul class="pc-submenu">
+              <li class="pc-item"><a class="pc-link" href="/admin/">Django Admin Panel</a></li>
+              <li class="pc-item"><a class="pc-link" href="/api/v1/school-config/profile/">School Profile</a></li>
+              <li class="pc-item"><a class="pc-link" href="/api/v1/school-config/academic-years/">Academic Years</a></li>
+            </ul>
           </li>
-          <!-- <li class="pc-item">
-            <a href="" class="pc-link">
-              <span class="pc-micon"><i class="ti ti-color-swatch"></i></span>
-              <span class="pc-mtext">Color</span>
-            </a>
-          </li> -->
 
-          <li class="pc-item pc-caption">
-            <label>Actions</label>
-            <i class="ti ti-news"></i>
+          <!-- 5. Admission & Enquiry -->
+          <li class="pc-item pc-hasmenu">
+            <a href="#!" class="pc-link">
+              <span class="pc-micon"><i class="ti ti-user-plus"></i></span>
+              <span class="pc-mtext">Admission & Enquiry</span>
+              <span class="pc-arrow"><i class="ti ti-chevron-right"></i></span>
+            </a>
+            <ul class="pc-submenu">
+              <li class="pc-item"><a class="pc-link" href="/api/v1/admissions/applications/">Applications</a></li>
+              <li class="pc-item"><a class="pc-link" href="/api/v1/admissions/quotas/">Seat Quotas</a></li>
+            </ul>
           </li>
+
+          <!-- 6. Alumni Mgmt. -->
+          <li class="pc-item pc-hasmenu">
+            <a href="#!" class="pc-link">
+              <span class="pc-micon"><i class="ti ti-users"></i></span>
+              <span class="pc-mtext">Alumni Mgmt.</span>
+              <span class="pc-arrow"><i class="ti ti-chevron-right"></i></span>
+            </a>
+            <ul class="pc-submenu">
+              <li class="pc-item"><a class="pc-link" href="#!">Alumni Directory</a></li>
+              <li class="pc-item"><a class="pc-link" href="#!">Alumni Events</a></li>
+            </ul>
+          </li>
+
+          <!-- 7. Certificates -->
+          <li class="pc-item pc-hasmenu">
+            <a href="#!" class="pc-link">
+              <span class="pc-micon"><i class="ti ti-certificate"></i></span>
+              <span class="pc-mtext">Certificates</span>
+              <span class="pc-arrow"><i class="ti ti-chevron-right"></i></span>
+            </a>
+            <ul class="pc-submenu">
+              <li class="pc-item"><a class="pc-link" href="/api/v1/students/tc/">Transfer Certificate (TC)</a></li>
+              <li class="pc-item"><a class="pc-link" href="#!">Bonafide Certificate</a></li>
+            </ul>
+          </li>
+
+          <!-- 8. Change Password (Single Item, No Arrow) -->
           <li class="pc-item">
-            <a href="#" class="pc-link">
-              <span class="pc-micon"><i class="ti ti-lock"></i></span>
+            <a href="#!" class="pc-link">
+              <span class="pc-micon"><i class="ti ti-key"></i></span>
               <span class="pc-mtext">Change Password</span>
             </a>
           </li>
+
+          <!-- 9. Doc. Procurement -->
+          <li class="pc-item pc-hasmenu">
+            <a href="#!" class="pc-link">
+              <span class="pc-micon"><i class="ti ti-folder"></i></span>
+              <span class="pc-mtext">Doc. Procurement</span>
+              <span class="pc-arrow"><i class="ti ti-chevron-right"></i></span>
+            </a>
+            <ul class="pc-submenu">
+              <li class="pc-item"><a class="pc-link" href="#!">Document Archive</a></li>
+              <li class="pc-item"><a class="pc-link" href="#!">Procurement Orders</a></li>
+            </ul>
+          </li>
+
+          <!-- 10. ERP Masters Entry -->
+          <li class="pc-item pc-hasmenu">
+            <a href="#!" class="pc-link">
+              <span class="pc-micon"><i class="ti ti-keyboard"></i></span>
+              <span class="pc-mtext">ERP Masters Entry</span>
+              <span class="pc-arrow"><i class="ti ti-chevron-right"></i></span>
+            </a>
+            <ul class="pc-submenu">
+              <li class="pc-item"><a class="pc-link" href="#!">Master Configurations</a></li>
+              <li class="pc-item"><a class="pc-link" href="#!">Code Tables</a></li>
+            </ul>
+          </li>
+
+          <!-- 11. Fee Mgmt System -->
+          <li class="pc-item pc-hasmenu">
+            <a href="#!" class="pc-link">
+              <span class="pc-micon"><i class="ti ti-currency-rupee"></i></span>
+              <span class="pc-mtext">Fee Mgmt System</span>
+              <span class="pc-arrow"><i class="ti ti-chevron-right"></i></span>
+            </a>
+            <ul class="pc-submenu">
+              <li class="pc-item"><a class="pc-link" href="/api/v1/finance/fee-heads/">Fee Heads</a></li>
+              <li class="pc-item"><a class="pc-link" href="/api/v1/finance/fee-structures/">Fee Structures</a></li>
+              <li class="pc-item"><a class="pc-link" href="/api/v1/finance/invoices/">Student Invoices</a></li>
+              <li class="pc-item"><a class="pc-link" href="/api/v1/finance/payments/">Fee Payments</a></li>
+            </ul>
+          </li>
+
+          <!-- 12. Grievance Redressal -->
+          <li class="pc-item pc-hasmenu">
+            <a href="#!" class="pc-link">
+              <span class="pc-micon"><i class="ti ti-arrows-left-right"></i></span>
+              <span class="pc-mtext">Grievance Redressal</span>
+              <span class="pc-arrow"><i class="ti ti-chevron-right"></i></span>
+            </a>
+            <ul class="pc-submenu">
+              <li class="pc-item"><a class="pc-link" href="/api/v1/helpdesk/tickets/">Grievance Tickets</a></li>
+              <li class="pc-item"><a class="pc-link" href="#!">Escalations</a></li>
+            </ul>
+          </li>
+
+          <!-- 13. Hostel Mgmt -->
+          <li class="pc-item pc-hasmenu">
+            <a href="#!" class="pc-link">
+              <span class="pc-micon"><i class="ti ti-building"></i></span>
+              <span class="pc-mtext">Hostel Mgmt</span>
+              <span class="pc-arrow"><i class="ti ti-chevron-right"></i></span>
+            </a>
+            <ul class="pc-submenu">
+              <li class="pc-item"><a class="pc-link" href="#!">Hostel Rooms</a></li>
+              <li class="pc-item"><a class="pc-link" href="#!">Allocations</a></li>
+            </ul>
+          </li>
+
+          <!-- 14. Leave Management -->
+          <li class="pc-item pc-hasmenu">
+            <a href="#!" class="pc-link">
+              <span class="pc-micon"><i class="ti ti-calendar-event"></i></span>
+              <span class="pc-mtext">Leave Management</span>
+              <span class="pc-arrow"><i class="ti ti-chevron-right"></i></span>
+            </a>
+            <ul class="pc-submenu">
+              <li class="pc-item"><a class="pc-link" href="/api/v1/hrms/leaves/">Staff Leaves</a></li>
+              <li class="pc-item"><a class="pc-link" href="/api/v1/attendance/records/">Daily Attendance</a></li>
+            </ul>
+          </li>
+
+          <!-- 15. Library Management -->
+          <li class="pc-item pc-hasmenu">
+            <a href="#!" class="pc-link">
+              <span class="pc-micon"><i class="ti ti-book"></i></span>
+              <span class="pc-mtext">Library Management</span>
+              <span class="pc-arrow"><i class="ti ti-chevron-right"></i></span>
+            </a>
+            <ul class="pc-submenu">
+              <li class="pc-item"><a class="pc-link" href="/api/v1/library/books/">Book Catalog</a></li>
+              <li class="pc-item"><a class="pc-link" href="/api/v1/library/issues/">Circulation (Issue/Return)</a></li>
+            </ul>
+          </li>
+
+          <!-- 16. Notifications -->
+          <li class="pc-item pc-hasmenu">
+            <a href="#!" class="pc-link">
+              <span class="pc-micon"><i class="ti ti-bell"></i></span>
+              <span class="pc-mtext">Notifications</span>
+              <span class="pc-arrow"><i class="ti ti-chevron-right"></i></span>
+            </a>
+            <ul class="pc-submenu">
+              <li class="pc-item"><a class="pc-link" href="#!">Circulars & Notices</a></li>
+              <li class="pc-item"><a class="pc-link" href="#!">SMS / Alerts</a></li>
+            </ul>
+          </li>
+
+          <!-- 17. Recruitment System -->
+          <li class="pc-item pc-hasmenu">
+            <a href="#!" class="pc-link">
+              <span class="pc-micon"><i class="ti ti-id"></i></span>
+              <span class="pc-mtext">Recruitment System</span>
+              <span class="pc-arrow"><i class="ti ti-chevron-right"></i></span>
+            </a>
+            <ul class="pc-submenu">
+              <li class="pc-item"><a class="pc-link" href="/api/v1/hrms/staff/">Staff Profiles</a></li>
+              <li class="pc-item"><a class="pc-link" href="#!">Job Vacancies</a></li>
+            </ul>
+          </li>
+
+          <!-- 18. Recycle Bin -->
+          <li class="pc-item pc-hasmenu">
+            <a href="#!" class="pc-link">
+              <span class="pc-micon"><i class="ti ti-trash"></i></span>
+              <span class="pc-mtext">Recycle Bin</span>
+              <span class="pc-arrow"><i class="ti ti-chevron-right"></i></span>
+            </a>
+            <ul class="pc-submenu">
+              <li class="pc-item"><a class="pc-link" href="#!">Deleted Students</a></li>
+              <li class="pc-item"><a class="pc-link" href="#!">Archived Items</a></li>
+            </ul>
+          </li>
+
+          <!-- 19. Reports -->
+          <li class="pc-item pc-hasmenu">
+            <a href="#!" class="pc-link">
+              <span class="pc-micon"><i class="ti ti-chart-line"></i></span>
+              <span class="pc-mtext">Reports</span>
+              <span class="pc-arrow"><i class="ti ti-chevron-right"></i></span>
+            </a>
+            <ul class="pc-submenu">
+              <li class="pc-item"><a class="pc-link" href="/api/v1/analytics/summary/">Analytics Summary</a></li>
+              <li class="pc-item"><a class="pc-link" href="#!">Student Strength Report</a></li>
+              <li class="pc-item"><a class="pc-link" href="#!">Fee Collection Report</a></li>
+            </ul>
+          </li>
+
+          <!-- 20. Smart Card Mgmt. -->
+          <li class="pc-item pc-hasmenu">
+            <a href="#!" class="pc-link">
+              <span class="pc-micon"><i class="ti ti-settings"></i></span>
+              <span class="pc-mtext">Smart Card Mgmt.</span>
+              <span class="pc-arrow"><i class="ti ti-chevron-right"></i></span>
+            </a>
+            <ul class="pc-submenu">
+              <li class="pc-item"><a class="pc-link" href="#!">RFID / ID Cards</a></li>
+              <li class="pc-item"><a class="pc-link" href="#!">Card Printing</a></li>
+            </ul>
+          </li>
+
+          <!-- 21. Stock Management -->
+          <li class="pc-item pc-hasmenu">
+            <a href="#!" class="pc-link">
+              <span class="pc-micon"><i class="ti ti-box"></i></span>
+              <span class="pc-mtext">Stock Management</span>
+              <span class="pc-arrow"><i class="ti ti-chevron-right"></i></span>
+            </a>
+            <ul class="pc-submenu">
+              <li class="pc-item"><a class="pc-link" href="/api/v1/inventory/items/">Inventory Items</a></li>
+              <li class="pc-item"><a class="pc-link" href="/api/v1/inventory/movements/">Stock Movements</a></li>
+            </ul>
+          </li>
+
+          <!-- 22. Student Info System -->
+          <li class="pc-item pc-hasmenu">
+            <a href="#!" class="pc-link">
+              <span class="pc-micon"><i class="ti ti-user-check"></i></span>
+              <span class="pc-mtext">Student Info System</span>
+              <span class="pc-arrow"><i class="ti ti-chevron-right"></i></span>
+            </a>
+            <ul class="pc-submenu">
+              <li class="pc-item"><a class="pc-link" href="/api/v1/students/profiles/">Student Directory</a></li>
+              <li class="pc-item"><a class="pc-link" href="/api/v1/students/guardians/">Guardians</a></li>
+              <li class="pc-item"><a class="pc-link" href="/api/v1/students/enrollments/">Class Enrollments</a></li>
+            </ul>
+          </li>
+
+          <!-- 23. T&P Cell -->
+          <li class="pc-item pc-hasmenu">
+            <a href="#!" class="pc-link">
+              <span class="pc-micon"><i class="ti ti-briefcase"></i></span>
+              <span class="pc-mtext">T&P Cell</span>
+              <span class="pc-arrow"><i class="ti ti-chevron-right"></i></span>
+            </a>
+            <ul class="pc-submenu">
+              <li class="pc-item"><a class="pc-link" href="#!">Placement Records</a></li>
+              <li class="pc-item"><a class="pc-link" href="#!">Internships</a></li>
+            </ul>
+          </li>
+
+          <!-- 24. Transport Mgmt -->
+          <li class="pc-item pc-hasmenu">
+            <a href="#!" class="pc-link">
+              <span class="pc-micon"><i class="ti ti-bus"></i></span>
+              <span class="pc-mtext">Transport Mgmt</span>
+              <span class="pc-arrow"><i class="ti ti-chevron-right"></i></span>
+            </a>
+            <ul class="pc-submenu">
+              <li class="pc-item"><a class="pc-link" href="/api/v1/transport/vehicles/">Vehicles</a></li>
+              <li class="pc-item"><a class="pc-link" href="/api/v1/transport/routes/">Routes & Stops</a></li>
+              <li class="pc-item"><a class="pc-link" href="/api/v1/transport/allocations/">Student Allocations</a></li>
+            </ul>
+          </li>
+
+          <!-- 25. Users -->
+          <li class="pc-item pc-hasmenu">
+            <a href="#!" class="pc-link">
+              <span class="pc-micon"><i class="ti ti-sitemap"></i></span>
+              <span class="pc-mtext">Users</span>
+              <span class="pc-arrow"><i class="ti ti-chevron-right"></i></span>
+            </a>
+            <ul class="pc-submenu">
+              <li class="pc-item"><a class="pc-link" href="/api/v1/identity/users/">All Users</a></li>
+              <li class="pc-item"><a class="pc-link" href="/api/v1/rbac/roles/">Dynamic Roles</a></li>
+              <li class="pc-item"><a class="pc-link" href="/api/v1/rbac/permissions/">Permissions</a></li>
+            </ul>
+          </li>
+
+          <!-- 26. Logout (Single Item, No Arrow) -->
           <li class="pc-item">
             <a href="{% url 'logout' %}" class="pc-link text-danger">
-              <span class="pc-micon"> <i class="ti ti-power"></i></span>
+              <span class="pc-micon"><i class="ti ti-power"></i></span>
               <span class="pc-mtext">Logout</span>
             </a>
           </li>
