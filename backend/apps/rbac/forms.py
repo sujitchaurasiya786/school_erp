@@ -1,4 +1,4 @@
-from django import forms
+from django import forms\nfrom django.db.models import Q
 from django.contrib.auth import get_user_model
 
 from apps.rbac.models import Permission, Role, UserRoleAssignment
@@ -30,7 +30,14 @@ class RoleForm(forms.ModelForm):
         )
         if actor and not RBACService.is_system_administrator(actor):
             held = RBACService.get_user_permissions(actor)
-            available = available.filter(codename__in=held)
+            # Existing permissions may be retained, but not newly granted.
+            existing_ids = (
+                self.instance.permissions.values_list("id", flat=True)
+                if self.instance.pk else []
+            )
+            available = available.filter(
+                Q(codename__in=held) | Q(pk__in=existing_ids)
+            )
         self.fields["permissions"].queryset = available
         if self.instance.pk:
             self.fields["code"].disabled = True
@@ -40,7 +47,15 @@ class RoleForm(forms.ModelForm):
         if not self.actor or RBACService.is_system_administrator(self.actor):
             return selected
         held = RBACService.get_user_permissions(self.actor)
-        if any(permission.codename not in held for permission in selected):
+        existing_ids = (
+            set(self.instance.permissions.values_list("id", flat=True))
+            if self.instance.pk else set()
+        )
+        newly_granted = [
+            permission for permission in selected
+            if permission.pk not in existing_ids
+        ]
+        if any(permission.codename not in held for permission in newly_granted):
             raise forms.ValidationError(
                 "You cannot grant a permission that you do not currently hold."
             )
@@ -48,6 +63,20 @@ class RoleForm(forms.ModelForm):
 
     def clean(self):
         cleaned = super().clean()
+        if self.instance.pk:
+            selected = cleaned.get("permissions")
+            if selected is not None and self.instance.permissions.filter(
+                codename="users.membership.manage", is_active=True
+            ).exists() and not selected.filter(codename="users.membership.manage").exists():
+                from apps.rbac.models import UserRoleAssignment
+                other_manager_exists = UserRoleAssignment.objects.filter(
+                    is_active=True, role__is_active=True, user__is_active=True,
+                    role__permissions__codename="users.membership.manage",
+                ).exclude(role=self.instance).exists()
+                if not other_manager_exists:
+                    raise forms.ValidationError(
+                        "This role is the last active role manager. Keep its membership-management permission."
+                    )
         if self.instance.pk and self.instance.is_system_role:
             selected = cleaned.get("permissions")
             if selected is not None and self.instance.code == "system-administrator":
