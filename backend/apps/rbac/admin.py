@@ -36,6 +36,12 @@ class RoleAdmin(admin.ModelAdmin):
             return False
         return super().has_delete_permission(request, obj)
 
+    def has_change_permission(self, request, obj=None):
+        """System roles are changed only through the protected RBAC workflow."""
+        if obj and obj.is_system_role:
+            return False
+        return super().has_change_permission(request, obj)
+
 
 @admin.register(UserRoleAssignment)
 class UserRoleAssignmentAdmin(admin.ModelAdmin):
