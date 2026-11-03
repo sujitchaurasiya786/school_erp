@@ -108,6 +108,10 @@ class RoleViewSet(viewsets.ModelViewSet):
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if role.permissions.filter(codename="users.membership.manage", is_active=True).exists():
+            if not RBACService.active_role_manager_exists(exclude_role_id=role.pk):
+                from rest_framework.exceptions import PermissionDenied
+                raise PermissionDenied("This action would remove the last active role manager.")
         AuditService.log(
             action=AuditAction.DELETE,
             module="rbac",
@@ -155,10 +159,20 @@ class UserRoleAssignmentViewSet(viewsets.ModelViewSet):
         if serializer.instance.role.is_system_role and not RBACService.is_system_administrator(self.request.user):
             raise PermissionDenied("Protected system role assignments cannot be edited here.")
         old_active = serializer.instance.is_active
-        if old_active and serializer.validated_data.get("is_active") is False:
-            if serializer.instance.role.permissions.filter(codename="users.membership.manage", is_active=True).exists():
-                if not RBACService.active_role_manager_exists(exclude_assignment_id=serializer.instance.pk):
-                    raise PermissionDenied("This action would remove the last active role manager.")
+        new_role = serializer.validated_data.get("role", serializer.instance.role)
+        new_active = serializer.validated_data.get("is_active", old_active)
+        old_role_is_manager = serializer.instance.role.permissions.filter(
+            codename="users.membership.manage", is_active=True
+        ).exists()
+        manager_assignment_removed = old_active and (
+            not new_active or (
+                new_role.pk != serializer.instance.role_id
+                and old_role_is_manager
+            )
+        )
+        if manager_assignment_removed and old_role_is_manager:
+            if not RBACService.active_role_manager_exists(exclude_assignment_id=serializer.instance.pk):
+                raise PermissionDenied("This action would remove the last active role manager.")
         assignment = serializer.save()
         AuditService.log(
             action=AuditAction.UPDATE,
