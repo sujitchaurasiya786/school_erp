@@ -380,8 +380,10 @@
             </a>
             <ul class="pc-submenu">
               <li class="pc-item"><a class="pc-link" href="/api/v1/identity/users/">All Users</a></li>
-              <li class="pc-item"><a class="pc-link" href="/api/v1/rbac/roles/">Dynamic Roles</a></li>
-              <li class="pc-item"><a class="pc-link" href="/api/v1/rbac/permissions/">Permissions</a></li>
+              <li class="pc-item"><a class="pc-link" href="{% url 'rbac-role-list' %}">Role Management</a></li>
+              <li class="pc-item"><a class="pc-link" href="{% url 'rbac-permission-matrix' %}">Permission Registry</a></li>
+              <li class="pc-item"><a class="pc-link" href="{% url 'rbac-assignment-list' %}">User Role Assignments</a></li>
+              <li class="pc-item"><a class="pc-link" href="{% url 'rbac-role-history' %}">Role History</a></li>
             </ul>
           </li>
 
