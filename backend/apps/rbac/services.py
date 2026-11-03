@@ -1,134 +1,91 @@
 """
-RBAC Service — Central authorization engine for School ERP.
-
-Design principles (per SRS §4):
-  - Deny by default: returns False whenever authorization cannot be confirmed.
-  - No trust in role names, request parameters, or UI state.
-  - Superuser / Django `is_superuser` does NOT automatically bypass RBAC checks.
-    Per SRS §3.7, System Administrators are NOT granted payroll, finance, or
-    confidential grievance permissions automatically. Every access must flow
-    through explicit role assignments.
-  - Inactive users (is_active=False) are rejected immediately.
-  - Only ACTIVE role assignments (UserRoleAssignment.is_active=True) count.
-  - Only permissions attached to ACTIVE roles (Role.is_active=True) count.
-  - Only ACTIVE permissions (Permission.is_active=True) count.
-  - Scope-aware: class/section scope is respected when scope_id is provided.
+Central authorization service for the School ERP dynamic RBAC system.
 """
 from django.db.models import Q
 
 
 class RBACService:
-    """
-    Central service for evaluating user permissions dynamically.
-    Use classmethods to avoid instantiation; all methods are pure and stateless.
-    """
+    @staticmethod
+    def is_system_administrator(user):
+        """True only for an active user with the protected system role assigned."""
+        if not user or not getattr(user, "is_authenticated", False) or not getattr(user, "is_active", False):
+            return False
+        from apps.rbac.models import UserRoleAssignment
+        return UserRoleAssignment.objects.filter(
+            user=user,
+            is_active=True,
+            role__code="system-administrator",
+            role__is_system_role=True,
+            role__is_active=True,
+        ).exists()
 
     @staticmethod
     def get_user_permissions(user, scope_type=None, scope_id=None):
         """
-        Returns a set of active permission codenames for the user,
-        filtered through active role assignments and active roles.
-
-        Args:
-            user:        The user instance to evaluate.
-            scope_type:  Optional ScopeType value to restrict to a specific scope.
-            scope_id:    Optional scope identifier (e.g. class_id or section_id).
-
-        Returns:
-            set[str]: Set of codenames the user currently holds. Empty if denied.
+        Return active permissions from active assignments and active roles.
+        When a scope is supplied, GLOBAL permissions and matching scoped
+        permissions are included. A missing scope ID never widens access.
         """
-        # Import here to avoid circular imports at module load time
         from apps.rbac.models import Permission, UserRoleAssignment
 
-        if not user or not getattr(user, "is_authenticated", False):
+        if not user or not getattr(user, "is_authenticated", False) or not getattr(user, "is_active", False):
             return set()
 
-        if not getattr(user, "is_active", False):
-            return set()
-
-        # Build the base assignment filter
-        assignment_filter = Q(
-            roles__user_assignments__user=user,
-            roles__user_assignments__is_active=True,
-            roles__is_active=True,
+        assignments = UserRoleAssignment.objects.filter(
+            user=user,
             is_active=True,
+            role__is_active=True,
         )
-
-        # Scope narrowing: if a scope_type is requested, only include assignments
-        # that are either GLOBAL or match the requested scope exactly.
-        if scope_type and scope_id:
-            assignment_filter &= Q(
-                roles__user_assignments__scope_type__in=["GLOBAL", scope_type],
-            ) & (
-                Q(roles__user_assignments__scope_id__isnull=True)
-                | Q(roles__user_assignments__scope_id="")
-                | Q(roles__user_assignments__scope_id=str(scope_id))
-            )
+        if scope_type:
+            if scope_id is None or str(scope_id).strip() == "":
+                assignments = assignments.filter(
+                    scope_type="GLOBAL",
+                    scope_id__in=["", None],
+                )
+            else:
+                assignments = assignments.filter(
+                    Q(scope_type="GLOBAL", scope_id__in=["", None])
+                    | Q(scope_type=scope_type, scope_id=str(scope_id))
+                )
 
         return set(
-            Permission.objects.filter(assignment_filter)
-            .values_list("codename", flat=True)
-            .distinct()
+            Permission.objects.filter(
+                is_active=True,
+                roles__is_active=True,
+                roles__user_assignments__in=assignments,
+            ).values_list("codename", flat=True).distinct()
         )
 
     @classmethod
     def has_permission(cls, user, codename, scope_type=None, scope_id=None):
-        """
-        Check if user has a specific permission codename.
-
-        Args:
-            user:       The user instance.
-            codename:   The exact permission codename string.
-            scope_type: Optional scope restriction.
-            scope_id:   Optional scope identifier.
-
-        Returns:
-            bool: True only if the user has an active assignment granting this permission.
-        """
-        if not user or not getattr(user, "is_authenticated", False):
+        if not user or not getattr(user, "is_authenticated", False) or not getattr(user, "is_active", False):
             return False
-        if not getattr(user, "is_active", False):
-            return False
-
-        user_perms = cls.get_user_permissions(user, scope_type=scope_type, scope_id=scope_id)
-        return codename in user_perms
+        return codename in cls.get_user_permissions(
+            user, scope_type=scope_type, scope_id=scope_id
+        )
 
     @classmethod
     def has_module_action(cls, user, module, action, scope_type=None, scope_id=None):
-        """
-        Convenience method: checks if user has permission for a (module, action) pair.
-        Checks:
-          1. Direct codename matches: 'module.action', 'module:action', 'module_action'
-          2. Three-part codenames: 'module.*.action' (e.g. 'students.profile.view')
-          3. DB Permission records: module=module, action=action within active user permissions
-        """
-        if not user or not getattr(user, "is_authenticated", False):
+        if not user or not getattr(user, "is_authenticated", False) or not getattr(user, "is_active", False):
             return False
-        if not getattr(user, "is_active", False):
+        permissions = cls.get_user_permissions(
+            user, scope_type=scope_type, scope_id=scope_id
+        )
+        if not permissions:
             return False
 
-        user_perms = cls.get_user_permissions(user, scope_type=scope_type, scope_id=scope_id)
-        if not user_perms:
-            return False
-
-        # 1. Exact module-action format matches
-        if (
-            f"{module}.{action}" in user_perms
-            or f"{module}:{action}" in user_perms
-            or f"{module}_{action}" in user_perms
-        ):
+        if any(code in permissions for code in (
+            f"{module}.{action}", f"{module}:{action}", f"{module}_{action}"
+        )):
             return True
 
-        # 2. Granular 3-part codenames like 'students.profile.view'
-        mod_prefix = f"{module}."
-        act_suffix = f".{action}"
-        if any(p.startswith(mod_prefix) and p.endswith(act_suffix) for p in user_perms):
+        suffix = f".{action}"
+        if any(code.startswith(f"{module}.") and code.endswith(suffix) for code in permissions):
             return True
 
-        # 3. Model-level module & action fields
         from apps.rbac.models import Permission
         return Permission.objects.filter(
-            codename__in=user_perms,
+            codename__in=permissions,
             module=module,
             action=action,
             is_active=True,
@@ -136,15 +93,9 @@ class RBACService:
 
     @classmethod
     def get_user_roles(cls, user):
-        """
-        Returns a queryset of active Role objects assigned to the user.
-        """
         from apps.rbac.models import Role
-
-        if not user or not getattr(user, "is_authenticated", False):
-            from apps.rbac.models import Role
+        if not user or not getattr(user, "is_authenticated", False) or not getattr(user, "is_active", False):
             return Role.objects.none()
-
         return Role.objects.filter(
             user_assignments__user=user,
             user_assignments__is_active=True,
@@ -153,22 +104,22 @@ class RBACService:
 
     @classmethod
     def has_any_permission(cls, user, codenames):
-        """
-        Returns True if user has ANY of the given codenames.
-        Useful for OR-based permission checks.
-        """
-        if not user or not getattr(user, "is_authenticated", False):
-            return False
-        user_perms = cls.get_user_permissions(user)
-        return bool(user_perms & set(codenames))
+        return bool(cls.get_user_permissions(user) & set(codenames))
 
     @classmethod
     def has_all_permissions(cls, user, codenames):
-        """
-        Returns True only if user has ALL of the given codenames.
-        Useful for AND-based compound permission checks.
-        """
-        if not user or not getattr(user, "is_authenticated", False):
-            return False
-        user_perms = cls.get_user_permissions(user)
-        return set(codenames).issubset(user_perms)
+        return set(codenames).issubset(cls.get_user_permissions(user))
+
+    @classmethod
+    def active_role_manager_exists(cls, exclude_user_id=None):
+        """Protect the installation from losing its final active RBAC manager."""
+        from apps.rbac.models import UserRoleAssignment
+        assignments = UserRoleAssignment.objects.filter(
+            is_active=True,
+            role__is_active=True,
+            role__permissions__codename="users.membership.manage",
+            user__is_active=True,
+        )
+        if exclude_user_id is not None:
+            assignments = assignments.exclude(user_id=exclude_user_id)
+        return assignments.exists()
