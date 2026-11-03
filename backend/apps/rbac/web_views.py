@@ -70,6 +70,9 @@ def role_deactivate(request, role_id):
     role = get_object_or_404(Role, pk=role_id)
     if role.is_system_role:
         raise PermissionDenied("Protected system roles cannot be deactivated.")
+    if role.permissions.filter(codename="users.membership.manage", is_active=True).exists():
+        if not RBACService.active_role_manager_exists(exclude_role_id=role.pk):
+            raise PermissionDenied("This action would remove the last active role manager.")
     role.is_active = False
     role.save(update_fields=["is_active", "updated_at"])
     AuditService.log(
@@ -135,7 +138,7 @@ def assignment_revoke(request, assignment_id):
         raise PermissionDenied("Use the protected recovery procedure to revoke the System Administrator role.")
 
     if assignment.role.permissions.filter(codename="users.membership.manage", is_active=True).exists():
-        if not RBACService.active_role_manager_exists(exclude_user_id=assignment.user_id):
+        if not RBACService.active_role_manager_exists(exclude_assignment_id=assignment.pk):
             raise PermissionDenied("This action would remove the last active role manager.")
 
     assignment.is_active = False
