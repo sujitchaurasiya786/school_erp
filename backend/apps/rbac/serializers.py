@@ -37,6 +37,8 @@ class RoleSerializer(serializers.ModelSerializer):
 
         if instance and instance.is_system_role and not RBACService.is_system_administrator(actor):
             raise serializers.ValidationError("Only a System Administrator can edit protected system roles.")
+        if instance and instance.is_system_role and attrs.get("is_active") is False:
+            raise serializers.ValidationError({"is_active": "Protected system roles cannot be deactivated."})
 
         selected = attrs.get("permissions")
         if selected is not None and actor and not RBACService.is_system_administrator(actor):
