@@ -90,6 +90,14 @@ class Command(BaseCommand):
             )
 
         with transaction.atomic():
+            name_conflict = Role.objects.filter(name=SYSTEM_ROLE_NAME).exclude(
+                code=SYSTEM_ROLE_CODE
+            ).first()
+            if name_conflict:
+                raise CommandError(
+                    f"'{SYSTEM_ROLE_NAME}' is already used by role code '{name_conflict.code}'."
+                )
+
             # Keep registry records current before building the protected role.
             from django.core.management import call_command
             call_command("sync_permissions", verbosity=0)
@@ -128,12 +136,16 @@ class Command(BaseCommand):
                     "helpdesk.grievance.view",
                 }
             )
-            role.permissions.set(safe_permissions)
+            # Add baseline technical permissions without overwriting any
+            # separately approved explicit grants already attached to this role.
+            role.permissions.add(*safe_permissions)
 
             if existing:
                 user = existing
                 user.user_type = UserType.ADMIN
-                user.save(update_fields=["user_type", "updated_at"])
+                user.is_staff = False
+                user.is_superuser = False
+                user.save(update_fields=["user_type", "is_staff", "is_superuser", "updated_at"])
                 created_user = False
             else:
                 user = User.objects.create_user(
