@@ -62,6 +62,7 @@ from apps.identity.auth_views import login_view, logout_view
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('rbac/', include('apps.rbac.web_urls')),
     path('', dashboard_view, name='home-dashboard'),
     path('login/', login_view, name='login'),
     path('logout/', logout_view, name='logout'),
