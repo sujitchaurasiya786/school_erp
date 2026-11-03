@@ -40,11 +40,10 @@ class RBACService:
             if scope_id is None or str(scope_id).strip() == "":
                 assignments = assignments.filter(
                     scope_type="GLOBAL",
-                    scope_id__in=["", None],
-                )
+                ).filter(Q(scope_id="") | Q(scope_id__isnull=True))
             else:
                 assignments = assignments.filter(
-                    Q(scope_type="GLOBAL", scope_id__in=["", None])
+                    Q(scope_type="GLOBAL") & (Q(scope_id="") | Q(scope_id__isnull=True))
                     | Q(scope_type=scope_type, scope_id=str(scope_id))
                 )
 
@@ -111,7 +110,7 @@ class RBACService:
         return set(codenames).issubset(cls.get_user_permissions(user))
 
     @classmethod
-    def active_role_manager_exists(cls, exclude_user_id=None):
+    def active_role_manager_exists(cls, exclude_assignment_id=None, exclude_role_id=None):
         """Protect the installation from losing its final active RBAC manager."""
         from apps.rbac.models import UserRoleAssignment
         assignments = UserRoleAssignment.objects.filter(
@@ -120,6 +119,8 @@ class RBACService:
             role__permissions__codename="users.membership.manage",
             user__is_active=True,
         )
-        if exclude_user_id is not None:
-            assignments = assignments.exclude(user_id=exclude_user_id)
+        if exclude_assignment_id is not None:
+            assignments = assignments.exclude(pk=exclude_assignment_id)
+        if exclude_role_id is not None:
+            assignments = assignments.exclude(role_id=exclude_role_id)
         return assignments.exists()
