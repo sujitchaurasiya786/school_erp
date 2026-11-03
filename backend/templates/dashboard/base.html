@@ -379,9 +379,9 @@
               <span class="pc-arrow"><i class="ti ti-chevron-right"></i></span>
             </a>
             <ul class="pc-submenu">
-              <li class="pc-item"><a class="pc-link" href="/api/v1/identity/users/">All Users</a></li>
-              <li class="pc-item"><a class="pc-link" href="/api/v1/rbac/roles/">Dynamic Roles</a></li>
-              <li class="pc-item"><a class="pc-link" href="/api/v1/rbac/permissions/">Permissions</a></li>
+              <li class="pc-item"><a class="pc-link" href="{% url 'identity-users-list' %}">All Users</a></li>
+              <li class="pc-item"><a class="pc-link" href="{% url 'rbac-roles-list' %}">Dynamic Roles</a></li>
+              <li class="pc-item"><a class="pc-link" href="{% url 'rbac-permissions-list' %}">Permissions</a></li>
             </ul>
           </li>
 

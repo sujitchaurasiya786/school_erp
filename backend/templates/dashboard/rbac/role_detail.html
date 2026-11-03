@@ -1,0 +1,258 @@
+{% extends 'dashboard/base.html' %}
+
+{% block admin %}
+<div class="container-fluid px-0">
+    <!-- Header with Back & Edit actions -->
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
+        <div class="d-flex align-items-center gap-3">
+            <a href="{% url 'rbac-roles-list' %}" class="btn btn-outline-light text-dark border shadow-sm">
+                <i class="ti ti-arrow-left"></i>
+            </a>
+            <div>
+                <div class="d-flex align-items-center gap-2">
+                    <h3 class="fw-bold mb-0 text-dark">{{ role.name }}</h3>
+                    {% if role.is_system_role %}
+                    <span class="badge bg-primary-subtle text-primary border border-primary-subtle px-2 py-1">
+                        <i class="ti ti-lock me-1"></i> System Role
+                    </span>
+                    {% else %}
+                    <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-1">
+                        <i class="ti ti-bolt me-1"></i> Custom Dynamic
+                    </span>
+                    {% endif %}
+                </div>
+                <p class="text-muted mb-0 small mt-1">Code: <code>{{ role.code }}</code> &bull; Created: {{ role.created_at|date:"d M Y" }}</p>
+            </div>
+        </div>
+        <div class="d-flex gap-2">
+            <a href="{% url 'rbac-role-edit' role.pk %}" class="btn btn-primary shadow-sm">
+                <i class="ti ti-edit me-1"></i> Edit Role & Permissions
+            </a>
+            {% if not role.is_system_role %}
+            <a href="{% url 'rbac-role-delete' role.pk %}" class="btn btn-outline-danger">
+                <i class="ti ti-trash me-1"></i> Delete Role
+            </a>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Django Messages -->
+    {% if messages %}
+    <div class="mb-3">
+        {% for message in messages %}
+        <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show shadow-sm" role="alert">
+            <i class="ti ti-info-circle me-1"></i> {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Role Summary Overview Banner -->
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body p-4">
+            <div class="row g-4 align-items-center">
+                <div class="col-lg-8">
+                    <h6 class="text-uppercase text-muted fw-bold small mb-2">Description</h6>
+                    <p class="mb-0 text-dark">{{ role.description|default:"No detailed description provided for this role." }}</p>
+                </div>
+                <div class="col-lg-4">
+                    <div class="d-flex justify-content-lg-end gap-3">
+                        <div class="text-center px-3 py-2 bg-light rounded-3">
+                            <span class="d-block text-muted small">Permissions</span>
+                            <span class="fs-4 fw-bold text-primary">{{ role.permissions.count }}</span>
+                        </div>
+                        <div class="text-center px-3 py-2 bg-light rounded-3">
+                            <span class="d-block text-muted small">Assigned Users</span>
+                            <span class="fs-4 fw-bold text-success">{{ assignments.count }}</span>
+                        </div>
+                        <div class="text-center px-3 py-2 bg-light rounded-3">
+                            <span class="d-block text-muted small">Status</span>
+                            <span class="fs-4 fw-bold {% if role.is_active %}text-success{% else %}text-secondary{% endif %}">
+                                {% if role.is_active %}Active{% else %}Inactive{% endif %}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Tabs: Assigned Users & Granted Permissions -->
+    <div class="row g-4">
+        <!-- Assigned Members Column -->
+        <div class="col-lg-6">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-header bg-white py-3 d-flex align-items-center justify-content-between border-bottom">
+                    <div class="d-flex align-items-center gap-2">
+                        <i class="ti ti-users text-primary fs-4"></i>
+                        <h5 class="mb-0 fw-bold">Assigned Users ({{ assignments.count }})</h5>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#assignUserModal">
+                        <i class="ti ti-user-plus me-1"></i> Assign User
+                    </button>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th class="ps-3">User</th>
+                                    <th>Scope</th>
+                                    <th>Status</th>
+                                    <th class="text-end pe-3">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for assign in assignments %}
+                                <tr>
+                                    <td class="ps-3">
+                                        <div class="fw-semibold text-dark">{{ assign.user.username }}</div>
+                                        <small class="text-muted">{{ assign.user.email }}</small>
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-light text-dark border">
+                                            {{ assign.get_scope_type_display }}
+                                            {% if assign.scope_id %}: <strong>{{ assign.scope_id }}</strong>{% endif %}
+                                        </span>
+                                    </td>
+                                    <td>
+                                        {% if assign.is_active %}
+                                        <span class="badge bg-success-subtle text-success">Active</span>
+                                        {% else %}
+                                        <span class="badge bg-secondary-subtle text-secondary">Inactive</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="text-end pe-3">
+                                        <form method="post" action="{% url 'rbac-revoke-assignment' assign.id %}" class="d-inline" onsubmit="return confirm('Are you sure you want to revoke this role from {{ assign.user.username }}?');">
+                                            {% csrf_token %}
+                                            <button type="submit" class="btn btn-sm btn-outline-danger" title="Revoke assignment">
+                                                <i class="ti ti-x"></i> Revoke
+                                            </button>
+                                        </form>
+                                    </td>
+                                </tr>
+                                {% empty %}
+                                <tr>
+                                    <td colspan="4" class="text-center py-4 text-muted">
+                                        <i class="ti ti-user-off fs-3 d-block mb-1 text-secondary opacity-50"></i>
+                                        No users currently assigned to this role.
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Granted Permissions Column -->
+        <div class="col-lg-6">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-header bg-white py-3 d-flex align-items-center justify-content-between border-bottom">
+                    <div class="d-flex align-items-center gap-2">
+                        <i class="ti ti-key text-warning fs-4"></i>
+                        <h5 class="mb-0 fw-bold">Granted Permissions ({{ role.permissions.count }})</h5>
+                    </div>
+                    <a href="{% url 'rbac-role-edit' role.pk %}" class="btn btn-sm btn-outline-primary">
+                        <i class="ti ti-pencil me-1"></i> Modify
+                    </a>
+                </div>
+                <div class="card-body p-3" style="max-height: 520px; overflow-y: auto;">
+                    {% if permissions_by_module %}
+                    <div class="accordion accordion-flush" id="permissionsAccordion">
+                        {% for module_name, perms in permissions_by_module.items %}
+                        <div class="accordion-item border rounded-3 mb-2 overflow-hidden">
+                            <h2 class="accordion-header" id="heading-{{ forloop.counter }}">
+                                <button class="accordion-button collapsed py-2 px-3 bg-light fw-bold" type="button" data-bs-toggle="collapse" data-bs-target="#collapse-{{ forloop.counter }}" aria-expanded="false" aria-controls="collapse-{{ forloop.counter }}">
+                                    <span class="me-auto">{{ module_name }}</span>
+                                    <span class="badge bg-primary rounded-pill me-2">{{ perms|length }}</span>
+                                </button>
+                            </h2>
+                            <div id="collapse-{{ forloop.counter }}" class="accordion-collapse collapse" aria-labelledby="heading-{{ forloop.counter }}" data-bs-parent="#permissionsAccordion">
+                                <div class="accordion-body p-2">
+                                    <ul class="list-group list-group-flush">
+                                        {% for p in perms %}
+                                        <li class="list-group-item px-2 py-2 d-flex align-items-center justify-content-between">
+                                            <div>
+                                                <div class="fw-semibold small text-dark">{{ p.name }}</div>
+                                                <small class="text-muted d-block">{{ p.description|default:p.codename }}</small>
+                                            </div>
+                                            <span class="badge bg-secondary-subtle text-secondary font-monospace small ms-2">
+                                                {{ p.codename }}
+                                            </span>
+                                        </li>
+                                        {% endfor %}
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <div class="text-center py-5 text-muted">
+                        <i class="ti ti-lock-off fs-1 d-block mb-2 text-secondary opacity-50"></i>
+                        No permissions currently assigned to this role.
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Assign User to Role with Scope -->
+<div class="modal fade" id="assignUserModal" tabindex="-1" aria-labelledby="assignUserModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="assign_user" value="1">
+                <div class="modal-header">
+                    <h5 class="modal-title fw-bold" id="assignUserModalLabel">
+                        <i class="ti ti-user-plus text-primary me-2"></i> Assign User to {{ role.name }}
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <!-- User Selector -->
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Select User <span class="text-danger">*</span></label>
+                        <select name="user_id" class="form-select" required>
+                            <option value="">-- Choose active user --</option>
+                            {% for u in available_users %}
+                            <option value="{{ u.id }}">{{ u.username }} ({{ u.email }})</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <!-- Scope Type -->
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Scope Type</label>
+                        <select name="scope_type" class="form-select" id="scopeTypeSelect">
+                            {% for st_val, st_label in scope_types %}
+                            <option value="{{ st_val }}" {% if st_val == 'GLOBAL' %}selected{% endif %}>{{ st_label }}</option>
+                            {% endfor %}
+                        </select>
+                        <small class="text-muted d-block mt-1">Choose 'School-wide / Global' for default unrestricted access, or restrict to a class/section.</small>
+                    </div>
+
+                    <!-- Scope ID (Conditional) -->
+                    <div class="mb-3" id="scopeIdGroup">
+                        <label class="form-label fw-semibold">Scope Identifier (Optional)</label>
+                        <input type="text" name="scope_id" class="form-control" placeholder="e.g. Class 10, Section A, Science Dept">
+                        <small class="text-muted">Identifier for class, section, or department if scoped.</small>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary px-4">
+                        <i class="ti ti-check me-1"></i> Confirm Assignment
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

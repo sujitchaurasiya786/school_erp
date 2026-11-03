@@ -1,0 +1,147 @@
+{% extends 'dashboard/base.html' %}
+
+{% block admin %}
+<div class="container-fluid px-0">
+    <!-- Header with Title -->
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
+        <div>
+            <h3 class="fw-bold mb-1 text-dark">User Account Directory</h3>
+            <p class="text-muted mb-0 small">Manage user accounts and their dynamic role assignments across the ERP system.</p>
+        </div>
+        <div class="d-flex gap-2">
+            <a href="{% url 'rbac-roles-list' %}" class="btn btn-outline-primary">
+                <i class="ti ti-shield me-1"></i> Manage Roles
+            </a>
+        </div>
+    </div>
+
+    <!-- Django Messages -->
+    {% if messages %}
+    <div class="mb-3">
+        {% for message in messages %}
+        <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show shadow-sm" role="alert">
+            <i class="ti ti-info-circle me-1"></i> {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Filter & Search Toolbar -->
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body p-3">
+            <form method="get" class="row g-2 align-items-center">
+                <div class="col-md-4">
+                    <div class="input-group">
+                        <span class="input-group-text bg-transparent border-end-0 text-muted">
+                            <i class="ti ti-search"></i>
+                        </span>
+                        <input type="text" name="q" value="{{ search_query }}" class="form-control border-start-0" placeholder="Search by name, username, email...">
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <select name="user_type" class="form-select">
+                        <option value="">-- All Personas --</option>
+                        {% for ut_val, ut_label in user_types %}
+                        <option value="{{ ut_val }}" {% if user_type_filter == ut_val %}selected{% endif %}>{{ ut_label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <select name="role" class="form-select">
+                        <option value="">-- All Assigned Roles --</option>
+                        {% for r in all_roles %}
+                        <option value="{{ r.code }}" {% if role_filter == r.code %}selected{% endif %}>{{ r.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-2 d-flex gap-2 justify-content-end">
+                    <button type="submit" class="btn btn-primary w-100">Filter</button>
+                    {% if search_query or user_type_filter or role_filter %}
+                    <a href="{% url 'identity-users-list' %}" class="btn btn-light">Reset</a>
+                    {% endif %}
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Users Table Card -->
+    <div class="card border-0 shadow-sm">
+        <div class="card-header bg-white py-3 border-bottom d-flex align-items-center justify-content-between">
+            <h5 class="mb-0 fw-bold"><i class="ti ti-users text-primary me-2"></i> Users ({{ total_count }})</h5>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th class="ps-4">User</th>
+                            <th>Contact Email</th>
+                            <th>Primary Persona</th>
+                            <th>Assigned Roles (RBAC)</th>
+                            <th>Status</th>
+                            <th>Date Joined</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for u in users %}
+                        <tr>
+                            <td class="ps-4">
+                                <div class="d-flex align-items-center">
+                                    <div class="bg-primary bg-opacity-10 text-primary rounded-circle p-2 me-3 d-inline-flex">
+                                        <i class="ti ti-user fs-5"></i>
+                                    </div>
+                                    <div>
+                                        <div class="fw-bold text-dark">{{ u.full_name }}</div>
+                                        <small class="text-muted">@{{ u.username }}</small>
+                                    </div>
+                                </div>
+                            </td>
+                            <td>
+                                <span class="text-secondary small">{{ u.email }}</span>
+                            </td>
+                            <td>
+                                <span class="badge bg-light text-dark border">
+                                    {{ u.get_user_type_display }}
+                                </span>
+                            </td>
+                            <td>
+                                <div class="d-flex flex-wrap gap-1">
+                                    {% for assign in u.role_assignments.all %}
+                                        {% if assign.is_active %}
+                                        <a href="{% url 'rbac-role-detail' assign.role.pk %}" class="badge bg-primary-subtle text-primary border border-primary-subtle text-decoration-none">
+                                            {{ assign.role.name }}
+                                            {% if assign.is_scoped %}<span class="badge bg-secondary ms-1">{{ assign.scope_type }}</span>{% endif %}
+                                        </a>
+                                        {% endif %}
+                                    {% empty %}
+                                        <span class="text-muted small fst-italic">No dynamic role assigned</span>
+                                    {% endfor %}
+                                </div>
+                            </td>
+                            <td>
+                                {% if u.is_active %}
+                                <span class="badge bg-success">Active</span>
+                                {% else %}
+                                <span class="badge bg-danger">Inactive</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <small class="text-muted">{{ u.date_joined|date:"d M Y" }}</small>
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="6" class="text-center py-5 text-muted">
+                                <i class="ti ti-user-x fs-1 d-block mb-2 text-secondary opacity-50"></i>
+                                No users found matching your search criteria.
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

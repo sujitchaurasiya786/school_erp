@@ -83,6 +83,17 @@ class Role(TimeStampedModel):
     def __str__(self):
         return self.name
 
+    @property
+    def user_count(self):
+        return self.user_assignments.filter(is_active=True).count()
+
+    @property
+    def permission_count(self):
+        return self.permissions.filter(is_active=True).count()
+
+    def has_permission(self, codename):
+        return self.permissions.filter(codename=codename, is_active=True).exists()
+
 
 class UserRoleAssignment(TimeStampedModel):
     """
@@ -117,6 +128,10 @@ class UserRoleAssignment(TimeStampedModel):
     class Meta:
         db_table = 'rbac_user_roles'
         unique_together = ('user', 'role', 'scope_type', 'scope_id')
+
+    @property
+    def is_scoped(self):
+        return self.scope_type != ScopeType.GLOBAL
 
     def save(self, *args, **kwargs):
         if self.scope_id is None:
