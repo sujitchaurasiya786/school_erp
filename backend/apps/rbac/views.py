@@ -78,6 +78,9 @@ class RoleViewSet(viewsets.ModelViewSet):
         )
 
     def perform_update(self, serializer):
+        if serializer.instance.is_system_role and not RBACService.is_system_administrator(self.request.user):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Only a System Administrator can edit a protected system role.")
         old_perm_ids = set(
             serializer.instance.permissions.values_list("id", flat=True)
         )
@@ -148,7 +151,14 @@ class UserRoleAssignmentViewSet(viewsets.ModelViewSet):
         )
 
     def perform_update(self, serializer):
+        from rest_framework.exceptions import PermissionDenied
+        if serializer.instance.role.is_system_role and not RBACService.is_system_administrator(self.request.user):
+            raise PermissionDenied("Protected system role assignments cannot be edited here.")
         old_active = serializer.instance.is_active
+        if old_active and serializer.validated_data.get("is_active") is False:
+            if serializer.instance.role.permissions.filter(codename="users.membership.manage", is_active=True).exists():
+                if not RBACService.active_role_manager_exists(exclude_assignment_id=serializer.instance.pk):
+                    raise PermissionDenied("This action would remove the last active role manager.")
         assignment = serializer.save()
         AuditService.log(
             action=AuditAction.UPDATE,
@@ -162,6 +172,12 @@ class UserRoleAssignmentViewSet(viewsets.ModelViewSet):
         )
 
     def perform_destroy(self, instance):
+        from rest_framework.exceptions import PermissionDenied
+        if instance.role.is_system_role:
+            raise PermissionDenied("Protected system role assignments cannot be deleted here.")
+        if instance.role.permissions.filter(codename="users.membership.manage", is_active=True).exists():
+            if not RBACService.active_role_manager_exists(exclude_assignment_id=instance.pk):
+                raise PermissionDenied("This action would remove the last active role manager.")
         AuditService.log(
             action=AuditAction.DELETE,
             module="rbac",
