@@ -1,0 +1,7 @@
+{% extends "dashboard/base.html" %}
+{% block admin %}
+<div class="mb-4"><h3>Assign Role</h3><p class="text-muted">Role assignment is restricted by your own permission set.</p></div>
+<form method="post" class="card"><div class="card-body">{% csrf_token %}{% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
+{% for field in form %}<div class="mb-3"><label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>{{ field }}{% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}{% for error in field.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}</div>{% endfor %}
+</div><div class="card-footer"><button class="btn btn-primary">Assign Role</button> <a class="btn btn-light" href="{% url 'rbac-assignment-list' %}">Cancel</a></div></form>
+{% endblock %}
