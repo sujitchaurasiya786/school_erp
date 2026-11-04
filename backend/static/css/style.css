@@ -203,24 +203,41 @@ body.auth-body {
 }
 
 /* --------------------------------------------------------------------------
-   2. Dashboard Sidebar Navigation Styles (matching design specifications)
+   2. Dashboard Sidebar Navigation Styles (Smooth & Clean Transitions)
    -------------------------------------------------------------------------- */
+/* Disable conflicting template pseudo-element overlays */
+.pc-sidebar .pc-navbar > .pc-item > .pc-link::before,
+.pc-sidebar .pc-navbar > .pc-item > .pc-link::after,
+.pc-sidebar .pc-submenu .pc-item > .pc-link::before,
+.pc-sidebar .pc-submenu .pc-item > .pc-link::after {
+    display: none !important;
+}
+
+.pc-sidebar .pc-navbar > .pc-item {
+    transition: none;
+}
+
 .pc-sidebar .pc-navbar > .pc-item > .pc-link {
     display: flex;
     align-items: center;
-    padding: 10px 18px;
+    padding: 10px 16px;
     font-size: 0.925rem;
     font-weight: 500;
     color: #4b5563;
     border-radius: 8px;
     margin: 2px 10px;
-    transition: all 0.2s ease-in-out;
     text-decoration: none;
+    background-color: transparent;
+    transition: background-color 0.22s cubic-bezier(0.25, 0.8, 0.25, 1),
+                color 0.22s cubic-bezier(0.25, 0.8, 0.25, 1),
+                transform 0.22s cubic-bezier(0.25, 0.8, 0.25, 1);
+    will-change: transform, background-color;
 }
 
 .pc-sidebar .pc-navbar > .pc-item > .pc-link:hover {
-    background-color: #f3f4f6;
-    color: #1f2937;
+    background-color: #f1f5f9;
+    color: #1e40af;
+    transform: translateX(3px);
 }
 
 .pc-sidebar .pc-navbar > .pc-item > .pc-link .pc-micon {
@@ -231,12 +248,14 @@ body.auth-body {
     height: 26px;
     margin-right: 12px;
     font-size: 1.15rem;
-    color: #6b7280;
+    color: #64748b;
     flex-shrink: 0;
+    transition: color 0.22s ease, transform 0.22s ease;
 }
 
 .pc-sidebar .pc-navbar > .pc-item > .pc-link:hover .pc-micon {
-    color: #3b82f6;
+    color: #2563eb;
+    transform: scale(1.08);
 }
 
 .pc-sidebar .pc-navbar > .pc-item > .pc-link .pc-mtext {
@@ -252,24 +271,26 @@ body.auth-body {
     color: #9ca3af;
     display: inline-flex;
     align-items: center;
-    transition: transform 0.2s ease-in-out;
+    justify-content: center;
+    transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1), color 0.22s ease;
+    transform-origin: center;
 }
 
 .pc-sidebar .pc-navbar > .pc-item.pc-trigger > .pc-link .pc-arrow,
 .pc-sidebar .pc-navbar > .pc-item.active > .pc-link .pc-arrow {
     transform: rotate(90deg);
+    color: #2563eb;
 }
 
 .pc-sidebar .pc-navbar > .pc-item.active > .pc-link {
-    background-color: #4f46e5;
+    background: linear-gradient(135deg, #1e40af 0%, #2563eb 100%) !important;
     color: #ffffff !important;
     font-weight: 600;
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+    transform: none;
 }
 
-.pc-sidebar .pc-navbar > .pc-item.active > .pc-link .pc-micon {
-    color: #ffffff !important;
-}
-
+.pc-sidebar .pc-navbar > .pc-item.active > .pc-link .pc-micon,
 .pc-sidebar .pc-navbar > .pc-item.active > .pc-link .pc-arrow {
     color: #ffffff !important;
 }
@@ -285,15 +306,42 @@ body.auth-body {
     font-size: 0.875rem;
     color: #64748b;
     border-radius: 6px;
-    display: block;
+    display: flex;
+    align-items: center;
     text-decoration: none;
-    transition: all 0.15s ease-in-out;
+    background-color: transparent;
+    transition: background-color 0.2s cubic-bezier(0.25, 0.8, 0.25, 1),
+                color 0.2s cubic-bezier(0.25, 0.8, 0.25, 1),
+                transform 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+    will-change: transform, background-color;
 }
 
 .pc-sidebar .pc-submenu .pc-item .pc-link:hover {
     background-color: #f1f5f9;
     color: #2563eb;
-    padding-left: 18px;
+    transform: translateX(4px);
 }
+
+.pc-sidebar .pc-submenu .pc-item.active .pc-link {
+    background-color: #eff6ff;
+    color: #2563eb;
+    font-weight: 600;
+}
+
+.pc-sidebar .pc-navbar > .pc-item.pc-caption {
+    padding: 16px 22px 6px;
+    margin-top: 4px;
+    list-style: none;
+}
+
+.pc-sidebar .pc-navbar > .pc-item.pc-caption label {
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #94a3b8;
+    margin: 0;
+}
+
 
 

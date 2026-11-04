@@ -1,0 +1,429 @@
+{% load static rbac_tags %}
+<!-- =======================================================================
+     CBSE School ERP — Refactored Dynamic RBAC Sidebar Navigation
+     Organized strictly per SRS specifications and active modules.
+     All links point to user-facing template views or navigation placeholders.
+     ======================================================================= -->
+<nav class="pc-sidebar" aria-label="Main Navigation">
+  <div class="navbar-wrapper">
+    <!-- Brand / Header -->
+    <div class="m-header">
+      <a href="{% url 'home-dashboard' %}" class="b-brand text-primary d-flex align-items-center gap-2 text-decoration-none">
+        <i class="bi bi-mortarboard-fill fs-2 text-primary" aria-hidden="true"></i>
+        <span class="fs-5 fw-bold text-dark text-truncate">{{ school_profile.school_name|default:"School ERP" }}</span>
+      </a>
+    </div>
+
+    <!-- Navigation Scrollable Content -->
+    <div class="navbar-content">
+      <ul class="pc-navbar" role="menubar">
+
+        <!-- ===============================================================
+             Dashboard Group
+             =============================================================== -->
+        <li class="pc-item pc-caption">
+          <label>Main</label>
+        </li>
+        <li class="pc-item {% nav_active 'home-dashboard' %}" role="none">
+          <a href="{% url 'home-dashboard' %}" class="pc-link" role="menuitem">
+            <span class="pc-micon"><i class="ti ti-dashboard" aria-hidden="true"></i></span>
+            <span class="pc-mtext">Dashboard</span>
+          </a>
+        </li>
+
+        <!-- ===============================================================
+             1. Student Management (SRS §3.1 & §3.2)
+             Active Modules: Admissions, Students
+             =============================================================== -->
+        {% if request.user.is_superuser or request.user|has_any_perm:'admissions.application.view,students.profile.view,students.promotion.approve,students.tc.issue' %}
+        <li class="pc-item pc-hasmenu" role="none">
+          <a href="#!" class="pc-link" role="menuitem" aria-expanded="false">
+            <span class="pc-micon"><i class="ti ti-school" aria-hidden="true"></i></span>
+            <span class="pc-mtext">Student Management</span>
+            <span class="pc-arrow"><i class="ti ti-chevron-right" aria-hidden="true"></i></span>
+          </a>
+          <ul class="pc-submenu" role="menu">
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-user-plus me-2" aria-hidden="true"></i> Admission
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-users me-2" aria-hidden="true"></i> Student Directory
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-user-check me-2" aria-hidden="true"></i> Guardians
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-id me-2" aria-hidden="true"></i> Class Enrollments
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-arrow-up-circle me-2" aria-hidden="true"></i> Promotion
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-certificate me-2" aria-hidden="true"></i> Certificates
+              </a>
+            </li>
+          </ul>
+        </li>
+        {% endif %}
+
+        <!-- ===============================================================
+             2. Academics (SRS §3.3)
+             Active Module: Academics
+             =============================================================== -->
+        {% if request.user.is_superuser or request.user|has_any_perm:'academics.timetable.view,academics.subjects.manage,school_config.profile.view' %}
+        <li class="pc-item pc-hasmenu" role="none">
+          <a href="#!" class="pc-link" role="menuitem" aria-expanded="false">
+            <span class="pc-micon"><i class="ti ti-book" aria-hidden="true"></i></span>
+            <span class="pc-mtext">Academics</span>
+            <span class="pc-arrow"><i class="ti ti-chevron-right" aria-hidden="true"></i></span>
+          </a>
+          <ul class="pc-submenu" role="menu">
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-calendar-event me-2" aria-hidden="true"></i> Academic Years
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-layout-grid me-2" aria-hidden="true"></i> Classes &amp; Sections
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-books me-2" aria-hidden="true"></i> Subjects
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-user-pin me-2" aria-hidden="true"></i> Teacher Assignments
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-clock me-2" aria-hidden="true"></i> Timetable
+              </a>
+            </li>
+          </ul>
+        </li>
+        {% endif %}
+
+        <!-- ===============================================================
+             3. Attendance (SRS §3.4)
+             Active Module: Attendance
+             =============================================================== -->
+        {% if request.user.is_superuser or request.user|has_any_perm:'attendance.record.view,attendance.record.mark,attendance.report.export' %}
+        <li class="pc-item pc-hasmenu" role="none">
+          <a href="#!" class="pc-link" role="menuitem" aria-expanded="false">
+            <span class="pc-micon"><i class="ti ti-calendar-check" aria-hidden="true"></i></span>
+            <span class="pc-mtext">Attendance</span>
+            <span class="pc-arrow"><i class="ti ti-chevron-right" aria-hidden="true"></i></span>
+          </a>
+          <ul class="pc-submenu" role="menu">
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-checklist me-2" aria-hidden="true"></i> Student Attendance
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-clipboard-check me-2" aria-hidden="true"></i> Staff Attendance
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-chart-bar me-2" aria-hidden="true"></i> Attendance Reports
+              </a>
+            </li>
+          </ul>
+        </li>
+        {% endif %}
+
+        <!-- ===============================================================
+             4. Examination (SRS §3.6)
+             Active Module: Examinations
+             =============================================================== -->
+        {% if request.user.is_superuser or request.user|has_any_perm:'exams.marks.view,exams.marks.enter,exams.results.approve,exams.results.publish' %}
+        <li class="pc-item pc-hasmenu" role="none">
+          <a href="#!" class="pc-link" role="menuitem" aria-expanded="false">
+            <span class="pc-micon"><i class="ti ti-file-certificate" aria-hidden="true"></i></span>
+            <span class="pc-mtext">Examination</span>
+            <span class="pc-arrow"><i class="ti ti-chevron-right" aria-hidden="true"></i></span>
+          </a>
+          <ul class="pc-submenu" role="menu">
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-calendar me-2" aria-hidden="true"></i> Exam Terms
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-notes me-2" aria-hidden="true"></i> Assessments
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-edit me-2" aria-hidden="true"></i> Marks Entry
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-checkup-list me-2" aria-hidden="true"></i> Result Approval
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-broadcast me-2" aria-hidden="true"></i> Result Publication
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-printer me-2" aria-hidden="true"></i> Report Cards
+              </a>
+            </li>
+          </ul>
+        </li>
+        {% endif %}
+
+        <!-- ===============================================================
+             5. Finance (SRS §3.5)
+             Active Module: Finance
+             =============================================================== -->
+        {% if request.user.is_superuser or request.user|has_any_perm:'finance.fee_structure.view,finance.invoice.view,finance.payment.record,finance.report.export' %}
+        <li class="pc-item pc-hasmenu" role="none">
+          <a href="#!" class="pc-link" role="menuitem" aria-expanded="false">
+            <span class="pc-micon"><i class="ti ti-currency-rupee" aria-hidden="true"></i></span>
+            <span class="pc-mtext">Finance</span>
+            <span class="pc-arrow"><i class="ti ti-chevron-right" aria-hidden="true"></i></span>
+          </a>
+          <ul class="pc-submenu" role="menu">
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-coin me-2" aria-hidden="true"></i> Fee Heads
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-file-dollar me-2" aria-hidden="true"></i> Fee Structures
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-receipt-2 me-2" aria-hidden="true"></i> Student Invoices
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-wallet me-2" aria-hidden="true"></i> Fee Collection
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-discount-2 me-2" aria-hidden="true"></i> Concessions
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-arrow-back-up me-2" aria-hidden="true"></i> Refunds
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-alert-circle me-2" aria-hidden="true"></i> Dues Reports
+              </a>
+            </li>
+          </ul>
+        </li>
+        {% endif %}
+
+        <!-- ===============================================================
+             6. Staff & HR (SRS §3.7)
+             Active Module: HRMS
+             =============================================================== -->
+        {% if request.user.is_superuser or request.user|has_any_perm:'hrms.staff.view,hrms.leave.approve,hrms.payroll.view' %}
+        <li class="pc-item pc-hasmenu" role="none">
+          <a href="#!" class="pc-link" role="menuitem" aria-expanded="false">
+            <span class="pc-micon"><i class="ti ti-id-badge" aria-hidden="true"></i></span>
+            <span class="pc-mtext">Staff &amp; HR</span>
+            <span class="pc-arrow"><i class="ti ti-chevron-right" aria-hidden="true"></i></span>
+          </a>
+          <ul class="pc-submenu" role="menu">
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-id-badge-2 me-2" aria-hidden="true"></i> Staff Directory
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-briefcase me-2" aria-hidden="true"></i> Designations
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-calendar-off me-2" aria-hidden="true"></i> Leave Management
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-clock-check me-2" aria-hidden="true"></i> Staff Attendance
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-calculator me-2" aria-hidden="true"></i> Payroll
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-file-text me-2" aria-hidden="true"></i> Payslips
+              </a>
+            </li>
+          </ul>
+        </li>
+        {% endif %}
+
+        <!-- ===============================================================
+             7. School Operations (SRS §3.8, §3.9, §3.10, §3.11)
+             Active Modules: Library, Transport, Inventory, Helpdesk
+             =============================================================== -->
+        {% if request.user.is_superuser or request.user|has_any_perm:'library.catalog.view,transport.routes.view,inventory.assets.view,helpdesk.ticket.view' %}
+        <li class="pc-item pc-hasmenu" role="none">
+          <a href="#!" class="pc-link" role="menuitem" aria-expanded="false">
+            <span class="pc-micon"><i class="ti ti-building-warehouse" aria-hidden="true"></i></span>
+            <span class="pc-mtext">School Operations</span>
+            <span class="pc-arrow"><i class="ti ti-chevron-right" aria-hidden="true"></i></span>
+          </a>
+          <ul class="pc-submenu" role="menu">
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-book-2 me-2" aria-hidden="true"></i> Library Management
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-bus me-2" aria-hidden="true"></i> Transport Management
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-box-seam me-2" aria-hidden="true"></i> Inventory Management
+              </a>
+            </li>
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-headset me-2" aria-hidden="true"></i> Helpdesk
+              </a>
+            </li>
+          </ul>
+        </li>
+        {% endif %}
+
+        <!-- ===============================================================
+             8. Reports & Administration (SRS §3.12, §1, §5)
+             Active Modules: Identity, RBAC, School Config, Audit, Analytics
+             =============================================================== -->
+        {% if has_rbac_access or request.user.is_superuser %}
+        <li class="pc-item pc-caption">
+          <label>Administration</label>
+        </li>
+
+        <li class="pc-item pc-hasmenu {% nav_group_active 'identity-users-list,identity-users-direct,rbac-roles-list,rbac-role-detail,rbac-role-create,rbac-role-edit,rbac-permissions-list' '/dashboard/rbac/,/dashboard/users/' %}" role="none">
+          <a href="#!" class="pc-link" role="menuitem" aria-expanded="{% if request.path|slice:':15' == '/dashboard/rbac' or request.path|slice:':16' == '/dashboard/users' %}true{% else %}false{% endif %}">
+            <span class="pc-micon"><i class="ti ti-settings-cog" aria-hidden="true"></i></span>
+            <span class="pc-mtext">Reports &amp; Admin</span>
+            <span class="pc-arrow"><i class="ti ti-chevron-right" aria-hidden="true"></i></span>
+          </a>
+          <ul class="pc-submenu" role="menu" {% if request.path|slice:':15' == '/dashboard/rbac' or request.path|slice:':16' == '/dashboard/users' %}style="display: block;"{% endif %}>
+
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="#!" role="menuitem">
+                <i class="ti ti-chart-pie me-2" aria-hidden="true"></i> Reports &amp; Analytics
+              </a>
+            </li>
+
+            {% if 'identity.users.view' in user_permissions or request.user.is_superuser %}
+            <li class="pc-item {% nav_active 'identity-users-list,identity-users-direct' %}" role="none">
+              <a class="pc-link" href="{% url 'identity-users-list' %}" role="menuitem">
+                <i class="ti ti-users me-2" aria-hidden="true"></i> User Management
+              </a>
+            </li>
+            {% endif %}
+
+            {% if 'rbac.role.view' in user_permissions or request.user.is_superuser %}
+            <li class="pc-item {% nav_active 'rbac-roles-list,rbac-role-detail,rbac-role-create,rbac-role-edit' %}" role="none">
+              <a class="pc-link" href="{% url 'rbac-roles-list' %}" role="menuitem">
+                <i class="ti ti-shield me-2" aria-hidden="true"></i> Roles &amp; Permissions
+              </a>
+            </li>
+
+            <li class="pc-item {% nav_active 'rbac-permissions-list' %}" role="none">
+              <a class="pc-link" href="{% url 'rbac-permissions-list' %}" role="menuitem">
+                <i class="ti ti-key me-2" aria-hidden="true"></i> Permissions Explorer
+              </a>
+            </li>
+            {% endif %}
+
+            {% if request.user.is_staff or 'school_config.profile.view' in user_permissions or request.user.is_superuser %}
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="{% url 'admin:index' %}" role="menuitem">
+                <i class="ti ti-settings me-2" aria-hidden="true"></i> School Settings
+              </a>
+            </li>
+            {% endif %}
+
+            {% if request.user.is_staff or 'audit.logs.view' in user_permissions or request.user.is_superuser %}
+            <li class="pc-item" role="none">
+              <a class="pc-link" href="{% url 'admin:audit_auditlog_changelist' %}" role="menuitem">
+                <i class="ti ti-history me-2" aria-hidden="true"></i> Audit Logs
+              </a>
+            </li>
+            {% endif %}
+
+          </ul>
+        </li>
+        {% endif %}
+
+        <!-- ===============================================================
+             Account Group
+             =============================================================== -->
+        <li class="pc-item pc-caption">
+          <label>Account</label>
+        </li>
+
+        <li class="pc-item" role="none">
+          <a href="#!" class="pc-link" role="menuitem">
+            <span class="pc-micon"><i class="ti ti-user" aria-hidden="true"></i></span>
+            <span class="pc-mtext">My Profile</span>
+          </a>
+        </li>
+
+        {% if request.user.is_staff %}
+        <li class="pc-item" role="none">
+          <a href="{% url 'admin:password_change' %}" class="pc-link" role="menuitem">
+            <span class="pc-micon"><i class="ti ti-key" aria-hidden="true"></i></span>
+            <span class="pc-mtext">Change Password</span>
+          </a>
+        </li>
+        {% endif %}
+
+        <li class="pc-item" role="none">
+          <a href="{% url 'logout' %}" class="pc-link text-danger" role="menuitem">
+            <span class="pc-micon"><i class="ti ti-power" aria-hidden="true"></i></span>
+            <span class="pc-mtext">Logout</span>
+          </a>
+        </li>
+
+      </ul>
+    </div>
+  </div>
+</nav>

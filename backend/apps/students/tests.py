@@ -1,10 +1,12 @@
 from datetime import date
+from django.core.management import call_command
 from django.test import TestCase
 from rest_framework.test import APIClient
 from rest_framework import status
 from apps.identity.models import User, UserType
 from apps.students.models import Student, Guardian, StudentStatus
 from apps.students.services import StudentService
+from apps.rbac.models import Role, Permission, UserRoleAssignment, ScopeType
 
 
 class StudentTests(TestCase):
@@ -15,6 +17,21 @@ class StudentTests(TestCase):
             email='admin_student@test.com',
             password='Password123!',
             user_type=UserType.ADMIN
+        )
+        # Assign dynamic RBAC permissions for students module
+        call_command('sync_permissions')
+        self.role = Role.objects.create(
+            code='student_admin_role',
+            name='Student Admin Role',
+            is_system_role=True,
+            is_active=True
+        )
+        self.role.permissions.set(Permission.objects.filter(module='students'))
+        UserRoleAssignment.objects.create(
+            user=self.admin,
+            role=self.role,
+            scope_type=ScopeType.GLOBAL,
+            is_active=True
         )
         self.guardian = Guardian.objects.create(
             first_name='Ramesh',

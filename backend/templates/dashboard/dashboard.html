@@ -13,6 +13,7 @@
                 Academic Session: <span class="badge bg-primary-subtle text-primary border border-primary-subtle">{{ current_year.name|default:"2026-2027" }}</span>
             </p>
         </div>
+        {% if has_rbac_access or request.user.is_superuser %}
         <div class="d-flex gap-2">
             <a href="{% url 'rbac-roles-list' %}" class="btn btn-outline-primary">
                 <i class="ti ti-shield me-1"></i> RBAC Roles
@@ -21,6 +22,7 @@
                 <i class="ti ti-users me-1"></i> User Directory
             </a>
         </div>
+        {% endif %}
     </div>
 
     <!-- Metric Cards Grid -->
@@ -84,13 +86,18 @@
                         </div>
                     </div>
                     <h3 class="fw-bold mb-1 text-dark">{{ total_roles }}</h3>
+                    {% if has_rbac_access or request.user.is_superuser %}
                     <small class="text-primary"><a href="{% url 'rbac-roles-list' %}" class="text-decoration-none">Manage permissions &rarr;</a></small>
+                    {% else %}
+                    <small class="text-muted">Security profiles</small>
+                    {% endif %}
                 </div>
             </div>
         </div>
     </div>
 
     <!-- Quick Action Bar -->
+    {% if has_rbac_access or request.user.is_superuser %}
     <div class="card border-0 shadow-sm mb-4">
         <div class="card-header bg-white py-3 border-bottom">
             <h6 class="mb-0 fw-bold"><i class="ti ti-bolt text-warning me-2"></i> RBAC & Quick Management Actions</h6>
@@ -120,6 +127,7 @@
             </div>
         </div>
     </div>
+    {% endif %}
 
     <!-- Recent Activity Grids -->
     <div class="row g-4">
@@ -128,7 +136,11 @@
             <div class="card border-0 shadow-sm h-100">
                 <div class="card-header bg-white py-3 border-bottom d-flex align-items-center justify-content-between">
                     <h6 class="mb-0 fw-bold"><i class="ti ti-user text-primary me-2"></i> Recent User Accounts</h6>
+                    {% if 'identity.users.view' in user_permissions or request.user.is_superuser %}
                     <a href="{% url 'identity-users-list' %}" class="small text-decoration-none">View All &rarr;</a>
+                    {% else %}
+                    <span class="small text-muted">Latest 5</span>
+                    {% endif %}
                 </div>
                 <div class="card-body p-0">
                     <div class="table-responsive">
@@ -185,7 +197,7 @@
             <div class="card border-0 shadow-sm h-100">
                 <div class="card-header bg-white py-3 border-bottom d-flex align-items-center justify-content-between">
                     <h6 class="mb-0 fw-bold"><i class="ti ti-file-text text-warning me-2"></i> Recent Admission Applications</h6>
-                    <a href="/api/v1/admissions/applications/" class="small text-decoration-none">View All &rarr;</a>
+                    <span class="small text-muted">Latest 5</span>
                 </div>
                 <div class="card-body p-0">
                     <div class="table-responsive">

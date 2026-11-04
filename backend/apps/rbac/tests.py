@@ -184,3 +184,124 @@ class RBACDashboardViewTests(TestCase):
         self.assertContains(resp, 'User Account Directory')
         self.assertContains(resp, 'admin_tester')
         self.assertContains(resp, 'student1')
+
+
+class SidebarRefactorTests(TestCase):
+    """
+    Tests ensuring the refactored sidebar complies strictly with SRS requirements:
+      - Valid user-facing template routes only.
+      - Zero raw `/api/v1/` endpoints.
+      - Deferred modules (Alumni, Hostel, T&P) completely removed.
+      - Non-implemented screens are kept hidden.
+      - Permission-based visibility controls access.
+    """
+
+    def setUp(self):
+        call_command('sync_permissions')
+
+        # Admin user with full admin permissions
+        self.admin_user = User.objects.create_user(
+            username='admin_sidebar',
+            email='admin_sidebar@school.local',
+            password='Password@123',
+            user_type=UserType.ADMIN,
+            is_staff=True,
+            is_superuser=True,
+            is_active=True
+        )
+        self.admin_role, _ = Role.objects.get_or_create(
+            code='system_admin_sidebar',
+            defaults={'name': 'System Admin Sidebar', 'is_system_role': True, 'is_active': True}
+        )
+        self.admin_role.permissions.set(Permission.objects.filter(is_active=True))
+        UserRoleAssignment.objects.create(
+            user=self.admin_user,
+            role=self.admin_role,
+            scope_type=ScopeType.GLOBAL,
+            is_active=True
+        )
+
+        # Standard student user without admin permissions
+        self.student_user = User.objects.create_user(
+            username='student_sidebar',
+            email='student_sidebar@school.local',
+            password='Password@123',
+            user_type=UserType.STUDENT,
+            is_staff=False,
+            is_superuser=False,
+            is_active=True
+        )
+
+        self.client = Client()
+
+    def test_sidebar_renders_for_authenticated_admin(self):
+        self.client.login(username='admin_sidebar', password='Password@123')
+        resp = self.client.get(reverse('home-dashboard'))
+        self.assertEqual(resp.status_code, 200)
+
+        # Dashboard link present
+        self.assertContains(resp, 'Dashboard')
+
+        # Admin navigation items present for authorized user
+        self.assertContains(resp, 'User Management')
+        self.assertContains(resp, 'Roles & Permissions')
+        self.assertContains(resp, 'Permissions Explorer')
+        self.assertContains(resp, 'School Settings')
+
+    def test_sidebar_never_contains_raw_api_endpoints(self):
+        self.client.login(username='admin_sidebar', password='Password@123')
+        resp = self.client.get(reverse('home-dashboard'))
+        self.assertEqual(resp.status_code, 200)
+
+        # Strict rule: NEVER use /api/v1/... endpoints as page navigation links
+        self.assertNotContains(resp, 'href="/api/v1/')
+        self.assertNotContains(resp, "href='/api/v1/")
+
+    def test_sidebar_excludes_deferred_modules(self):
+        self.client.login(username='admin_sidebar', password='Password@123')
+        resp = self.client.get(reverse('home-dashboard'))
+        self.assertEqual(resp.status_code, 200)
+
+        # SRS Rule: Do not add Hostel & Mess, Alumni, LMS, Communications, AI, T&P
+        content = resp.content.decode('utf-8')
+        self.assertNotIn('Alumni Mgmt', content)
+        self.assertNotIn('Hostel Mgmt', content)
+        self.assertNotIn('T&P Cell', content)
+        self.assertNotIn('Smart Card Mgmt', content)
+        self.assertNotIn('Recycle Bin', content)
+        self.assertNotIn('ERP Masters Entry', content)
+        self.assertNotIn('Doc. Procurement', content)
+
+    def test_sidebar_hides_admin_links_for_unauthorized_user(self):
+        self.client.login(username='student_sidebar', password='Password@123')
+        resp = self.client.get(reverse('home-dashboard'))
+        self.assertEqual(resp.status_code, 200)
+
+        # Unauthorized student cannot see User Management or Roles & Permissions
+        content = resp.content.decode('utf-8')
+        self.assertNotIn('Roles & Permissions', content)
+        self.assertNotIn('User Management', content)
+        self.assertNotIn('School Settings', content)
+
+    def test_template_tags_and_context_processor(self):
+        from django.template import Context, Template
+        from django.test import RequestFactory
+        from apps.rbac.context_processors import rbac_context
+
+        rf = RequestFactory()
+        req = rf.get('/')
+        req.user = self.admin_user
+
+        ctx_data = rbac_context(req)
+        self.assertTrue(ctx_data['has_rbac_access'])
+
+        # Test custom template tags
+        template_str = """
+        {% load rbac_tags %}
+        {% if user|has_perm:'identity.users.view' %}CAN_MANAGE_USERS{% endif %}
+        {% if user|has_perm:'nonexistent.perm' %}SHOULD_NOT_SHOW{% endif %}
+        """
+        rendered = Template(template_str).render(Context({'user': self.admin_user}))
+        self.assertIn('CAN_MANAGE_USERS', rendered)
+        self.assertNotIn('SHOULD_NOT_SHOW', rendered)
+

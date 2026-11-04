@@ -1,9 +1,11 @@
 from datetime import date
+from django.core.management import call_command
 from django.test import TestCase
 from rest_framework.test import APIClient
 from rest_framework import status
 from apps.school_config.models import AcademicYear, SchoolProfile
 from apps.identity.models import User, UserType
+from apps.rbac.models import Role, Permission, UserRoleAssignment, ScopeType
 
 
 class SchoolConfigTests(TestCase):
@@ -14,6 +16,21 @@ class SchoolConfigTests(TestCase):
             email='admin_config@test.com',
             password='Password123!',
             user_type=UserType.ADMIN
+        )
+        # Assign dynamic RBAC permissions for school_config module
+        call_command('sync_permissions')
+        self.role = Role.objects.create(
+            code='school_config_admin_role',
+            name='School Config Admin Role',
+            is_system_role=True,
+            is_active=True
+        )
+        self.role.permissions.set(Permission.objects.filter(module='school_config'))
+        UserRoleAssignment.objects.create(
+            user=self.admin_user,
+            role=self.role,
+            scope_type=ScopeType.GLOBAL,
+            is_active=True
         )
 
     def test_academic_year_current_toggle(self):
