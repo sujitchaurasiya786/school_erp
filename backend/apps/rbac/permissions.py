@@ -2,15 +2,14 @@
 DRF permission classes for School ERP dynamic RBAC.
 
 HasDynamicPermission:
-  - Rejects unauthenticated requests.
+  - Rejects unauthenticated requests (anonymous users strictly denied).
   - Rejects inactive users.
   - Enforces `must_change_password` flag: if set, only /api/v1/identity/users/me/
     (PATCH) is allowed so the user can update their password.
-  - Does NOT grant automatic superuser bypass — all access flows through RBAC
-    per SRS §3.7 (System Administrators are NOT auto-granted payroll/finance/
-    confidential grievance permissions).
-  - Reads `required_permission` from the view for explicit permission checks.
-  - Falls back to `module_name` + HTTP-method → action mapping for ViewSets.
+  - System Administrator (is_superuser=True): Holds permanent, unrestricted
+    access across all ERP endpoints per updated SRS §6.4 without requiring dynamic role assignments.
+  - Normal users: Evaluated strictly against dynamic RBAC via RBACService.
+    Views MUST declare one of `required_permission` or `module_name`.
   - Returns False (deny) by default when neither attribute is present.
 """
 from rest_framework.permissions import BasePermission
@@ -38,7 +37,8 @@ class HasDynamicPermission(BasePermission):
       - `required_permission = "some.codename"` for exact codename check.
       - `module_name = "module"` for HTTP-method-to-action mapping.
 
-    Without either, access is DENIED (fail-closed).
+    Without either, access is DENIED (fail-closed) for normal users.
+    System Administrators (is_superuser=True) automatically receive complete access.
     """
 
     message = "You do not have the required permission to perform this action."
@@ -71,12 +71,16 @@ class HasDynamicPermission(BasePermission):
         if view_action == "me":
             return True
 
-        # Gate 4: Explicit permission codename declared on view
+        # Gate 4: System Administrator permanent access (SRS §6.4)
+        if user.is_superuser:
+            return True
+
+        # Gate 5: Explicit permission codename declared on view
         required_permission = getattr(view, "required_permission", None)
         if required_permission:
             return RBACService.has_permission(user, required_permission)
 
-        # Gate 5: Module-level action mapping
+        # Gate 6: Module-level action mapping
         module_name = getattr(view, "module_name", None)
         if module_name:
             # ViewSet custom actions may override the action code
@@ -103,6 +107,10 @@ class HasDynamicPermission(BasePermission):
 
         if not user or not user.is_authenticated or not user.is_active:
             return False
+
+        # System Administrator permanent access (SRS §6.4)
+        if user.is_superuser:
+            return True
 
         # For safe methods, trust the view-level check already done
         if request.method in ("GET", "HEAD", "OPTIONS"):

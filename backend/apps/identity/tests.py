@@ -270,10 +270,10 @@ class RBACServiceTests(TestCase):
         self.assertTrue(RBACService.has_permission(self.user, "students.profile.view"))
         self.assertTrue(RBACService.has_permission(self.user, "finance.invoice.view"))
 
-    def test_superuser_does_NOT_bypass_rbac(self):
+    def test_superuser_automatically_granted_all_permissions_without_role(self):
         """
-        SRS §3.7: System Administrators are NOT automatically granted all permissions.
-        Payroll/finance permissions must be explicitly assigned.
+        SRS §6.4: System Administrators (is_superuser=True) automatically receive
+        complete ERP access across all modules without requiring role assignments.
         """
         admin = User.objects.create_superuser(
             username="sys_admin",
@@ -281,9 +281,29 @@ class RBACServiceTests(TestCase):
             password="Admin@Pass1",
             user_type=UserType.ADMIN,
         )
-        # Admin has no role assignments — should be DENIED payroll access
-        self.assertFalse(RBACService.has_permission(admin, "hrms.payroll.view"))
-        self.assertFalse(RBACService.has_permission(admin, "hrms.payroll.run"))
+        # Admin has no role assignments — automatically granted permissions per SRS §6.4
+        self.assertTrue(RBACService.has_permission(admin, "hrms.payroll.view"))
+        self.assertTrue(RBACService.has_permission(admin, "hrms.payroll.run"))
+        self.assertTrue(RBACService.has_permission(admin, "finance.invoice.view"))
+        self.assertTrue(RBACService.has_permission(admin, "helpdesk.grievance.view"))
+        self.assertTrue(RBACService.has_module_action(admin, "students", "view"))
+
+    def test_staff_user_does_not_bypass_rbac_without_role(self):
+        """
+        SRS §6.3: is_staff=True alone must NEVER grant full ERP access or bypass RBAC.
+        """
+        staff = User.objects.create_user(
+            username="staff_only",
+            email="staff_only@school.test",
+            password="Staff@Pass1",
+            user_type=UserType.TEACHER,
+            is_staff=True,
+            is_superuser=False,
+            is_active=True,
+        )
+        self.assertFalse(RBACService.has_permission(staff, "hrms.payroll.view"))
+        self.assertFalse(RBACService.has_permission(staff, "students.profile.view"))
+        self.assertFalse(RBACService.has_module_action(staff, "students", "view"))
 
     def test_superuser_gets_permission_via_explicit_assignment(self):
         admin = User.objects.create_superuser(
@@ -434,6 +454,25 @@ class HasDynamicPermissionTests(TestCase):
         view = self._make_view()
         view.action = "me"
         self.assertTrue(self.permission_class.has_permission(request, view))
+
+    def test_superuser_access_allowed_without_role_or_explicit_permission(self):
+        """
+        SRS §6.4: Superuser accesses DRF endpoints protected by HasDynamicPermission
+        without requiring any dynamic role assignment.
+        """
+        admin = make_user("drf_super", is_superuser=True, is_staff=True)
+        request = self._make_request(admin)
+        view = self._make_view(required_permission="hrms.payroll.run")
+        self.assertTrue(self.permission_class.has_permission(request, view))
+
+    def test_staff_without_superuser_denied_without_role(self):
+        """
+        SRS §6.3: Staff without superuser status cannot access DRF endpoints without dynamic role.
+        """
+        staff = make_user("drf_staff", is_staff=True, is_superuser=False)
+        request = self._make_request(staff)
+        view = self._make_view(required_permission="hrms.payroll.run")
+        self.assertFalse(self.permission_class.has_permission(request, view))
 
 
 # ─── 5. Identity API Endpoints ────────────────────────────────────────────────

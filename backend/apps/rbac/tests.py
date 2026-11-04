@@ -36,14 +36,13 @@ class BootstrapSystemAdminCommandTests(TestCase):
         expected_codes = {'system_admin', 'principal', 'teacher', 'accountant', 'parent', 'student'}
         self.assertTrue(expected_codes.issubset(role_codes))
 
-        # 3. Verify System Administrator role permissions (SRS §3.7: no payroll or confidential grievance)
+        # 3. Verify System Administrator role permissions (SRS §6.4: complete baseline access)
         admin_role = Role.objects.get(code='system_admin')
         admin_perms = set(admin_role.permissions.values_list('codename', flat=True))
-        self.assertNotIn('hrms.payroll.view', admin_perms)
-        self.assertNotIn('hrms.payroll.run', admin_perms)
-        self.assertNotIn('helpdesk.grievance.view', admin_perms)
         self.assertIn('identity.users.view', admin_perms)
         self.assertIn('rbac.role.manage', admin_perms)
+        self.assertIn('hrms.payroll.view', admin_perms)
+        self.assertIn('helpdesk.grievance.view', admin_perms)
 
         # 4. Verify admin user
         admin_user = User.objects.get(username='sysadmin')
@@ -304,4 +303,188 @@ class SidebarRefactorTests(TestCase):
         rendered = Template(template_str).render(Context({'user': self.admin_user}))
         self.assertIn('CAN_MANAGE_USERS', rendered)
         self.assertNotIn('SHOULD_NOT_SHOW', rendered)
+
+
+class SystemAdministratorAuthorizationPolicyTests(TestCase):
+    """
+    Tests enforcing the updated System Administrator Policy (SRS §6.4):
+      1. Superuser has complete access across all 12 modules without a dynamic role.
+      2. Superuser accesses protected DRF endpoints without dynamic role assignment.
+      3. Normal user with dynamic permission can access resource.
+      4. Normal user without permission receives appropriate denial.
+      5. is_staff=True without is_superuser does not grant full access.
+      6. Anonymous users are denied.
+      7. Existing data-scope restrictions continue working for normal users.
+      8. Approval workflows and audit logging remain functional and auditable.
+    """
+
+    def setUp(self):
+        call_command('sync_permissions')
+
+        # 1. Superuser WITHOUT ANY UserRoleAssignment
+        self.superuser = User.objects.create_superuser(
+            username='pure_super',
+            email='super@school.local',
+            password='Password@123',
+            user_type=UserType.ADMIN,
+            is_staff=True,
+            is_superuser=True,
+            is_active=True
+        )
+
+        # 2. Staff user WITHOUT superuser and WITHOUT role
+        self.staff_user = User.objects.create_user(
+            username='staff_only',
+            email='staff@school.local',
+            password='Password@123',
+            user_type=UserType.TEACHER,
+            is_staff=True,
+            is_superuser=False,
+            is_active=True
+        )
+
+        # 3. Normal user WITHOUT role
+        self.normal_user = User.objects.create_user(
+            username='normal_user',
+            email='normal@school.local',
+            password='Password@123',
+            user_type=UserType.STUDENT,
+            is_staff=False,
+            is_superuser=False,
+            is_active=True
+        )
+
+        # 4. Scoped normal user with role
+        self.scoped_user = User.objects.create_user(
+            username='scoped_teacher',
+            email='scoped@school.local',
+            password='Password@123',
+            user_type=UserType.TEACHER,
+            is_staff=True,
+            is_superuser=False,
+            is_active=True
+        )
+        self.teacher_role = Role.objects.create(
+            code='scoped_teacher_role',
+            name='Scoped Teacher Role',
+            is_system_role=False,
+            is_active=True
+        )
+        perm = Permission.objects.get(codename='attendance.record.mark')
+        self.teacher_role.permissions.add(perm)
+        UserRoleAssignment.objects.create(
+            user=self.scoped_user,
+            role=self.teacher_role,
+            scope_type=ScopeType.CLASS,
+            scope_id='10',
+            is_active=True
+        )
+
+        self.client = Client()
+
+    def test_1_superuser_has_all_erp_permissions_without_dynamic_role(self):
+        from apps.rbac.services import RBACService
+        # Superuser has NO UserRoleAssignment
+        self.assertFalse(UserRoleAssignment.objects.filter(user=self.superuser).exists())
+
+        # Yet has access to ALL active module permissions
+        self.assertTrue(RBACService.has_permission(self.superuser, 'identity.users.view'))
+        self.assertTrue(RBACService.has_permission(self.superuser, 'rbac.role.manage'))
+        self.assertTrue(RBACService.has_permission(self.superuser, 'school_config.profile.view'))
+        self.assertTrue(RBACService.has_permission(self.superuser, 'admissions.application.approve'))
+        self.assertTrue(RBACService.has_permission(self.superuser, 'students.profile.view'))
+        self.assertTrue(RBACService.has_permission(self.superuser, 'academics.timetable.manage'))
+        self.assertTrue(RBACService.has_permission(self.superuser, 'attendance.record.mark'))
+        self.assertTrue(RBACService.has_permission(self.superuser, 'finance.invoice.view'))
+        self.assertTrue(RBACService.has_permission(self.superuser, 'exams.marks.enter'))
+        self.assertTrue(RBACService.has_permission(self.superuser, 'hrms.payroll.run'))
+        self.assertTrue(RBACService.has_permission(self.superuser, 'library.circulation.manage'))
+        self.assertTrue(RBACService.has_permission(self.superuser, 'transport.routes.manage'))
+        self.assertTrue(RBACService.has_permission(self.superuser, 'inventory.assets.manage'))
+        self.assertTrue(RBACService.has_permission(self.superuser, 'helpdesk.grievance.view'))
+        self.assertTrue(RBACService.has_permission(self.superuser, 'analytics.reports.export'))
+        self.assertTrue(RBACService.has_permission(self.superuser, 'audit.logs.view'))
+
+    def test_2_superuser_accesses_protected_drf_endpoints_without_role(self):
+        from rest_framework.test import APIClient
+        api_client = APIClient()
+        api_client.force_authenticate(user=self.superuser)
+
+        # Access school-config API without any role assigned
+        resp1 = api_client.get('/api/v1/school-config/academic-years/')
+        self.assertEqual(resp1.status_code, 200)
+
+        # Access students API without any role assigned
+        resp2 = api_client.get('/api/v1/students/profiles/')
+        self.assertEqual(resp2.status_code, 200)
+
+    def test_3_normal_user_with_dynamic_permission_allowed(self):
+        from apps.rbac.services import RBACService
+        self.assertTrue(
+            RBACService.has_permission(self.scoped_user, 'attendance.record.mark', scope_type=ScopeType.CLASS, scope_id='10')
+        )
+
+    def test_4_normal_user_without_permission_denied(self):
+        from apps.rbac.services import RBACService
+        self.assertFalse(RBACService.has_permission(self.normal_user, 'finance.invoice.view'))
+        self.assertFalse(RBACService.has_permission(self.normal_user, 'hrms.payroll.run'))
+        self.assertFalse(RBACService.has_permission(self.normal_user, 'helpdesk.grievance.view'))
+
+    def test_5_staff_user_without_superuser_denied_without_role(self):
+        from apps.rbac.services import RBACService
+        # is_staff=True alone must NEVER bypass RBAC
+        self.assertTrue(self.staff_user.is_staff)
+        self.assertFalse(self.staff_user.is_superuser)
+        self.assertFalse(RBACService.has_permission(self.staff_user, 'hrms.payroll.run'))
+        self.assertFalse(RBACService.has_permission(self.staff_user, 'finance.invoice.view'))
+        self.assertFalse(RBACService.has_permission(self.staff_user, 'students.profile.view'))
+
+        from rest_framework.test import APIClient
+        api_client = APIClient()
+        api_client.force_authenticate(user=self.staff_user)
+        resp = api_client.get('/api/v1/students/profiles/')
+        self.assertEqual(resp.status_code, 403)
+
+    def test_6_anonymous_users_denied(self):
+        from apps.rbac.services import RBACService
+        from django.contrib.auth.models import AnonymousUser
+        anon = AnonymousUser()
+        self.assertFalse(RBACService.has_permission(anon, 'students.profile.view'))
+        self.assertFalse(RBACService.has_module_action(anon, 'students', 'view'))
+        self.assertEqual(RBACService.get_user_permissions(anon), set())
+
+        from rest_framework.test import APIClient
+        api_client = APIClient()
+        resp = api_client.get('/api/v1/students/profiles/')
+        self.assertIn(resp.status_code, [401, 403])
+
+    def test_7_data_scope_restrictions_work_for_normal_users(self):
+        from apps.rbac.services import RBACService
+        # Scoped to class 10
+        self.assertTrue(
+            RBACService.has_permission(self.scoped_user, 'attendance.record.mark', scope_type=ScopeType.CLASS, scope_id='10')
+        )
+        # Denied for class 11
+        self.assertFalse(
+            RBACService.has_permission(self.scoped_user, 'attendance.record.mark', scope_type=ScopeType.CLASS, scope_id='11')
+        )
+
+    def test_8_audit_logging_and_workflows_preserve_superuser_actor(self):
+        from apps.audit.services import AuditService
+        from apps.audit.models import AuditAction, AuditLog
+
+        # Sensitive action performed by superuser
+        log_entry = AuditService.log(
+            action=AuditAction.UPDATE,
+            module='school_config',
+            entity_type='SchoolProfile',
+            entity_id='1',
+            actor=self.superuser,
+            reason='Superuser updated school settings'
+        )
+        self.assertIsNotNone(log_entry.id)
+        self.assertEqual(log_entry.actor, self.superuser)
+        self.assertEqual(log_entry.actor_username, 'pure_super')
+        self.assertEqual(log_entry.action, AuditAction.UPDATE)
+
 
