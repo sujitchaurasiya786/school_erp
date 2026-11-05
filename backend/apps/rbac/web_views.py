@@ -408,10 +408,67 @@ def permissions_list_view(request):
 def users_list_view(request):
     """
     Management table of all user accounts with their assigned dynamic roles.
+    Allows authorized administrators to create new ERP user accounts with default
+    credentials (password: 12345678) and mandatory first-login password change.
     """
     if not _check_rbac_permission(request, 'identity.users.view'):
         messages.error(request, "You do not have permission to view users.")
         return redirect('home-dashboard')
+
+    from apps.identity.models import UserType
+    from apps.identity.services import IdentityService
+    from django.core.exceptions import ValidationError
+
+    # Handle Web User Creation
+    if request.method == 'POST' and 'create_user' in request.POST:
+        if not _check_rbac_permission(request, 'identity.users.add'):
+            messages.error(request, "You do not have permission to create user accounts.")
+            return redirect('identity-users-list')
+
+        username = request.POST.get('username', '').strip()
+        email = request.POST.get('email', '').strip()
+        first_name = request.POST.get('first_name', '').strip()
+        last_name = request.POST.get('last_name', '').strip()
+        user_type = request.POST.get('user_type', UserType.STAFF)
+        phone_number = request.POST.get('phone_number', '').strip()
+        role_id = request.POST.get('role_id', '')
+        scope_type = request.POST.get('scope_type', ScopeType.GLOBAL)
+        scope_id = request.POST.get('scope_id', '').strip()
+
+        if not username or not email:
+            messages.error(request, "Both Username and Contact Email are required.")
+            return redirect('identity-users-list')
+
+        try:
+            new_user = IdentityService.create_user(
+                username=username,
+                email=email,
+                actor=request.user,
+                first_name=first_name,
+                last_name=last_name,
+                user_type=user_type,
+                phone_number=phone_number or None,
+                role=role_id if role_id else None,
+                scope_type=scope_type,
+                scope_id=scope_id,
+                request=request,
+            )
+            messages.success(
+                request,
+                f"User account '{new_user.username}' created successfully with default password '12345678'. Mandatory first-login password change is activated."
+            )
+            return redirect('identity-users-list')
+        except ValidationError as err:
+            if hasattr(err, 'message_dict'):
+                for field, errs in err.message_dict.items():
+                    for e in errs:
+                        messages.error(request, f"{field.capitalize()}: {e}")
+            elif hasattr(err, 'messages'):
+                for e in err.messages:
+                    messages.error(request, e)
+            else:
+                messages.error(request, str(err))
+            return redirect('identity-users-list')
 
     search_query = request.GET.get('q', '').strip()
     user_type_filter = request.GET.get('user_type', '')
@@ -432,7 +489,7 @@ def users_list_view(request):
         users = users.filter(role_assignments__role__code=role_filter, role_assignments__is_active=True)
 
     all_roles = Role.objects.filter(is_active=True).order_by('name')
-    from apps.identity.models import UserType
+    can_add_user = _check_rbac_permission(request, 'identity.users.add')
 
     context = {
         'users': users[:100],  # paginated or capped at 100 for fast responsiveness
@@ -441,6 +498,8 @@ def users_list_view(request):
         'role_filter': role_filter,
         'all_roles': all_roles,
         'user_types': UserType.choices,
+        'scope_types': ScopeType.choices,
+        'can_add_user': can_add_user,
         'total_count': users.count(),
     }
     return render(request, 'dashboard/rbac/users_list.html', context)

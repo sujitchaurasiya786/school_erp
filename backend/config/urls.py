@@ -58,7 +58,7 @@ api_v1_patterns = [
 ]
 
 from config.views import dashboard_view
-from apps.identity.auth_views import login_view, logout_view
+from apps.identity.auth_views import login_view, logout_view, password_change_view
 from apps.rbac.web_views import users_list_view
 
 urlpatterns = [
@@ -66,6 +66,7 @@ urlpatterns = [
     path('', dashboard_view, name='home-dashboard'),
     path('login/', login_view, name='login'),
     path('logout/', logout_view, name='logout'),
+    path('password-change/', password_change_view, name='password-change'),
     path('dashboard/rbac/', include('apps.rbac.web_urls')),
     path('dashboard/users/', users_list_view, name='identity-users-direct'),
     path('api/v1/', include(api_v1_patterns)),

@@ -7,6 +7,9 @@ from apps.identity.models import User
 class UserSerializer(serializers.ModelSerializer):
     full_name = serializers.ReadOnlyField()
     password = serializers.CharField(write_only=True, required=False)
+    role_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
+    scope_type = serializers.CharField(write_only=True, required=False, default="GLOBAL")
+    scope_id = serializers.CharField(write_only=True, required=False, default="", allow_blank=True)
 
     class Meta:
         model = User
@@ -24,6 +27,9 @@ class UserSerializer(serializers.ModelSerializer):
             "must_change_password",
             "date_joined",
             "avatar",
+            "role_id",
+            "scope_type",
+            "scope_id",
         ]
         read_only_fields = ["id", "date_joined"]
         extra_kwargs = {
@@ -31,21 +37,40 @@ class UserSerializer(serializers.ModelSerializer):
         }
 
     def create(self, validated_data):
+        from apps.identity.services import IdentityService
+
+        role_id = validated_data.pop("role_id", None)
+        scope_type = validated_data.pop("scope_type", "GLOBAL")
+        scope_id = validated_data.pop("scope_id", "")
         password = validated_data.pop("password", None)
-        user = User(**validated_data)
-        if password:
-            user.set_password(password)
-        else:
-            user.set_unusable_password()
-        user.save()
+
+        request = self.context.get("request")
+        actor = getattr(request, "user", None) if request else None
+
+        user = IdentityService.create_user(
+            username=validated_data.pop("username"),
+            email=validated_data.pop("email"),
+            actor=actor,
+            password=password,
+            role=role_id,
+            scope_type=scope_type,
+            scope_id=scope_id,
+            request=request,
+            **validated_data,
+        )
         return user
 
     def update(self, instance, validated_data):
+        # Editing user profile must not inadvertently reset password or change must_change_password
+        validated_data.pop("role_id", None)
+        validated_data.pop("scope_type", None)
+        validated_data.pop("scope_id", None)
         password = validated_data.pop("password", None)
+
         user = super().update(instance, validated_data)
         if password:
             user.set_password(password)
-            user.save()
+            user.save(update_fields=["password", "updated_at"])
         return user
 
 
@@ -82,6 +107,7 @@ class PasswordChangeSerializer(serializers.Serializer):
 
     current_password = serializers.CharField(write_only=True, required=True)
     new_password = serializers.CharField(write_only=True, required=True)
+    confirm_password = serializers.CharField(write_only=True, required=False)
 
     def validate_current_password(self, value):
         user = self.context["request"].user
@@ -99,5 +125,9 @@ class PasswordChangeSerializer(serializers.Serializer):
         if data.get("current_password") == data.get("new_password"):
             raise serializers.ValidationError(
                 {"new_password": "New password must differ from the current password."}
+            )
+        if "confirm_password" in data and data.get("new_password") != data.get("confirm_password"):
+            raise serializers.ValidationError(
+                {"confirm_password": "New password and confirmation password do not match."}
             )
         return data
