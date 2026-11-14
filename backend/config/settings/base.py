@@ -121,7 +121,7 @@ else:
             'PORT': os.getenv('DB_PORT', '3306'),
             'OPTIONS': {
                 'charset': 'utf8mb4',
-                'init_command': "SET sql_mode='STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION'",
+                'init_command': "SET default_storage_engine=INNODB, sql_mode='STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION'",
             },
         }
     }

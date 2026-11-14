@@ -179,6 +179,27 @@ PERMISSION_REGISTRY = [
     },
     # ── Academics ─────────────────────────────────────────────────────────
     {
+        "codename": "academics.year.view",
+        "module": "academics",
+        "action": "view",
+        "name": "View Academic Years",
+        "description": "View academic year sessions, status, and historical terms.",
+    },
+    {
+        "codename": "academics.year.manage",
+        "module": "academics",
+        "action": "change",
+        "name": "Manage Academic Years",
+        "description": "Create, edit, and configure academic years.",
+    },
+    {
+        "codename": "academics.year.activate",
+        "module": "academics",
+        "action": "approve",
+        "name": "Activate Academic Year",
+        "description": "Switch and activate the current academic year across all ERP modules.",
+    },
+    {
         "codename": "academics.timetable.view",
         "module": "academics",
         "action": "view",
