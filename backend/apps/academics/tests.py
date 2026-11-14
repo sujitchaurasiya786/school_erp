@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import connections
+from django.db import OperationalError, connections
 from django.test import TestCase, TransactionTestCase
 from django.contrib.auth import get_user_model
 
@@ -121,6 +121,22 @@ class AcademicYearModelValidationTests(TestCase):
         self.assertFalse(year1.is_current)
         self.assertTrue(year2.is_current)
         self.assertTrue(year1.is_active)
+
+    def test_lock_failure_in_save_is_not_silently_ignored(self):
+        """
+        Verify that when SchoolProfile.acquire_lock() fails during save(is_current=True),
+        the error is raised and NOT silently ignored with broad except Exception: pass.
+        """
+        year = AcademicYear(
+            name='2028-2029',
+            start_date=date(2028, 4, 1),
+            end_date=date(2029, 3, 31),
+            is_current=True,
+            is_active=True,
+        )
+        with patch('apps.school_config.models.SchoolProfile.acquire_lock', side_effect=OperationalError("Lock wait timeout exceeded")):
+            with self.assertRaises(OperationalError):
+                year.save()
 
 
 class AcademicYearServiceTests(TestCase):
@@ -261,6 +277,22 @@ class AcademicYearServiceTests(TestCase):
                 academic_year_id=inactive_year.pk,
                 actor=self.actor,
             )
+
+    def test_lock_failure_in_set_current_year_propagates(self):
+        """
+        Verify that when SchoolProfile.acquire_lock() fails during set_current_year,
+        the error is raised cleanly.
+        """
+        year = AcademicYear.objects.create(
+            name='2028-2029',
+            start_date=date(2028, 4, 1),
+            end_date=date(2029, 3, 31),
+            is_current=False,
+            is_active=True,
+        )
+        with patch('apps.school_config.models.SchoolProfile.acquire_lock', side_effect=OperationalError("Lock wait timeout exceeded")):
+            with self.assertRaises(OperationalError):
+                AcademicYearService.set_current_year(year.pk, actor=self.actor)
 
     def test_get_current_and_previous_year(self):
         year1 = AcademicYearService.create_academic_year(
@@ -424,6 +456,59 @@ class AcademicYearConcurrencyTests(TransactionTestCase):
         self.year_b.refresh_from_db()
         self.assertTrue(self.year_a.is_current, "Previous current year must remain current after rollback")
         self.assertFalse(self.year_b.is_current, "Target year must remain non-current after rollback")
+
+    def test_concurrent_update_and_set_current_year_deadlock_free(self):
+        """
+        Verify standardized lock acquisition order:
+        Concurrent execution of update_academic_year(is_current=True) and
+        set_current_year() serializes safely without deadlocks, leaving exactly
+        one year marked as current.
+        """
+        barrier = threading.Barrier(2)
+        errors = []
+
+        def worker_set_current():
+            try:
+                barrier.wait(timeout=5)
+                AcademicYearService.set_current_year(self.year_a.pk, actor=self.actor)
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                connections.close_all()
+
+        def worker_update():
+            try:
+                barrier.wait(timeout=5)
+                AcademicYearService.update_academic_year(
+                    academic_year_id=self.year_b.pk,
+                    actor=self.actor,
+                    is_current=True,
+                )
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                connections.close_all()
+
+        t1 = threading.Thread(target=worker_set_current)
+        t2 = threading.Thread(target=worker_update)
+
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        # Neither thread should hit a deadlock
+        self.assertEqual(errors, [], f"Encountered unexpected concurrency errors: {errors}")
+
+        # Invariant check: Exactly ONE year can be current
+        current_count = AcademicYear.objects.filter(is_current=True).count()
+        self.assertEqual(current_count, 1, f"Expected exactly 1 current year, got {current_count}")
+
+        # Both years must remain is_active=True
+        self.year_a.refresh_from_db()
+        self.year_b.refresh_from_db()
+        self.assertTrue(self.year_a.is_active)
+        self.assertTrue(self.year_b.is_active)
 
 
 class AcademicYearRBACAndMigrationTests(TestCase):

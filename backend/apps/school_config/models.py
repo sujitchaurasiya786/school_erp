@@ -1,5 +1,5 @@
 from django.core.exceptions import ValidationError
-from django.db import models
+from django.db import models, transaction
 from django.utils.translation import gettext_lazy as _
 from common.models import TimeStampedModel
 from common.validators import validate_academic_year_format
@@ -97,20 +97,14 @@ class AcademicYear(TimeStampedModel):
                 raise ValidationError({
                     'is_current': _("An inactive academic year cannot be selected as current.")
                 })
-            try:
-                SchoolProfile.acquire_lock()
-            except Exception:
-                pass
-            AcademicYear.objects.filter(is_current=True).exclude(pk=self.pk).update(is_current=False)
-            super().save(*args, **kwargs)
-            try:
-                profile = SchoolProfile.get_singleton()
+            with transaction.atomic():
+                profile = SchoolProfile.acquire_lock()
+                AcademicYear.objects.filter(is_current=True).exclude(pk=self.pk).update(is_current=False)
+                super().save(*args, **kwargs)
                 if profile and profile.current_academic_year_id != self.pk:
                     profile.current_academic_year = self
                     profile.save(update_fields=['current_academic_year', 'updated_at'])
-            except Exception:
-                pass
-            return
+                return
         super().save(*args, **kwargs)
 
 

@@ -169,7 +169,12 @@ class AcademicYearService:
     ):
         """
         Updates an existing academic year with conflict validation and audit logging.
+        Acquires exclusive singleton lock on SchoolProfile FIRST to ensure consistent lock ordering
+        across all academic year mutations and prevent deadlocks.
         """
+        from apps.school_config.models import SchoolProfile
+        SchoolProfile.acquire_lock()
+
         try:
             year = AcademicYear.objects.select_for_update().get(pk=academic_year_id)
         except AcademicYear.DoesNotExist:
@@ -241,9 +246,7 @@ class AcademicYearService:
                     raise ValidationError({
                         'is_current': _("An inactive academic year cannot be selected as current.")
                     })
-                from apps.school_config.models import SchoolProfile
-                SchoolProfile.acquire_lock()
-                # Lock and turn other current years to False
+                # Lock and turn other current years to False (SchoolProfile lock is already held)
                 AcademicYear.objects.select_for_update().filter(is_current=True).exclude(pk=year.pk).update(is_current=False)
             year.is_current = target_current
 
@@ -385,6 +388,9 @@ class AcademicYearService:
         Deletes an academic year record only if no dependent operational or academic records exist.
         Otherwise raises BusinessConflictError to preserve audit and historical integrity.
         """
+        from apps.school_config.models import SchoolProfile
+        SchoolProfile.acquire_lock()
+
         try:
             year = AcademicYear.objects.select_for_update().get(pk=academic_year_id)
         except AcademicYear.DoesNotExist:
