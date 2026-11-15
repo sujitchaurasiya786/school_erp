@@ -6,6 +6,7 @@ from apps.academics.web_views import (
     academic_years_list_view,
     academic_year_activate_view,
     classes_list_view,
+    sections_list_view,
 )
 
 urlpatterns = [
@@ -15,4 +16,7 @@ urlpatterns = [
 
     # Class Management
     path('classes/', classes_list_view, name='academics-classes-list'),
+
+    # Section Management
+    path('sections/', sections_list_view, name='academics-sections-list'),
 ]

@@ -17,7 +17,12 @@ class SectionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Section
-        fields = ['id', 'school_class', 'class_name', 'name', 'stream', 'class_teacher', 'teacher_name', 'room_number']
+        fields = [
+            'id', 'school_class', 'class_name', 'name', 'capacity',
+            'stream', 'class_teacher', 'teacher_name', 'room_number',
+            'is_active', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
 
 
 class SubjectSerializer(serializers.ModelSerializer):

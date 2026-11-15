@@ -9,8 +9,8 @@ from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
 from django.contrib.auth import get_user_model
 
-from apps.academics.models import ClassSubject, SchoolClass, Section, Subject, TimetablePeriod, TimetableSlot
-from apps.academics.services import AcademicYearService, SchoolClassService
+from apps.academics.models import ClassSubject, SchoolClass, Section, Stream, Subject, TimetablePeriod, TimetableSlot
+from apps.academics.services import AcademicYearService, SchoolClassService, SectionService
 from apps.audit.models import AuditAction, AuditLog
 from apps.rbac.models import Permission
 from apps.rbac.registry import PERMISSION_REGISTRY
@@ -525,6 +525,8 @@ class AcademicYearRBACAndMigrationTests(TestCase):
             'academics.year.activate',
             'academics.class.view',
             'academics.class.manage',
+            'academics.section.view',
+            'academics.section.manage',
         }
         self.assertTrue(
             expected_codenames.issubset(registered_codenames),
@@ -539,6 +541,8 @@ class AcademicYearRBACAndMigrationTests(TestCase):
             'academics.year.activate',
             'academics.class.view',
             'academics.class.manage',
+            'academics.section.view',
+            'academics.section.manage',
         ]
         for codename in expected_codenames:
             perm = Permission.objects.filter(codename=codename, is_active=True).first()
@@ -811,3 +815,264 @@ class AcademicsDashboardWebViewsTests(TestCase):
         response = self.client.post(reverse('academics-classes-list'), data=post_data, follow=True)
         self.assertEqual(response.status_code, 200)
         self.assertFalse(SchoolClass.objects.filter(pk=c.pk).exists())
+
+
+class SectionModelValidationTests(TestCase):
+    """
+    Tests for Section model validation, normalization, and uniqueness invariants.
+    """
+
+    def setUp(self):
+        self.school_class = SchoolClass.objects.create(name='Class 10', code='CL-10', order=10)
+
+    def test_valid_section_creation_and_normalization(self):
+        sec = Section(school_class=self.school_class, name='  a  ', capacity=45, room_number='Room 101')
+        sec.full_clean()
+        sec.save()
+        self.assertEqual(sec.name, 'A')
+        self.assertEqual(sec.capacity, 45)
+        self.assertEqual(sec.room_number, 'Room 101')
+        self.assertEqual(sec.stream, Stream.NONE)
+        self.assertTrue(sec.is_active)
+
+    def test_empty_section_name_rejected(self):
+        with self.assertRaises(ValidationError):
+            sec = Section(school_class=self.school_class, name='', capacity=40)
+            sec.full_clean()
+
+        with self.assertRaises(ValidationError):
+            sec = Section(school_class=self.school_class, name='   ', capacity=40)
+            sec.full_clean()
+
+    def test_invalid_capacity_rejected(self):
+        with self.assertRaises(ValidationError):
+            sec = Section(school_class=self.school_class, name='A', capacity=0)
+            sec.full_clean()
+
+    def test_duplicate_section_within_class_and_stream_rejected(self):
+        Section.objects.create(school_class=self.school_class, name='A', capacity=40)
+        with self.assertRaises(ValidationError):
+            duplicate = Section(school_class=self.school_class, name='a', capacity=35)
+            duplicate.full_clean()
+
+    def test_same_section_name_different_class_allowed(self):
+        class_9 = SchoolClass.objects.create(name='Class 9', code='CL-09', order=9)
+        sec_10 = Section.objects.create(school_class=self.school_class, name='A', capacity=40)
+        sec_9 = Section(school_class=class_9, name='A', capacity=40)
+        sec_9.full_clean()
+        sec_9.save()
+        self.assertEqual(sec_10.name, sec_9.name)
+        self.assertNotEqual(sec_10.school_class, sec_9.school_class)
+
+    def test_same_section_name_different_stream_allowed(self):
+        class_11 = SchoolClass.objects.create(name='Class 11', code='CL-11', order=11)
+        sec_sci = Section.objects.create(school_class=class_11, name='A', stream=Stream.SCIENCE, capacity=35)
+        sec_comm = Section(school_class=class_11, name='A', stream=Stream.COMMERCE, capacity=35)
+        sec_comm.full_clean()
+        sec_comm.save()
+        self.assertEqual(sec_sci.name, sec_comm.name)
+        self.assertNotEqual(sec_sci.stream, sec_comm.stream)
+
+
+class SectionServiceTests(TestCase):
+    """
+    Tests for SectionService CRUD methods, audit logging, and dependency protection.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='academic_admin',
+            email='acad@school.local',
+            password='Password123'
+        )
+        self.school_class = SchoolClass.objects.create(name='Class 10', code='CL-10', order=10)
+
+    def test_create_section_with_audit_log(self):
+        sec = SectionService.create_section(
+            school_class_id=self.school_class.pk,
+            name='  b  ',
+            capacity=42,
+            room_number='201',
+            actor=self.user,
+            reason='Added section B'
+        )
+        self.assertEqual(sec.name, 'B')
+        self.assertEqual(sec.capacity, 42)
+        self.assertEqual(sec.room_number, '201')
+        self.assertTrue(sec.is_active)
+
+        audit = AuditLog.objects.filter(
+            module='academics',
+            entity_type='Section',
+            entity_id=str(sec.pk),
+            action=AuditAction.CREATE
+        ).first()
+        self.assertIsNotNone(audit)
+        self.assertEqual(audit.actor, self.user)
+        self.assertEqual(audit.changes['name'], 'B')
+        self.assertEqual(audit.changes['capacity'], 42)
+
+    def test_update_section_with_audit_log(self):
+        sec = SectionService.create_section(
+            school_class_id=self.school_class.pk,
+            name='A',
+            capacity=40,
+            actor=self.user
+        )
+        updated = SectionService.update_section(
+            section_id=sec.pk,
+            actor=self.user,
+            capacity=45,
+            room_number='Room 105',
+            reason='Expanded capacity'
+        )
+        self.assertEqual(updated.capacity, 45)
+        self.assertEqual(updated.room_number, 'Room 105')
+
+        audit = AuditLog.objects.filter(
+            module='academics',
+            entity_type='Section',
+            entity_id=str(sec.pk),
+            action=AuditAction.UPDATE
+        ).first()
+        self.assertIsNotNone(audit)
+        self.assertIn('capacity', audit.changes)
+        self.assertEqual(audit.changes['capacity']['old'], 40)
+        self.assertEqual(audit.changes['capacity']['new'], 45)
+
+    def test_get_section_and_list_sections(self):
+        sec_a = SectionService.create_section(school_class_id=self.school_class.pk, name='A')
+        sec_b = SectionService.create_section(school_class_id=self.school_class.pk, name='B', is_active=False)
+
+        retrieved = SectionService.get_section(sec_a.pk)
+        self.assertEqual(retrieved.pk, sec_a.pk)
+
+        with self.assertRaises(ResourceNotFoundError):
+            SectionService.get_section(99999)
+
+        all_sections = SectionService.list_sections(school_class_id=self.school_class.pk)
+        self.assertEqual(all_sections.count(), 2)
+
+        active_sections = SectionService.list_sections(school_class_id=self.school_class.pk, active_only=True)
+        self.assertEqual(active_sections.count(), 1)
+        self.assertEqual(active_sections.first().pk, sec_a.pk)
+
+    def test_delete_section_success_with_audit_log(self):
+        sec = SectionService.create_section(
+            school_class_id=self.school_class.pk,
+            name='C',
+            actor=self.user,
+            reason='To be deleted'
+        )
+        sec_id = sec.pk
+        SectionService.delete_section(
+            section_id=sec_id,
+            actor=self.user,
+            reason='Deleting unused section'
+        )
+        self.assertFalse(Section.objects.filter(pk=sec_id).exists())
+
+        audit = AuditLog.objects.filter(
+            module='academics',
+            entity_type='Section',
+            entity_id=str(sec_id),
+            action=AuditAction.DELETE
+        ).first()
+        self.assertIsNotNone(audit)
+
+    def test_delete_section_prevented_when_class_subject_mapping_exists(self):
+        sec = SectionService.create_section(
+            school_class_id=self.school_class.pk,
+            name='A',
+            actor=self.user
+        )
+        subject = Subject.objects.create(name='Mathematics', code='MATH-10')
+        ClassSubject.objects.create(section=sec, subject=subject)
+
+        with self.assertRaises(BusinessConflictError) as ctx:
+            SectionService.delete_section(section_id=sec.pk, actor=self.user)
+
+        self.assertIn("subject mapping(s) are associated", str(ctx.exception))
+        self.assertTrue(Section.objects.filter(pk=sec.pk).exists())
+
+
+class SectionWebViewsTests(TestCase):
+    """
+    Tests for Section Dashboard web views.
+    """
+
+    def setUp(self):
+        call_command('sync_permissions')
+        self.user = User.objects.create_superuser(
+            username='admin_section_tester',
+            email='sectiontest@school.local',
+            password='Password123!',
+        )
+        self.client.force_login(self.user)
+        self.school_class = SchoolClass.objects.create(name='Class 10', code='CL-10', order=10)
+
+    def test_sections_list_view_get(self):
+        response = self.client.get(reverse('academics-sections-list'))
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'dashboard/academics/sections_list.html')
+        self.assertIn('Section Management', response.content.decode('utf-8'))
+
+    def test_sections_list_view_create_post(self):
+        post_data = {
+            'action': 'create',
+            'school_class_id': self.school_class.pk,
+            'name': 'a',
+            'capacity': '38',
+            'room_number': 'Room 102',
+            'is_active': 'on',
+        }
+        response = self.client.post(reverse('academics-sections-list'), data=post_data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(Section.objects.filter(school_class=self.school_class, name='A', capacity=38).exists())
+
+    def test_sections_list_view_update_post(self):
+        sec = SectionService.create_section(
+            school_class_id=self.school_class.pk,
+            name='B',
+            capacity=40
+        )
+        post_data = {
+            'action': 'update',
+            'section_id': sec.pk,
+            'school_class_id': self.school_class.pk,
+            'name': 'B',
+            'capacity': '45',
+            'room_number': 'Room 202',
+            'is_active': 'on',
+        }
+        response = self.client.post(reverse('academics-sections-list'), data=post_data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        sec.refresh_from_db()
+        self.assertEqual(sec.capacity, 45)
+        self.assertEqual(sec.room_number, 'Room 202')
+
+    def test_sections_list_view_delete_post(self):
+        sec = SectionService.create_section(
+            school_class_id=self.school_class.pk,
+            name='D',
+            capacity=40
+        )
+        post_data = {
+            'action': 'delete',
+            'section_id': sec.pk,
+            'reason': 'Removing extra section',
+        }
+        response = self.client.post(reverse('academics-sections-list'), data=post_data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(Section.objects.filter(pk=sec.pk).exists())
+
+    def test_sections_list_view_filter_by_class(self):
+        class_9 = SchoolClass.objects.create(name='Class 9', code='CL-09', order=9)
+        sec_10 = SectionService.create_section(school_class_id=self.school_class.pk, name='A')
+        sec_9 = SectionService.create_section(school_class_id=class_9.pk, name='A')
+
+        response = self.client.get(f"{reverse('academics-sections-list')}?class_id={self.school_class.pk}")
+        self.assertEqual(response.status_code, 200)
+        sections = list(response.context['sections'])
+        self.assertIn(sec_10, sections)
+        self.assertNotIn(sec_9, sections)

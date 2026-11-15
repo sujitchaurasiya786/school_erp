@@ -67,6 +67,7 @@ class Section(TimeStampedModel):
     """
     school_class = models.ForeignKey(SchoolClass, on_delete=models.CASCADE, related_name='sections')
     name = models.CharField(max_length=10, help_text=_("e.g. A, B, C"))
+    capacity = models.PositiveIntegerField(default=40, help_text=_("Maximum student capacity"))
     stream = models.CharField(max_length=20, choices=Stream.choices, default=Stream.NONE)
     class_teacher = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -80,10 +81,41 @@ class Section(TimeStampedModel):
     class Meta:
         db_table = 'academic_sections'
         unique_together = ('school_class', 'name', 'stream')
+        ordering = ['school_class__order', 'name']
 
     def __str__(self):
         stream_str = f" ({self.stream})" if self.stream != Stream.NONE else ""
         return f"{self.school_class.name} - {self.name}{stream_str}"
+
+    def clean(self):
+        super().clean()
+        if not hasattr(self, 'school_class') or self.school_class_id is None:
+            raise ValidationError({'school_class': _("School class is required.")})
+
+        if self.name:
+            self.name = str(self.name).strip().upper()
+            if not self.name:
+                raise ValidationError({'name': _("Section name cannot be empty.")})
+            qs = Section.objects.filter(
+                school_class=self.school_class,
+                name__iexact=self.name,
+                stream=self.stream or Stream.NONE
+            )
+            if self.pk:
+                qs = qs.exclude(pk=self.pk)
+            if qs.exists():
+                raise ValidationError({
+                    'name': _(f"Section '{self.name}' already exists for class '{self.school_class.name}'.")
+                })
+        else:
+            raise ValidationError({'name': _("Section name is required.")})
+
+        if self.capacity is not None and self.capacity < 1:
+            raise ValidationError({'capacity': _("Capacity must be a positive integer (>= 1).")})
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
 
 
 class Subject(TimeStampedModel):

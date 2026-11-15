@@ -4,7 +4,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
 
-from apps.academics.models import SchoolClass, TimetableSlot
+from apps.academics.models import SchoolClass, Section, Stream, TimetableSlot
 from apps.audit.models import AuditAction
 from apps.audit.services import AuditService
 from apps.school_config.models import AcademicYear
@@ -405,7 +405,7 @@ class AcademicYearService:
         # Check for dependent records across ERP modules
         dependencies = []
 
-        from apps.academics.models import SchoolClass, TimetableSlot
+        from apps.academics.models import SchoolClass, Section, Stream, TimetableSlot
         tt_count = TimetableSlot.objects.filter(academic_year=year).count()
         if tt_count:
             dependencies.append(f"{tt_count} timetable slot(s)")
@@ -642,5 +642,224 @@ class SchoolClassService:
             actor=actor,
             reason=reason or f"Deleted class {class_name}",
             changes={"name": class_name},
+            request=request,
+        )
+
+
+class SectionService:
+    """
+    Manages operations on Section records (Class Sections).
+    Enforces business rules, capacity limits, uppercase name normalization,
+    dependency protections against cascade deletions, and audit trails.
+    """
+
+    @classmethod
+    @transaction.atomic
+    def create_section(
+        cls,
+        school_class_id,
+        name,
+        capacity=40,
+        stream=Stream.NONE,
+        room_number="",
+        class_teacher_id=None,
+        is_active=True,
+        actor=None,
+        reason="",
+        request=None
+    ):
+        """
+        Creates a new Section with validation and audit logging.
+        """
+        try:
+            school_class = SchoolClass.objects.get(pk=school_class_id)
+        except SchoolClass.DoesNotExist:
+            raise ResourceNotFoundError(f"Class with ID {school_class_id} not found.")
+
+        cleaned_name = str(name or "").strip().upper()
+        if not cleaned_name:
+            raise ValidationError({'name': _("Section name is required.")})
+
+        parsed_capacity = int(capacity) if capacity is not None else 40
+        if parsed_capacity < 1:
+            raise ValidationError({'capacity': _("Capacity must be a positive integer (>= 1).")})
+
+        section = Section(
+            school_class=school_class,
+            name=cleaned_name,
+            capacity=parsed_capacity,
+            stream=stream or Stream.NONE,
+            room_number=str(room_number or "").strip(),
+            class_teacher_id=class_teacher_id,
+            is_active=bool(is_active)
+        )
+        section.clean()
+        section.save()
+
+        AuditService.log(
+            action=AuditAction.CREATE,
+            module="academics",
+            entity_type="Section",
+            entity_id=str(section.pk),
+            actor=actor,
+            reason=reason or f"Created section {section.name} for class {school_class.name}",
+            changes={
+                "school_class_id": school_class.pk,
+                "class_name": school_class.name,
+                "name": section.name,
+                "capacity": section.capacity,
+                "stream": section.stream,
+                "room_number": section.room_number,
+                "is_active": section.is_active,
+            },
+            request=request,
+        )
+
+        return section
+
+    @classmethod
+    @transaction.atomic
+    def update_section(
+        cls,
+        section_id,
+        actor=None,
+        reason="",
+        request=None,
+        **kwargs
+    ):
+        """
+        Updates an existing Section with validation, diff-tracking, and audit logging.
+        """
+        try:
+            section = Section.objects.select_for_update().get(pk=section_id)
+        except Section.DoesNotExist:
+            raise ResourceNotFoundError(f"Section with ID {section_id} not found.")
+
+        old_state = {
+            "name": section.name,
+            "capacity": section.capacity,
+            "stream": section.stream,
+            "room_number": section.room_number,
+            "class_teacher_id": section.class_teacher_id,
+            "is_active": section.is_active,
+            "school_class_id": section.school_class_id,
+        }
+
+        if 'school_class_id' in kwargs:
+            new_class_id = kwargs['school_class_id']
+            try:
+                section.school_class = SchoolClass.objects.get(pk=new_class_id)
+            except SchoolClass.DoesNotExist:
+                raise ResourceNotFoundError(f"Class with ID {new_class_id} not found.")
+
+        if 'name' in kwargs:
+            section.name = str(kwargs['name']).strip().upper()
+        if 'capacity' in kwargs:
+            section.capacity = int(kwargs['capacity'])
+        if 'stream' in kwargs:
+            section.stream = kwargs['stream'] or Stream.NONE
+        if 'room_number' in kwargs:
+            section.room_number = str(kwargs['room_number'] or "").strip()
+        if 'class_teacher_id' in kwargs:
+            section.class_teacher_id = kwargs['class_teacher_id']
+        if 'is_active' in kwargs:
+            section.is_active = bool(kwargs['is_active'])
+
+        section.clean()
+        section.save()
+
+        new_state = {
+            "name": section.name,
+            "capacity": section.capacity,
+            "stream": section.stream,
+            "room_number": section.room_number,
+            "class_teacher_id": section.class_teacher_id,
+            "is_active": section.is_active,
+            "school_class_id": section.school_class_id,
+        }
+
+        changes = {
+            k: {"old": old_state[k], "new": new_state[k]}
+            for k in old_state
+            if old_state[k] != new_state[k]
+        }
+
+        if changes:
+            AuditService.log(
+                action=AuditAction.UPDATE,
+                module="academics",
+                entity_type="Section",
+                entity_id=str(section.pk),
+                actor=actor,
+                reason=reason or f"Updated section {section.name}",
+                changes=changes,
+                request=request,
+            )
+
+        return section
+
+    @classmethod
+    def get_section(cls, section_id):
+        """
+        Retrieves a Section by ID.
+        """
+        try:
+            return Section.objects.select_related('school_class', 'class_teacher').get(pk=section_id)
+        except Section.DoesNotExist:
+            raise ResourceNotFoundError(f"Section with ID {section_id} not found.")
+
+    @classmethod
+    def list_sections(cls, school_class_id=None, stream=None, active_only=False):
+        """
+        Returns an ordered queryset of Section records.
+        """
+        qs = Section.objects.select_related('school_class', 'class_teacher').all().order_by(
+            'school_class__order', 'name'
+        )
+        if school_class_id:
+            qs = qs.filter(school_class_id=school_class_id)
+        if stream:
+            qs = qs.filter(stream=stream)
+        if active_only:
+            qs = qs.filter(is_active=True)
+        return qs
+
+    @classmethod
+    @transaction.atomic
+    def delete_section(
+        cls,
+        section_id,
+        actor=None,
+        reason="",
+        request=None
+    ):
+        """
+        Deletes a Section only if no subject mappings or dependencies exist.
+        Otherwise raises BusinessConflictError to prevent cascade deletion.
+        """
+        try:
+            section = Section.objects.select_for_update().get(pk=section_id)
+        except Section.DoesNotExist:
+            raise ResourceNotFoundError(f"Section with ID {section_id} not found.")
+
+        subject_count = section.class_subjects.count()
+        if subject_count > 0:
+            raise BusinessConflictError(
+                f"Cannot delete section '{section}' because {subject_count} subject mapping(s) "
+                "are associated with it. Delete or reassign subject mappings first, or deactivate the section."
+            )
+
+        section_id_str = str(section.pk)
+        section_str = str(section)
+        section.delete()
+
+        AuditService.log(
+            action=AuditAction.DELETE,
+            module="academics",
+            entity_type="Section",
+            entity_id=section_id_str,
+            actor=actor,
+            reason=reason or f"Deleted section {section_str}",
+            changes={"section": section_str},
             request=request,
         )

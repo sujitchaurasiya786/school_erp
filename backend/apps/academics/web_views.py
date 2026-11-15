@@ -5,12 +5,12 @@ Provides intuitive web interfaces for school administrators and principals.
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ValidationError
-from django.db.models import Count
+from django.db.models import Count, Sum
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
-from apps.academics.models import SchoolClass, Section
-from apps.academics.services import AcademicYearService, SchoolClassService
+from apps.academics.models import SchoolClass, Section, Stream
+from apps.academics.services import AcademicYearService, SchoolClassService, SectionService
 from apps.rbac.services import RBACService
 from apps.school_config.models import AcademicYear, SchoolProfile
 from common.exceptions import BusinessConflictError, ResourceNotFoundError
@@ -228,3 +228,140 @@ def classes_list_view(request):
         'can_manage': _check_academics_permission(request, 'academics.class.manage'),
     }
     return render(request, 'dashboard/academics/classes_list.html', context)
+
+
+# ==============================================================================
+# 3. Section Management
+# ==============================================================================
+@login_required(login_url='login')
+def sections_list_view(request):
+    """
+    Displays the section directory, capacity metrics, and section management modals.
+    Supports filtering by school class.
+    """
+    if not _check_academics_permission(request, 'academics.section.view'):
+        messages.error(request, "You do not have permission to view sections.")
+        return redirect('home-dashboard')
+
+    if request.method == 'POST':
+        if not _check_academics_permission(request, 'academics.section.manage'):
+            messages.error(request, "You do not have permission to manage sections.")
+            return redirect('academics-sections-list')
+
+        action = request.POST.get('action', 'create')
+
+        if action == 'create':
+            school_class_id = request.POST.get('school_class_id')
+            name = request.POST.get('name', '').strip()
+            capacity = request.POST.get('capacity', '40').strip()
+            stream = request.POST.get('stream', Stream.NONE).strip()
+            room_number = request.POST.get('room_number', '').strip()
+            is_active = request.POST.get('is_active') == 'on'
+            reason = request.POST.get('reason', '').strip()
+
+            try:
+                sec = SectionService.create_section(
+                    school_class_id=school_class_id,
+                    name=name,
+                    capacity=int(capacity) if capacity.isdigit() else 40,
+                    stream=stream,
+                    room_number=room_number,
+                    is_active=is_active,
+                    actor=request.user,
+                    reason=reason or f"Created section {name} from dashboard",
+                    request=request,
+                )
+                messages.success(request, f"Section '{sec.name}' created successfully for {sec.school_class.name}.")
+            except (ValidationError, ResourceNotFoundError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to create section: {msg}")
+            except Exception as err:
+                messages.error(request, f"An unexpected error occurred: {err}")
+
+            return redirect('academics-sections-list')
+
+        elif action == 'update':
+            section_id = request.POST.get('section_id')
+            school_class_id = request.POST.get('school_class_id')
+            name = request.POST.get('name', '').strip()
+            capacity = request.POST.get('capacity', '40').strip()
+            stream = request.POST.get('stream', Stream.NONE).strip()
+            room_number = request.POST.get('room_number', '').strip()
+            is_active = request.POST.get('is_active') == 'on'
+            reason = request.POST.get('reason', '').strip()
+
+            update_data = {
+                'name': name,
+                'capacity': int(capacity) if capacity.isdigit() else 40,
+                'stream': stream,
+                'room_number': room_number,
+                'is_active': is_active,
+            }
+            if school_class_id:
+                update_data['school_class_id'] = school_class_id
+
+            try:
+                sec = SectionService.update_section(
+                    section_id=section_id,
+                    actor=request.user,
+                    reason=reason or f"Updated section {name} from dashboard",
+                    request=request,
+                    **update_data
+                )
+                messages.success(request, f"Section '{sec.name}' updated successfully.")
+            except (ValidationError, ResourceNotFoundError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to update section: {msg}")
+            except Exception as err:
+                messages.error(request, f"An unexpected error occurred: {err}")
+
+            return redirect('academics-sections-list')
+
+        elif action == 'delete':
+            section_id = request.POST.get('section_id')
+            reason = request.POST.get('reason', '').strip()
+
+            try:
+                SectionService.delete_section(
+                    section_id=section_id,
+                    actor=request.user,
+                    reason=reason or "Deleted section from dashboard",
+                    request=request,
+                )
+                messages.success(request, "Section deleted successfully.")
+            except BusinessConflictError as err:
+                messages.warning(request, str(err))
+            except (ResourceNotFoundError, ValidationError) as err:
+                messages.error(request, str(err))
+            except Exception as err:
+                messages.error(request, f"An unexpected error occurred: {err}")
+
+            return redirect('academics-sections-list')
+
+    # Query params
+    selected_class_id = request.GET.get('class_id', '').strip()
+
+    sections_qs = Section.objects.select_related('school_class', 'class_teacher').all().order_by(
+        'school_class__order', 'name'
+    )
+    if selected_class_id and selected_class_id.isdigit():
+        sections_qs = sections_qs.filter(school_class_id=int(selected_class_id))
+
+    school_classes = SchoolClass.objects.filter(is_active=True).order_by('order', 'name')
+    total_sections = Section.objects.count()
+    active_sections_count = Section.objects.filter(is_active=True).count()
+    total_capacity = Section.objects.filter(is_active=True).aggregate(tot=Sum('capacity'))['tot'] or 0
+    classes_covered = Section.objects.values('school_class').distinct().count()
+
+    context = {
+        'sections': sections_qs,
+        'school_classes': school_classes,
+        'selected_class_id': int(selected_class_id) if selected_class_id.isdigit() else None,
+        'total_sections': total_sections,
+        'active_sections_count': active_sections_count,
+        'total_capacity': total_capacity,
+        'classes_covered': classes_covered,
+        'streams': Stream.choices,
+        'can_manage': _check_academics_permission(request, 'academics.section.manage'),
+    }
+    return render(request, 'dashboard/academics/sections_list.html', context)

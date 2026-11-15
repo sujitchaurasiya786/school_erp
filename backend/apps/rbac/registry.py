@@ -214,6 +214,20 @@ PERMISSION_REGISTRY = [
         "description": "Create, edit, and configure school classes and display ordering.",
     },
     {
+        "codename": "academics.section.view",
+        "module": "academics",
+        "action": "view",
+        "name": "View Sections",
+        "description": "View school sections, streams, capacities, and statuses.",
+    },
+    {
+        "codename": "academics.section.manage",
+        "module": "academics",
+        "action": "change",
+        "name": "Manage Sections",
+        "description": "Create, edit, configure, and delete class sections.",
+    },
+    {
         "codename": "academics.timetable.view",
         "module": "academics",
         "action": "view",

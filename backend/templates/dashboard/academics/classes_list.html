@@ -125,9 +125,9 @@
                                 <span class="badge bg-light-info text-info border border-info px-2 py-1 font-monospace">{{ c.code }}</span>
                             </td>
                             <td>
-                                <span class="badge bg-light text-muted border px-2 py-1">
+                                <a href="{% url 'academics-sections-list' %}?class_id={{ c.id }}" class="badge bg-light-primary text-primary border border-primary text-decoration-none px-2 py-1" title="View &amp; Manage Sections">
                                     <i class="ti ti-folders me-1"></i> {{ c.section_count }} section(s)
-                                </span>
+                                </a>
                             </td>
                             <td>
                                 {% if c.is_active %}
