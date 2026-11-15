@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 from common.models import TimeStampedModel
@@ -25,6 +26,39 @@ class SchoolClass(TimeStampedModel):
 
     def __str__(self):
         return self.name
+
+    def clean(self):
+        super().clean()
+        if self.name:
+            self.name = str(self.name).strip()
+            if not self.name:
+                raise ValidationError({'name': _("Class name cannot be empty.")})
+            qs = SchoolClass.objects.filter(name__iexact=self.name)
+            if self.pk:
+                qs = qs.exclude(pk=self.pk)
+            if qs.exists():
+                raise ValidationError({'name': _(f"A class with name '{self.name}' already exists.")})
+        else:
+            raise ValidationError({'name': _("Class name is required.")})
+
+        if self.code:
+            self.code = str(self.code).strip().upper()
+            if not self.code:
+                raise ValidationError({'code': _("Class code cannot be empty.")})
+            qs = SchoolClass.objects.filter(code__iexact=self.code)
+            if self.pk:
+                qs = qs.exclude(pk=self.pk)
+            if qs.exists():
+                raise ValidationError({'code': _(f"A class with code '{self.code}' already exists.")})
+        else:
+            raise ValidationError({'code': _("Class code is required.")})
+
+        if self.order is not None and self.order < 1:
+            raise ValidationError({'order': _("Display order must be a positive integer (>= 1).")})
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
 
 
 class Section(TimeStampedModel):

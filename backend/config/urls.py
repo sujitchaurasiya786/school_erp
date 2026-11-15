@@ -68,6 +68,7 @@ urlpatterns = [
     path('logout/', logout_view, name='logout'),
     path('password-change/', password_change_view, name='password-change'),
     path('dashboard/rbac/', include('apps.rbac.web_urls')),
+    path('dashboard/academics/', include('apps.academics.web_urls')),
     path('dashboard/users/', users_list_view, name='identity-users-direct'),
     path('api/v1/', include(api_v1_patterns)),
 ]

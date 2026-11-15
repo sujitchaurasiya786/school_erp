@@ -200,6 +200,20 @@ PERMISSION_REGISTRY = [
         "description": "Switch and activate the current academic year across all ERP modules.",
     },
     {
+        "codename": "academics.class.view",
+        "module": "academics",
+        "action": "view",
+        "name": "View Classes",
+        "description": "View school classes, codes, sequence orders, and statuses.",
+    },
+    {
+        "codename": "academics.class.manage",
+        "module": "academics",
+        "action": "change",
+        "name": "Manage Classes",
+        "description": "Create, edit, and configure school classes and display ordering.",
+    },
+    {
         "codename": "academics.timetable.view",
         "module": "academics",
         "action": "view",

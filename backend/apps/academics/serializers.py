@@ -7,7 +7,8 @@ from apps.academics.models import (
 class SchoolClassSerializer(serializers.ModelSerializer):
     class Meta:
         model = SchoolClass
-        fields = ['id', 'name', 'code', 'order']
+        fields = ['id', 'name', 'code', 'order', 'is_active', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
 
 
 class SectionSerializer(serializers.ModelSerializer):

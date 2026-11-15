@@ -4,7 +4,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
 
-from apps.academics.models import TimetableSlot
+from apps.academics.models import SchoolClass, TimetableSlot
 from apps.audit.models import AuditAction
 from apps.audit.services import AuditService
 from apps.school_config.models import AcademicYear
@@ -405,7 +405,7 @@ class AcademicYearService:
         # Check for dependent records across ERP modules
         dependencies = []
 
-        from apps.academics.models import TimetableSlot
+        from apps.academics.models import SchoolClass, TimetableSlot
         tt_count = TimetableSlot.objects.filter(academic_year=year).count()
         if tt_count:
             dependencies.append(f"{tt_count} timetable slot(s)")
@@ -472,5 +472,175 @@ class AcademicYearService:
             actor=actor,
             reason=reason or f"Deleted academic year {year_name}",
             changes={"name": year_name},
+            request=request,
+        )
+
+
+class SchoolClassService:
+    """
+    Business service for managing CBSE Classes (Nursery to Class 12).
+    """
+
+    @classmethod
+    @transaction.atomic
+    def create_class(
+        cls,
+        name,
+        code,
+        order=1,
+        is_active=True,
+        actor=None,
+        reason="",
+        request=None
+    ):
+        """
+        Creates a new SchoolClass record with validation and audit logging.
+        """
+        school_class = SchoolClass(
+            name=name,
+            code=code,
+            order=order,
+            is_active=is_active,
+        )
+        school_class.clean()
+        school_class.save()
+
+        AuditService.log(
+            action=AuditAction.CREATE,
+            module="academics",
+            entity_type="SchoolClass",
+            entity_id=str(school_class.pk),
+            actor=actor,
+            reason=reason or f"Created class {school_class.name}",
+            changes={
+                "name": school_class.name,
+                "code": school_class.code,
+                "order": school_class.order,
+                "is_active": school_class.is_active,
+            },
+            request=request,
+        )
+        return school_class
+
+    @classmethod
+    @transaction.atomic
+    def update_class(
+        cls,
+        class_id,
+        actor=None,
+        reason="",
+        request=None,
+        **kwargs
+    ):
+        """
+        Updates an existing SchoolClass record with validation and audit logging.
+        """
+        try:
+            school_class = SchoolClass.objects.select_for_update().get(pk=class_id)
+        except SchoolClass.DoesNotExist:
+            raise ResourceNotFoundError(f"Class with ID {class_id} not found.")
+
+        old_state = {
+            "name": school_class.name,
+            "code": school_class.code,
+            "order": school_class.order,
+            "is_active": school_class.is_active,
+        }
+
+        if 'name' in kwargs:
+            school_class.name = str(kwargs['name']).strip()
+        if 'code' in kwargs:
+            school_class.code = str(kwargs['code']).strip().upper()
+        if 'order' in kwargs:
+            school_class.order = int(kwargs['order'])
+        if 'is_active' in kwargs:
+            school_class.is_active = bool(kwargs['is_active'])
+
+        school_class.clean()
+        school_class.save()
+
+        new_state = {
+            "name": school_class.name,
+            "code": school_class.code,
+            "order": school_class.order,
+            "is_active": school_class.is_active,
+        }
+        changes = {
+            k: {"old": old_state[k], "new": new_state[k]}
+            for k in old_state
+            if old_state[k] != new_state[k]
+        }
+
+        if changes:
+            AuditService.log(
+                action=AuditAction.UPDATE,
+                module="academics",
+                entity_type="SchoolClass",
+                entity_id=str(school_class.pk),
+                actor=actor,
+                reason=reason or f"Updated class {school_class.name}",
+                changes=changes,
+                request=request,
+            )
+
+        return school_class
+
+    @classmethod
+    def get_class(cls, class_id):
+        """
+        Retrieves a SchoolClass by ID.
+        """
+        try:
+            return SchoolClass.objects.get(pk=class_id)
+        except SchoolClass.DoesNotExist:
+            raise ResourceNotFoundError(f"Class with ID {class_id} not found.")
+
+    @classmethod
+    def list_classes(cls, active_only=False):
+        """
+        Returns an ordered queryset of SchoolClass records.
+        """
+        qs = SchoolClass.objects.all().order_by('order', 'name')
+        if active_only:
+            qs = qs.filter(is_active=True)
+        return qs
+
+    @classmethod
+    @transaction.atomic
+    def delete_class(
+        cls,
+        class_id,
+        actor=None,
+        reason="",
+        request=None
+    ):
+        """
+        Deletes a SchoolClass only if no sections exist.
+        Otherwise raises BusinessConflictError to prevent cascade deletion.
+        """
+        try:
+            school_class = SchoolClass.objects.select_for_update().get(pk=class_id)
+        except SchoolClass.DoesNotExist:
+            raise ResourceNotFoundError(f"Class with ID {class_id} not found.")
+
+        section_count = school_class.sections.count()
+        if section_count > 0:
+            raise BusinessConflictError(
+                f"Cannot delete class '{school_class.name}' because {section_count} section(s) "
+                "are associated with it. Delete or reassign sections first, or deactivate the class."
+            )
+
+        class_id_str = str(school_class.pk)
+        class_name = school_class.name
+        school_class.delete()
+
+        AuditService.log(
+            action=AuditAction.DELETE,
+            module="academics",
+            entity_type="SchoolClass",
+            entity_id=class_id_str,
+            actor=actor,
+            reason=reason or f"Deleted class {class_name}",
+            changes={"name": class_name},
             request=request,
         )

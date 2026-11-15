@@ -81,21 +81,21 @@
              2. Academics (SRS §3.3)
              Active Module: Academics
              =============================================================== -->
-        {% if request.user.is_superuser or request.user|has_any_perm:'academics.timetable.view,academics.subjects.manage,school_config.profile.view' %}
-        <li class="pc-item pc-hasmenu" role="none">
+        {% if request.user.is_superuser or request.user|has_any_perm:'academics.year.view,academics.class.view,academics.timetable.view,academics.subjects.manage,school_config.profile.view' %}
+        <li class="pc-item pc-hasmenu {% nav_group_active 'academics-years-list,academics-classes-list' '/dashboard/academics/' %}" role="none">
           <a href="#!" class="pc-link" role="menuitem" aria-expanded="false">
             <span class="pc-micon"><i class="ti ti-book" aria-hidden="true"></i></span>
             <span class="pc-mtext">Academics</span>
             <span class="pc-arrow"><i class="ti ti-chevron-right" aria-hidden="true"></i></span>
           </a>
           <ul class="pc-submenu" role="menu">
-            <li class="pc-item" role="none">
-              <a class="pc-link" href="#!" role="menuitem">
+            <li class="pc-item {% nav_active 'academics-years-list' %}" role="none">
+              <a class="pc-link" href="{% url 'academics-years-list' %}" role="menuitem">
                 <i class="ti ti-calendar-event me-2" aria-hidden="true"></i> Academic Years
               </a>
             </li>
-            <li class="pc-item" role="none">
-              <a class="pc-link" href="#!" role="menuitem">
+            <li class="pc-item {% nav_active 'academics-classes-list' %}" role="none">
+              <a class="pc-link" href="{% url 'academics-classes-list' %}" role="menuitem">
                 <i class="ti ti-layout-grid me-2" aria-hidden="true"></i> Classes &amp; Sections
               </a>
             </li>
