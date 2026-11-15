@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from apps.academics.models import (
-    SchoolClass, Section, Subject, ClassSubject, TimetablePeriod, TimetableSlot
+    AcademicStream, SchoolClass, Section, Subject, ClassSubject, TimetablePeriod, TimetableSlot
 )
 
 
@@ -25,10 +25,29 @@ class SectionSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at']
 
 
+class AcademicStreamSerializer(serializers.ModelSerializer):
+    class_name = serializers.ReadOnlyField(source='school_class.name')
+
+    class Meta:
+        model = AcademicStream
+        fields = [
+            'id', 'school_class', 'class_name', 'name', 'code',
+            'description', 'is_active', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
 class SubjectSerializer(serializers.ModelSerializer):
+    subject_type_display = serializers.CharField(source='get_subject_type_display', read_only=True)
+
     class Meta:
         model = Subject
-        fields = ['id', 'name', 'code', 'is_theory', 'is_practical']
+        fields = [
+            'id', 'name', 'code', 'subject_type', 'subject_type_display',
+            'is_theory', 'is_practical', 'description', 'is_active',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
 
 
 class ClassSubjectSerializer(serializers.ModelSerializer):

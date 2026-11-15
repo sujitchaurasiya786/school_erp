@@ -228,6 +228,20 @@ PERMISSION_REGISTRY = [
         "description": "Create, edit, configure, and delete class sections.",
     },
     {
+        "codename": "academics.stream.view",
+        "module": "academics",
+        "action": "view",
+        "name": "View Streams",
+        "description": "View senior-secondary streams for Classes 11 and 12.",
+    },
+    {
+        "codename": "academics.stream.manage",
+        "module": "academics",
+        "action": "change",
+        "name": "Manage Streams",
+        "description": "Configure, edit, and activate/deactivate streams for senior classes.",
+    },
+    {
         "codename": "academics.timetable.view",
         "module": "academics",
         "action": "view",
@@ -240,6 +254,13 @@ PERMISSION_REGISTRY = [
         "action": "change",
         "name": "Manage Timetable",
         "description": "Create and edit class timetables and teacher assignments.",
+    },
+    {
+        "codename": "academics.subjects.view",
+        "module": "academics",
+        "action": "view",
+        "name": "View Subjects",
+        "description": "View subject master catalog, codes, types, and components.",
     },
     {
         "codename": "academics.subjects.manage",

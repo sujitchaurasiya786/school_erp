@@ -217,10 +217,10 @@
                                             <div class="modal-body">
                                                 <div class="mb-3">
                                                     <label class="form-label fw-semibold">Class</label>
-                                                    <select name="school_class_id" class="form-select" required>
+                                                    <select name="school_class_id" class="form-select class-selector-edit" id="editClassSelect{{ sec.id }}" data-target-stream="#editStreamSelect{{ sec.id }}" data-target-help="#editStreamHelp{{ sec.id }}" required>
                                                         {% for sc in school_classes %}
-                                                        <option value="{{ sc.id }}" {% if sec.school_class_id == sc.id %}selected{% endif %}>
-                                                            {{ sc.name }} ({{ sc.code }})
+                                                        <option value="{{ sc.id }}" data-is-senior="{% if sc.is_senior_secondary %}1{% else %}0{% endif %}" {% if sec.school_class_id == sc.id %}selected{% endif %}>
+                                                            {{ sc.name }} ({{ sc.code }}){% if sc.is_senior_secondary %} [Senior Secondary]{% endif %}
                                                         </option>
                                                         {% endfor %}
                                                     </select>
@@ -236,13 +236,19 @@
                                                     </div>
                                                 </div>
                                                 <div class="mb-3">
-                                                    <label class="form-label fw-semibold">Stream</label>
-                                                    <select name="stream" class="form-select">
+                                                    <label class="form-label fw-semibold">Stream <span class="text-danger">*</span></label>
+                                                    <select name="stream" class="form-select stream-selector" id="editStreamSelect{{ sec.id }}" required>
                                                         {% for val, label in streams %}
                                                         <option value="{{ val }}" {% if sec.stream == val %}selected{% endif %}>{{ label }}</option>
                                                         {% endfor %}
                                                     </select>
-                                                    <div class="form-text">Streams apply to senior classes (11-12). For Nursery-10, choose General.</div>
+                                                    <div class="form-text stream-help-text" id="editStreamHelp{{ sec.id }}">
+                                                        {% if sec.school_class.is_senior_secondary %}
+                                                            <span class="text-primary fw-semibold"><i class="ti ti-check me-1"></i>Senior Class (11–12): Academic Stream is mandatory. General is disabled.</span>
+                                                        {% else %}
+                                                            <span class="text-muted"><i class="ti ti-info-circle me-1"></i>Junior Class (Nursery–10): General curriculum (no streams).</span>
+                                                        {% endif %}
+                                                    </div>
                                                 </div>
                                                 <div class="mb-3">
                                                     <label class="form-label fw-semibold">Room Number</label>
@@ -339,11 +345,11 @@
                 <div class="modal-body">
                     <div class="mb-3">
                         <label class="form-label fw-semibold">Parent Class <span class="text-danger">*</span></label>
-                        <select name="school_class_id" class="form-select" required>
+                        <select name="school_class_id" class="form-select class-selector-create" id="createClassSelect" data-target-stream="#createStreamSelect" data-target-help="#createStreamHelp" required>
                             <option value="">Select Class...</option>
                             {% for sc in school_classes %}
-                            <option value="{{ sc.id }}" {% if selected_class_id == sc.id %}selected{% endif %}>
-                                {{ sc.name }} ({{ sc.code }})
+                            <option value="{{ sc.id }}" data-is-senior="{% if sc.is_senior_secondary %}1{% else %}0{% endif %}" {% if selected_class_id == sc.id %}selected{% endif %}>
+                                {{ sc.name }} ({{ sc.code }}){% if sc.is_senior_secondary %} [Senior Secondary]{% endif %}
                             </option>
                             {% endfor %}
                         </select>
@@ -360,13 +366,15 @@
                         </div>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label fw-semibold">Stream</label>
-                        <select name="stream" class="form-select">
+                        <label class="form-label fw-semibold">Stream <span class="text-danger">*</span></label>
+                        <select name="stream" class="form-select stream-selector" id="createStreamSelect" required>
                             {% for val, label in streams %}
                             <option value="{{ val }}" {% if val == 'NONE' %}selected{% endif %}>{{ label }}</option>
                             {% endfor %}
                         </select>
-                        <div class="form-text">Select Science, Commerce, or Arts for classes 11-12.</div>
+                        <div class="form-text stream-help-text" id="createStreamHelp">
+                            <span class="text-muted"><i class="ti ti-info-circle me-1"></i>Select a class above to configure stream eligibility.</span>
+                        </div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label fw-semibold">Room Number</label>
@@ -390,4 +398,99 @@
     </div>
 </div>
 {% endif %}
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    function handleClassChange(classSelect) {
+        const streamSelector = document.querySelector(classSelect.dataset.targetStream);
+        const helpText = document.querySelector(classSelect.dataset.targetHelp);
+        if (!streamSelector) return;
+
+        const selectedOption = classSelect.options[classSelect.selectedIndex];
+        const isSenior = selectedOption && selectedOption.dataset.isSenior === '1';
+
+        const generalOpt = streamSelector.querySelector('option[value="NONE"]');
+        const seniorOpts = streamSelector.querySelectorAll('option:not([value="NONE"])');
+
+        if (isSenior) {
+            // Class 11 or 12: General is strictly disabled!
+            if (generalOpt) {
+                generalOpt.disabled = true;
+                generalOpt.hidden = true;
+            }
+            seniorOpts.forEach(opt => {
+                opt.disabled = false;
+                opt.hidden = false;
+            });
+
+            // If General or invalid stream was selected, switch to first valid senior stream
+            if (streamSelector.value === 'NONE' || !streamSelector.value) {
+                if (seniorOpts.length > 0) {
+                    streamSelector.value = seniorOpts[0].value;
+                }
+            }
+
+            if (helpText) {
+                helpText.innerHTML = '<span class="text-primary fw-semibold"><i class="ti ti-alert-circle me-1"></i>Senior Class (11–12): Academic Stream is mandatory. "General" is disabled.</span>';
+            }
+        } else if (selectedOption && selectedOption.value) {
+            // Junior class (Nursery to Class 10): Only General is allowed
+            if (generalOpt) {
+                generalOpt.disabled = false;
+                generalOpt.hidden = false;
+            }
+            seniorOpts.forEach(opt => {
+                opt.disabled = true;
+                opt.hidden = true;
+            });
+            streamSelector.value = 'NONE';
+
+            if (helpText) {
+                helpText.innerHTML = '<span class="text-muted"><i class="ti ti-info-circle me-1"></i>Junior Class (Nursery–10): General curriculum (streams are not applicable).</span>';
+            }
+        } else {
+            // Nothing selected yet
+            if (generalOpt) {
+                generalOpt.disabled = false;
+                generalOpt.hidden = false;
+            }
+            seniorOpts.forEach(opt => {
+                opt.disabled = false;
+                opt.hidden = false;
+            });
+            if (helpText) {
+                helpText.innerHTML = '<span class="text-muted"><i class="ti ti-info-circle me-1"></i>Select a class above to configure stream eligibility.</span>';
+            }
+        }
+    }
+
+    // Attach listener to create modal class select
+    const createClassSelect = document.getElementById('createClassSelect');
+    if (createClassSelect) {
+        createClassSelect.addEventListener('change', function() {
+            handleClassChange(this);
+        });
+        // Initial setup on page load
+        handleClassChange(createClassSelect);
+    }
+
+    // Attach listeners to all edit modal class selects
+    document.querySelectorAll('.class-selector-edit').forEach(sel => {
+        sel.addEventListener('change', function() {
+            handleClassChange(this);
+        });
+        handleClassChange(sel);
+    });
+
+    // When any modal opens, refresh the stream options for that modal
+    document.querySelectorAll('.modal').forEach(modal => {
+        modal.addEventListener('shown.bs.modal', function() {
+            const classSel = this.querySelector('select[name="school_class_id"]');
+            if (classSel) {
+                handleClassChange(classSel);
+            }
+        });
+    });
+});
+</script>
 {% endblock %}

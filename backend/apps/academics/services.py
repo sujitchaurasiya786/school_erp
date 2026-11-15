@@ -4,7 +4,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
 
-from apps.academics.models import SchoolClass, Section, Stream, TimetableSlot
+from apps.academics.models import AcademicStream, SchoolClass, Section, Stream, Subject, SubjectType, TimetableSlot
 from apps.audit.models import AuditAction
 from apps.audit.services import AuditService
 from apps.school_config.models import AcademicYear
@@ -405,7 +405,7 @@ class AcademicYearService:
         # Check for dependent records across ERP modules
         dependencies = []
 
-        from apps.academics.models import SchoolClass, Section, Stream, TimetableSlot
+        from apps.academics.models import AcademicStream, SchoolClass, Section, Stream, Subject, SubjectType, TimetableSlot
         tt_count = TimetableSlot.objects.filter(academic_year=year).count()
         if tt_count:
             dependencies.append(f"{tt_count} timetable slot(s)")
@@ -861,5 +861,427 @@ class SectionService:
             actor=actor,
             reason=reason or f"Deleted section {section_str}",
             changes={"section": section_str},
+            request=request,
+        )
+
+
+class StreamService:
+    """
+    Manages operations on AcademicStream records for senior-secondary classes (Classes 11 and 12).
+    Enforces class eligibility, uppercase code normalization, dependency protection, and audit logging.
+    """
+
+    @classmethod
+    @transaction.atomic
+    def create_stream(
+        cls,
+        school_class_id,
+        name,
+        code,
+        description="",
+        is_active=True,
+        actor=None,
+        reason="",
+        request=None
+    ):
+        """
+        Creates an AcademicStream for Class 11 or 12 with validation and audit logging.
+        """
+        try:
+            school_class = SchoolClass.objects.get(pk=school_class_id)
+        except SchoolClass.DoesNotExist:
+            raise ResourceNotFoundError(f"Class with ID {school_class_id} not found.")
+
+        if not school_class.is_senior_secondary:
+            raise ValidationError(
+                f"Streams can only be configured for senior-secondary classes (Classes 11 and 12). '{school_class.name}' is not eligible."
+            )
+
+        cleaned_name = str(name or "").strip()
+        cleaned_code = str(code or "").strip().upper()
+
+        if not cleaned_name:
+            raise ValidationError({'name': _("Stream name is required.")})
+        if not cleaned_code:
+            raise ValidationError({'code': _("Stream code is required.")})
+
+        stream = AcademicStream(
+            school_class=school_class,
+            name=cleaned_name,
+            code=cleaned_code,
+            description=str(description or "").strip(),
+            is_active=bool(is_active)
+        )
+        stream.clean()
+        stream.save()
+
+        AuditService.log(
+            action=AuditAction.CREATE,
+            module="academics",
+            entity_type="AcademicStream",
+            entity_id=str(stream.pk),
+            actor=actor,
+            reason=reason or f"Created stream {stream.name} ({stream.code}) for {school_class.name}",
+            changes={
+                "school_class_id": school_class.pk,
+                "class_name": school_class.name,
+                "name": stream.name,
+                "code": stream.code,
+                "description": stream.description,
+                "is_active": stream.is_active,
+            },
+            request=request,
+        )
+        return stream
+
+    @classmethod
+    @transaction.atomic
+    def update_stream(
+        cls,
+        stream_id,
+        actor=None,
+        reason="",
+        request=None,
+        **kwargs
+    ):
+        """
+        Updates an existing AcademicStream with validation, diff-tracking, and audit logging.
+        """
+        try:
+            stream = AcademicStream.objects.select_for_update().get(pk=stream_id)
+        except AcademicStream.DoesNotExist:
+            raise ResourceNotFoundError(f"Stream with ID {stream_id} not found.")
+
+        old_state = {
+            "name": stream.name,
+            "code": stream.code,
+            "description": stream.description,
+            "is_active": stream.is_active,
+            "school_class_id": stream.school_class_id,
+        }
+
+        if 'school_class_id' in kwargs:
+            new_class_id = kwargs['school_class_id']
+            try:
+                new_class = SchoolClass.objects.get(pk=new_class_id)
+            except SchoolClass.DoesNotExist:
+                raise ResourceNotFoundError(f"Class with ID {new_class_id} not found.")
+            if not new_class.is_senior_secondary:
+                raise ValidationError(
+                    f"Streams can only be assigned to senior-secondary classes (Classes 11 and 12). '{new_class.name}' is not eligible."
+                )
+            stream.school_class = new_class
+
+        if 'name' in kwargs:
+            stream.name = str(kwargs['name']).strip()
+        if 'code' in kwargs:
+            stream.code = str(kwargs['code']).strip().upper()
+        if 'description' in kwargs:
+            stream.description = str(kwargs['description'] or "").strip()
+        if 'is_active' in kwargs:
+            stream.is_active = bool(kwargs['is_active'])
+
+        stream.clean()
+        stream.save()
+
+        new_state = {
+            "name": stream.name,
+            "code": stream.code,
+            "description": stream.description,
+            "is_active": stream.is_active,
+            "school_class_id": stream.school_class_id,
+        }
+
+        changes = {
+            k: {"old": old_state[k], "new": new_state[k]}
+            for k in old_state
+            if old_state[k] != new_state[k]
+        }
+
+        if changes:
+            AuditService.log(
+                action=AuditAction.UPDATE,
+                module="academics",
+                entity_type="AcademicStream",
+                entity_id=str(stream.pk),
+                actor=actor,
+                reason=reason or f"Updated stream {stream.name}",
+                changes=changes,
+                request=request,
+            )
+        return stream
+
+    @classmethod
+    def get_stream(cls, stream_id):
+        """
+        Retrieves an AcademicStream by ID.
+        """
+        try:
+            return AcademicStream.objects.select_related('school_class').get(pk=stream_id)
+        except AcademicStream.DoesNotExist:
+            raise ResourceNotFoundError(f"Stream with ID {stream_id} not found.")
+
+    @classmethod
+    def list_streams(cls, school_class_id=None, active_only=False):
+        """
+        Returns an ordered queryset of AcademicStream records.
+        """
+        qs = AcademicStream.objects.select_related('school_class').all().order_by(
+            'school_class__order', 'name'
+        )
+        if school_class_id:
+            qs = qs.filter(school_class_id=school_class_id)
+        if active_only:
+            qs = qs.filter(is_active=True)
+        return qs
+
+    @classmethod
+    @transaction.atomic
+    def delete_stream(
+        cls,
+        stream_id,
+        actor=None,
+        reason="",
+        request=None
+    ):
+        """
+        Deletes an AcademicStream only if no sections reference its stream name/code.
+        Otherwise raises BusinessConflictError to protect historical data integrity.
+        """
+        try:
+            stream = AcademicStream.objects.select_for_update().get(pk=stream_id)
+        except AcademicStream.DoesNotExist:
+            raise ResourceNotFoundError(f"Stream with ID {stream_id} not found.")
+
+        # Check if any section of this class has stream set to this code or name
+        section_count = Section.objects.filter(
+            school_class=stream.school_class,
+            stream__in=[stream.code, stream.name.upper()]
+        ).count()
+
+        if section_count > 0:
+            raise BusinessConflictError(
+                f"Cannot delete stream '{stream.name}' because {section_count} section(s) in "
+                f"'{stream.school_class.name}' are assigned to it. Reassign or delete sections first, or deactivate the stream."
+            )
+
+        stream_id_str = str(stream.pk)
+        stream_str = str(stream)
+        stream.delete()
+
+        AuditService.log(
+            action=AuditAction.DELETE,
+            module="academics",
+            entity_type="AcademicStream",
+            entity_id=stream_id_str,
+            actor=actor,
+            reason=reason or f"Deleted stream {stream_str}",
+            changes={"stream": stream_str},
+            request=request,
+        )
+
+
+class SubjectService:
+    """
+    Manages operations on central Subject master records.
+    Enforces uppercase code normalization, component validation (theory/practical),
+    dependency protections against cascade deletions, and audit trails.
+    """
+
+    @classmethod
+    @transaction.atomic
+    def create_subject(
+        cls,
+        name,
+        code,
+        subject_type=SubjectType.COMPULSORY,
+        is_theory=True,
+        is_practical=False,
+        description="",
+        is_active=True,
+        actor=None,
+        reason="",
+        request=None
+    ):
+        """
+        Creates a new Subject with validation and audit logging.
+        """
+        cleaned_name = str(name or "").strip()
+        cleaned_code = str(code or "").strip().upper()
+
+        if not cleaned_name:
+            raise ValidationError({'name': _("Subject name is required.")})
+        if not cleaned_code:
+            raise ValidationError({'code': _("Subject code is required.")})
+
+        subject = Subject(
+            name=cleaned_name,
+            code=cleaned_code,
+            subject_type=subject_type or SubjectType.COMPULSORY,
+            is_theory=bool(is_theory),
+            is_practical=bool(is_practical),
+            description=str(description or "").strip(),
+            is_active=bool(is_active)
+        )
+        subject.clean()
+        subject.save()
+
+        AuditService.log(
+            action=AuditAction.CREATE,
+            module="academics",
+            entity_type="Subject",
+            entity_id=str(subject.pk),
+            actor=actor,
+            reason=reason or f"Created subject {subject.name} ({subject.code})",
+            changes={
+                "name": subject.name,
+                "code": subject.code,
+                "subject_type": subject.subject_type,
+                "is_theory": subject.is_theory,
+                "is_practical": subject.is_practical,
+                "description": subject.description,
+                "is_active": subject.is_active,
+            },
+            request=request,
+        )
+        return subject
+
+    @classmethod
+    @transaction.atomic
+    def update_subject(
+        cls,
+        subject_id,
+        actor=None,
+        reason="",
+        request=None,
+        **kwargs
+    ):
+        """
+        Updates an existing Subject with validation, diff-tracking, and audit logging.
+        """
+        try:
+            subject = Subject.objects.select_for_update().get(pk=subject_id)
+        except Subject.DoesNotExist:
+            raise ResourceNotFoundError(f"Subject with ID {subject_id} not found.")
+
+        old_state = {
+            "name": subject.name,
+            "code": subject.code,
+            "subject_type": subject.subject_type,
+            "is_theory": subject.is_theory,
+            "is_practical": subject.is_practical,
+            "description": subject.description,
+            "is_active": subject.is_active,
+        }
+
+        if 'name' in kwargs:
+            subject.name = str(kwargs['name']).strip()
+        if 'code' in kwargs:
+            subject.code = str(kwargs['code']).strip().upper()
+        if 'subject_type' in kwargs:
+            subject.subject_type = kwargs['subject_type'] or SubjectType.COMPULSORY
+        if 'is_theory' in kwargs:
+            subject.is_theory = bool(kwargs['is_theory'])
+        if 'is_practical' in kwargs:
+            subject.is_practical = bool(kwargs['is_practical'])
+        if 'description' in kwargs:
+            subject.description = str(kwargs['description'] or "").strip()
+        if 'is_active' in kwargs:
+            subject.is_active = bool(kwargs['is_active'])
+
+        subject.clean()
+        subject.save()
+
+        new_state = {
+            "name": subject.name,
+            "code": subject.code,
+            "subject_type": subject.subject_type,
+            "is_theory": subject.is_theory,
+            "is_practical": subject.is_practical,
+            "description": subject.description,
+            "is_active": subject.is_active,
+        }
+
+        changes = {
+            k: {"old": old_state[k], "new": new_state[k]}
+            for k in old_state
+            if old_state[k] != new_state[k]
+        }
+
+        if changes:
+            AuditService.log(
+                action=AuditAction.UPDATE,
+                module="academics",
+                entity_type="Subject",
+                entity_id=str(subject.pk),
+                actor=actor,
+                reason=reason or f"Updated subject {subject.name}",
+                changes=changes,
+                request=request,
+            )
+        return subject
+
+    @classmethod
+    def get_subject(cls, subject_id):
+        """
+        Retrieves a Subject by ID.
+        """
+        try:
+            return Subject.objects.get(pk=subject_id)
+        except Subject.DoesNotExist:
+            raise ResourceNotFoundError(f"Subject with ID {subject_id} not found.")
+
+    @classmethod
+    def list_subjects(cls, subject_type=None, active_only=False, search=None):
+        """
+        Returns an ordered queryset of Subject records with optional filtering.
+        """
+        qs = Subject.objects.all().order_by('name', 'code')
+        if subject_type:
+            qs = qs.filter(subject_type=subject_type)
+        if active_only:
+            qs = qs.filter(is_active=True)
+        if search:
+            query = str(search).strip()
+            qs = qs.filter(Q(name__icontains=query) | Q(code__icontains=query))
+        return qs
+
+    @classmethod
+    @transaction.atomic
+    def delete_subject(
+        cls,
+        subject_id,
+        actor=None,
+        reason="",
+        request=None
+    ):
+        """
+        Deletes a Subject only if not mapped to any class-sections.
+        Otherwise raises BusinessConflictError to preserve curriculum history.
+        """
+        try:
+            subject = Subject.objects.select_for_update().get(pk=subject_id)
+        except Subject.DoesNotExist:
+            raise ResourceNotFoundError(f"Subject with ID {subject_id} not found.")
+
+        mapping_count = subject.subject_mappings.count()
+        if mapping_count > 0:
+            raise BusinessConflictError(
+                f"Cannot delete subject '{subject.name}' because {mapping_count} class-section mapping(s) "
+                "are associated with it. Delete or reassign mappings first, or deactivate the subject."
+            )
+
+        subject_id_str = str(subject.pk)
+        subject_str = str(subject)
+        subject.delete()
+
+        AuditService.log(
+            action=AuditAction.DELETE,
+            module="academics",
+            entity_type="Subject",
+            entity_id=subject_id_str,
+            actor=actor,
+            reason=reason or f"Deleted subject {subject_str}",
+            changes={"subject": subject_str},
             request=request,
         )

@@ -9,8 +9,8 @@ from django.db.models import Count, Sum
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
-from apps.academics.models import SchoolClass, Section, Stream
-from apps.academics.services import AcademicYearService, SchoolClassService, SectionService
+from apps.academics.models import AcademicStream, SchoolClass, Section, Stream, Subject, SubjectType
+from apps.academics.services import AcademicYearService, SchoolClassService, SectionService, StreamService, SubjectService
 from apps.rbac.services import RBACService
 from apps.school_config.models import AcademicYear, SchoolProfile
 from common.exceptions import BusinessConflictError, ResourceNotFoundError
@@ -365,3 +365,271 @@ def sections_list_view(request):
         'can_manage': _check_academics_permission(request, 'academics.section.manage'),
     }
     return render(request, 'dashboard/academics/sections_list.html', context)
+
+
+# ==============================================================================
+# 4. Stream Management (Classes 11–12)
+# ==============================================================================
+@login_required(login_url='login')
+def streams_list_view(request):
+    """
+    Displays the stream directory, senior class offerings, and stream management modals.
+    Enforces stream configuration exclusively for Classes 11 and 12.
+    """
+    if not _check_academics_permission(request, 'academics.stream.view'):
+        messages.error(request, "You do not have permission to view streams.")
+        return redirect('home-dashboard')
+
+    if request.method == 'POST':
+        if not _check_academics_permission(request, 'academics.stream.manage'):
+            messages.error(request, "You do not have permission to manage streams.")
+            return redirect('academics-streams-list')
+
+        action = request.POST.get('action', 'create')
+
+        if action == 'create':
+            school_class_id = request.POST.get('school_class_id')
+            name = request.POST.get('name', '').strip()
+            code = request.POST.get('code', '').strip()
+            description = request.POST.get('description', '').strip()
+            is_active = request.POST.get('is_active') == 'on'
+            reason = request.POST.get('reason', '').strip()
+
+            try:
+                st = StreamService.create_stream(
+                    school_class_id=school_class_id,
+                    name=name,
+                    code=code,
+                    description=description,
+                    is_active=is_active,
+                    actor=request.user,
+                    reason=reason or f"Created stream {name} ({code}) from dashboard",
+                    request=request,
+                )
+                messages.success(request, f"Stream '{st.name}' ({st.code}) configured successfully for {st.school_class.name}.")
+            except (ValidationError, ResourceNotFoundError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to create stream: {msg}")
+            except Exception as err:
+                messages.error(request, f"An unexpected error occurred: {err}")
+
+            return redirect('academics-streams-list')
+
+        elif action == 'update':
+            stream_id = request.POST.get('stream_id')
+            school_class_id = request.POST.get('school_class_id')
+            name = request.POST.get('name', '').strip()
+            code = request.POST.get('code', '').strip()
+            description = request.POST.get('description', '').strip()
+            is_active = request.POST.get('is_active') == 'on'
+            reason = request.POST.get('reason', '').strip()
+
+            update_data = {
+                'name': name,
+                'code': code,
+                'description': description,
+                'is_active': is_active,
+            }
+            if school_class_id:
+                update_data['school_class_id'] = school_class_id
+
+            try:
+                st = StreamService.update_stream(
+                    stream_id=stream_id,
+                    actor=request.user,
+                    reason=reason or f"Updated stream {name} from dashboard",
+                    request=request,
+                    **update_data
+                )
+                messages.success(request, f"Stream '{st.name}' updated successfully.")
+            except (ValidationError, ResourceNotFoundError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to update stream: {msg}")
+            except Exception as err:
+                messages.error(request, f"An unexpected error occurred: {err}")
+
+            return redirect('academics-streams-list')
+
+        elif action == 'delete':
+            stream_id = request.POST.get('stream_id')
+            reason = request.POST.get('reason', '').strip()
+
+            try:
+                StreamService.delete_stream(
+                    stream_id=stream_id,
+                    actor=request.user,
+                    reason=reason or "Deleted stream from dashboard",
+                    request=request,
+                )
+                messages.success(request, "Stream deleted successfully.")
+            except BusinessConflictError as err:
+                messages.warning(request, str(err))
+            except (ResourceNotFoundError, ValidationError) as err:
+                messages.error(request, str(err))
+            except Exception as err:
+                messages.error(request, f"An unexpected error occurred: {err}")
+
+            return redirect('academics-streams-list')
+
+    selected_class_id = request.GET.get('class_id', '').strip()
+
+    streams_qs = AcademicStream.objects.select_related('school_class').all().order_by(
+        'school_class__order', 'name'
+    )
+    if selected_class_id and selected_class_id.isdigit():
+        streams_qs = streams_qs.filter(school_class_id=int(selected_class_id))
+
+    all_active_classes = SchoolClass.objects.filter(is_active=True).order_by('order', 'name')
+    senior_classes = [c for c in all_active_classes if c.is_senior_secondary]
+
+    total_streams = AcademicStream.objects.count()
+    active_streams_count = AcademicStream.objects.filter(is_active=True).count()
+    senior_classes_covered = AcademicStream.objects.values('school_class').distinct().count()
+
+    context = {
+        'streams': streams_qs,
+        'senior_classes': senior_classes,
+        'selected_class_id': int(selected_class_id) if selected_class_id.isdigit() else None,
+        'total_streams': total_streams,
+        'active_streams_count': active_streams_count,
+        'senior_classes_covered': senior_classes_covered,
+        'can_manage': _check_academics_permission(request, 'academics.stream.manage'),
+    }
+    return render(request, 'dashboard/academics/streams_list.html', context)
+
+
+# ==============================================================================
+# 5. Subject Master Management
+# ==============================================================================
+@login_required(login_url='login')
+def subjects_list_view(request):
+    """
+    Displays the central subject master catalog, metrics, and subject CRUD modals.
+    Enforces component requirements (Theory/Practical) and subject types.
+    """
+    if not _check_academics_permission(request, 'academics.subjects.view'):
+        messages.error(request, "You do not have permission to view subjects.")
+        return redirect('home-dashboard')
+
+    if request.method == 'POST':
+        if not _check_academics_permission(request, 'academics.subjects.manage'):
+            messages.error(request, "You do not have permission to manage subjects.")
+            return redirect('academics-subjects-list')
+
+        action = request.POST.get('action', 'create')
+
+        if action == 'create':
+            name = request.POST.get('name', '').strip()
+            code = request.POST.get('code', '').strip()
+            subject_type = request.POST.get('subject_type', SubjectType.COMPULSORY).strip()
+            is_theory = request.POST.get('is_theory') == 'on'
+            is_practical = request.POST.get('is_practical') == 'on'
+            description = request.POST.get('description', '').strip()
+            is_active = request.POST.get('is_active') == 'on'
+            reason = request.POST.get('reason', '').strip()
+
+            try:
+                sub = SubjectService.create_subject(
+                    name=name,
+                    code=code,
+                    subject_type=subject_type,
+                    is_theory=is_theory,
+                    is_practical=is_practical,
+                    description=description,
+                    is_active=is_active,
+                    actor=request.user,
+                    reason=reason or f"Created subject {name} ({code}) from dashboard",
+                    request=request,
+                )
+                messages.success(request, f"Subject '{sub.name}' ({sub.code}) created successfully.")
+            except ValidationError as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to create subject: {msg}")
+            except Exception as err:
+                messages.error(request, f"An unexpected error occurred: {err}")
+
+            return redirect('academics-subjects-list')
+
+        elif action == 'update':
+            subject_id = request.POST.get('subject_id')
+            name = request.POST.get('name', '').strip()
+            code = request.POST.get('code', '').strip()
+            subject_type = request.POST.get('subject_type', SubjectType.COMPULSORY).strip()
+            is_theory = request.POST.get('is_theory') == 'on'
+            is_practical = request.POST.get('is_practical') == 'on'
+            description = request.POST.get('description', '').strip()
+            is_active = request.POST.get('is_active') == 'on'
+            reason = request.POST.get('reason', '').strip()
+
+            try:
+                sub = SubjectService.update_subject(
+                    subject_id=subject_id,
+                    actor=request.user,
+                    name=name,
+                    code=code,
+                    subject_type=subject_type,
+                    is_theory=is_theory,
+                    is_practical=is_practical,
+                    description=description,
+                    is_active=is_active,
+                    reason=reason or f"Updated subject {name} from dashboard",
+                    request=request,
+                )
+                messages.success(request, f"Subject '{sub.name}' updated successfully.")
+            except (ValidationError, ResourceNotFoundError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to update subject: {msg}")
+            except Exception as err:
+                messages.error(request, f"An unexpected error occurred: {err}")
+
+            return redirect('academics-subjects-list')
+
+        elif action == 'delete':
+            subject_id = request.POST.get('subject_id')
+            reason = request.POST.get('reason', '').strip()
+
+            try:
+                SubjectService.delete_subject(
+                    subject_id=subject_id,
+                    actor=request.user,
+                    reason=reason or "Deleted subject from dashboard",
+                    request=request,
+                )
+                messages.success(request, "Subject deleted successfully.")
+            except BusinessConflictError as err:
+                messages.warning(request, str(err))
+            except (ResourceNotFoundError, ValidationError) as err:
+                messages.error(request, str(err))
+            except Exception as err:
+                messages.error(request, f"An unexpected error occurred: {err}")
+
+            return redirect('academics-subjects-list')
+
+    # Query params for filtering & search
+    selected_type = request.GET.get('type', '').strip()
+    search_query = request.GET.get('q', '').strip()
+
+    subjects_qs = Subject.objects.all().order_by('name', 'code')
+    if selected_type and selected_type in dict(SubjectType.choices):
+        subjects_qs = subjects_qs.filter(subject_type=selected_type)
+    if search_query:
+        from django.db.models import Q
+        subjects_qs = subjects_qs.filter(Q(name__icontains=search_query) | Q(code__icontains=search_query))
+
+    total_subjects = Subject.objects.count()
+    active_subjects_count = Subject.objects.filter(is_active=True).count()
+    theory_subjects_count = Subject.objects.filter(is_theory=True).count()
+    practical_subjects_count = Subject.objects.filter(is_practical=True).count()
+
+    context = {
+        'subjects': subjects_qs,
+        'subject_types': SubjectType.choices,
+        'selected_type': selected_type,
+        'search_query': search_query,
+        'total_subjects': total_subjects,
+        'active_subjects_count': active_subjects_count,
+        'theory_subjects_count': theory_subjects_count,
+        'practical_subjects_count': practical_subjects_count,
+        'can_manage': _check_academics_permission(request, 'academics.subjects.manage'),
+    }
+    return render(request, 'dashboard/academics/subjects_list.html', context)

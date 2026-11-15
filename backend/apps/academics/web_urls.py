@@ -7,6 +7,8 @@ from apps.academics.web_views import (
     academic_year_activate_view,
     classes_list_view,
     sections_list_view,
+    streams_list_view,
+    subjects_list_view,
 )
 
 urlpatterns = [
@@ -19,4 +21,10 @@ urlpatterns = [
 
     # Section Management
     path('sections/', sections_list_view, name='academics-sections-list'),
+
+    # Stream Management (Classes 11-12)
+    path('streams/', streams_list_view, name='academics-streams-list'),
+
+    # Subject Master Management
+    path('subjects/', subjects_list_view, name='academics-subjects-list'),
 ]

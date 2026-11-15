@@ -9,8 +9,8 @@ from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
 from django.contrib.auth import get_user_model
 
-from apps.academics.models import ClassSubject, SchoolClass, Section, Stream, Subject, TimetablePeriod, TimetableSlot
-from apps.academics.services import AcademicYearService, SchoolClassService, SectionService
+from apps.academics.models import AcademicStream, ClassSubject, SchoolClass, Section, Stream, Subject, SubjectType, TimetablePeriod, TimetableSlot
+from apps.academics.services import AcademicYearService, SchoolClassService, SectionService, StreamService, SubjectService
 from apps.audit.models import AuditAction, AuditLog
 from apps.rbac.models import Permission
 from apps.rbac.registry import PERMISSION_REGISTRY
@@ -527,6 +527,10 @@ class AcademicYearRBACAndMigrationTests(TestCase):
             'academics.class.manage',
             'academics.section.view',
             'academics.section.manage',
+            'academics.stream.view',
+            'academics.stream.manage',
+            'academics.subjects.view',
+            'academics.subjects.manage',
         }
         self.assertTrue(
             expected_codenames.issubset(registered_codenames),
@@ -543,6 +547,10 @@ class AcademicYearRBACAndMigrationTests(TestCase):
             'academics.class.manage',
             'academics.section.view',
             'academics.section.manage',
+            'academics.stream.view',
+            'academics.stream.manage',
+            'academics.subjects.view',
+            'academics.subjects.manage',
         ]
         for codename in expected_codenames:
             perm = Permission.objects.filter(codename=codename, is_active=True).first()
@@ -1076,3 +1084,553 @@ class SectionWebViewsTests(TestCase):
         sections = list(response.context['sections'])
         self.assertIn(sec_10, sections)
         self.assertNotIn(sec_9, sections)
+
+
+class StreamModelValidationTests(TestCase):
+    """
+    Tests for AcademicStream and senior-secondary stream validation rules.
+    """
+
+    def setUp(self):
+        self.class_10 = SchoolClass.objects.create(name='Class 10', code='CL-10', order=10)
+        self.class_11 = SchoolClass.objects.create(name='Class 11', code='CL-11', order=11)
+        self.class_12 = SchoolClass.objects.create(name='Class 12', code='CL-12', order=12)
+
+    def test_senior_secondary_detection(self):
+        self.assertFalse(self.class_10.is_senior_secondary)
+        self.assertTrue(self.class_11.is_senior_secondary)
+        self.assertTrue(self.class_12.is_senior_secondary)
+
+        nursery = SchoolClass.objects.create(name='Nursery', code='NUR', order=1)
+        self.assertFalse(nursery.is_senior_secondary)
+
+    def test_stream_creation_on_class_11_or_12_succeeds(self):
+        st = AcademicStream(
+            school_class=self.class_11,
+            name='Science',
+            code='sci',
+            description='Physics, Chemistry, Maths/Biology'
+        )
+        st.full_clean()
+        st.save()
+        self.assertEqual(st.code, 'SCI')
+        self.assertEqual(st.name, 'Science')
+        self.assertTrue(st.is_active)
+
+    def test_stream_creation_on_junior_class_fails(self):
+        with self.assertRaises(ValidationError) as ctx:
+            st = AcademicStream(
+                school_class=self.class_10,
+                name='Science',
+                code='SCI'
+            )
+            st.full_clean()
+        self.assertIn('senior-secondary classes', str(ctx.exception))
+
+    def test_section_stream_validation(self):
+        # Setting stream on Class 10 must fail
+        with self.assertRaises(ValidationError) as ctx:
+            sec_junior = Section(
+                school_class=self.class_10,
+                name='A',
+                stream=Stream.SCIENCE,
+                capacity=40
+            )
+            sec_junior.full_clean()
+        self.assertIn('Streams are applicable only to Classes 11 and 12', str(ctx.exception))
+
+        # Setting stream=NONE on Class 10 succeeds
+        sec_valid_junior = Section(
+            school_class=self.class_10,
+            name='A',
+            stream=Stream.NONE,
+            capacity=40
+        )
+        sec_valid_junior.full_clean()
+        sec_valid_junior.save()
+
+        # Setting stream on Class 11 succeeds
+        sec_senior = Section(
+            school_class=self.class_11,
+            name='A',
+            stream=Stream.SCIENCE,
+            capacity=40
+        )
+        sec_senior.full_clean()
+        sec_senior.save()
+        self.assertEqual(sec_senior.stream, Stream.SCIENCE)
+
+        # Setting stream=NONE or empty on Class 11 must fail
+        with self.assertRaises(ValidationError) as ctx:
+            sec_senior_general = Section(
+                school_class=self.class_11,
+                name='B',
+                stream=Stream.NONE,
+                capacity=40
+            )
+            sec_senior_general.full_clean()
+        self.assertIn('General', str(ctx.exception))
+
+    def test_duplicate_stream_name_or_code_within_class_rejected(self):
+        AcademicStream.objects.create(school_class=self.class_11, name='Commerce', code='COMM')
+
+        with self.assertRaises(ValidationError):
+            dup_name = AcademicStream(school_class=self.class_11, name='commerce', code='COMM2')
+            dup_name.full_clean()
+
+        with self.assertRaises(ValidationError):
+            dup_code = AcademicStream(school_class=self.class_11, name='Commerce Advanced', code='comm')
+            dup_code.full_clean()
+
+    def test_same_stream_allowed_in_different_senior_classes(self):
+        st_11 = AcademicStream.objects.create(school_class=self.class_11, name='Arts', code='ARTS')
+        st_12 = AcademicStream(school_class=self.class_12, name='Arts', code='ARTS')
+        st_12.full_clean()
+        st_12.save()
+        self.assertEqual(st_11.code, st_12.code)
+        self.assertNotEqual(st_11.school_class, st_12.school_class)
+
+
+class StreamServiceTests(TestCase):
+    """
+    Tests for StreamService CRUD methods, audit logging, and dependency protection.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='academic_stream_admin',
+            email='stream_admin@school.local',
+            password='Password123'
+        )
+        self.class_10 = SchoolClass.objects.create(name='Class 10', code='CL-10', order=10)
+        self.class_11 = SchoolClass.objects.create(name='Class 11', code='CL-11', order=11)
+
+    def test_create_stream_with_audit_log(self):
+        st = StreamService.create_stream(
+            school_class_id=self.class_11.pk,
+            name='Science',
+            code='  sci  ',
+            description='Physics and Chemistry',
+            actor=self.user,
+            reason='Initial senior stream setup'
+        )
+        self.assertEqual(st.name, 'Science')
+        self.assertEqual(st.code, 'SCI')
+        self.assertTrue(st.is_active)
+
+        audit = AuditLog.objects.filter(
+            module='academics',
+            entity_type='AcademicStream',
+            entity_id=str(st.pk),
+            action=AuditAction.CREATE
+        ).first()
+        self.assertIsNotNone(audit)
+        self.assertEqual(audit.actor, self.user)
+        self.assertEqual(audit.changes['code'], 'SCI')
+
+    def test_create_stream_on_junior_class_raises_validation_error(self):
+        with self.assertRaises(ValidationError):
+            StreamService.create_stream(
+                school_class_id=self.class_10.pk,
+                name='Science',
+                code='SCI',
+                actor=self.user
+            )
+
+    def test_update_stream_with_audit_log(self):
+        st = StreamService.create_stream(
+            school_class_id=self.class_11.pk,
+            name='Commerce',
+            code='COMM',
+            actor=self.user
+        )
+        updated = StreamService.update_stream(
+            stream_id=st.pk,
+            actor=self.user,
+            name='Commerce with Informatics',
+            code='COMM-IP',
+            reason='Updated curriculum naming'
+        )
+        self.assertEqual(updated.name, 'Commerce with Informatics')
+        self.assertEqual(updated.code, 'COMM-IP')
+
+        audit = AuditLog.objects.filter(
+            module='academics',
+            entity_type='AcademicStream',
+            entity_id=str(st.pk),
+            action=AuditAction.UPDATE
+        ).first()
+        self.assertIsNotNone(audit)
+        self.assertIn('code', audit.changes)
+        self.assertEqual(audit.changes['code']['old'], 'COMM')
+        self.assertEqual(audit.changes['code']['new'], 'COMM-IP')
+
+    def test_get_stream_and_list_streams(self):
+        st = StreamService.create_stream(school_class_id=self.class_11.pk, name='Arts', code='ARTS')
+        retrieved = StreamService.get_stream(st.pk)
+        self.assertEqual(retrieved.pk, st.pk)
+
+        with self.assertRaises(ResourceNotFoundError):
+            StreamService.get_stream(99999)
+
+        all_streams = StreamService.list_streams(school_class_id=self.class_11.pk)
+        self.assertEqual(all_streams.count(), 1)
+
+    def test_delete_stream_success_with_audit_log(self):
+        st = StreamService.create_stream(
+            school_class_id=self.class_11.pk,
+            name='Vocational',
+            code='VOC',
+            actor=self.user,
+            reason='Temporary'
+        )
+        st_id = st.pk
+        StreamService.delete_stream(stream_id=st_id, actor=self.user, reason='Deleted unused stream')
+        self.assertFalse(AcademicStream.objects.filter(pk=st_id).exists())
+
+        audit = AuditLog.objects.filter(
+            module='academics',
+            entity_type='AcademicStream',
+            entity_id=str(st_id),
+            action=AuditAction.DELETE
+        ).first()
+        self.assertIsNotNone(audit)
+
+    def test_delete_stream_prevented_when_sections_assigned(self):
+        st = StreamService.create_stream(
+            school_class_id=self.class_11.pk,
+            name='Science',
+            code='SCIENCE',
+            actor=self.user
+        )
+        # Create section referencing this stream
+        Section.objects.create(
+            school_class=self.class_11,
+            name='A',
+            stream='SCIENCE',
+            capacity=35
+        )
+
+        with self.assertRaises(BusinessConflictError) as ctx:
+            StreamService.delete_stream(stream_id=st.pk, actor=self.user)
+
+        self.assertIn('section(s) in', str(ctx.exception))
+        self.assertTrue(AcademicStream.objects.filter(pk=st.pk).exists())
+
+
+class StreamWebViewsTests(TestCase):
+    """
+    Tests for Stream Dashboard web views.
+    """
+
+    def setUp(self):
+        call_command('sync_permissions')
+        self.user = User.objects.create_superuser(
+            username='admin_stream_web',
+            email='stream_web@school.local',
+            password='Password123!',
+        )
+        self.client.force_login(self.user)
+        self.class_11 = SchoolClass.objects.create(name='Class 11', code='CL-11', order=11)
+        self.class_12 = SchoolClass.objects.create(name='Class 12', code='CL-12', order=12)
+
+    def test_streams_list_view_get(self):
+        response = self.client.get(reverse('academics-streams-list'))
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'dashboard/academics/streams_list.html')
+        self.assertIn('Senior Secondary Streams', response.content.decode('utf-8'))
+
+    def test_streams_list_view_create_post(self):
+        post_data = {
+            'action': 'create',
+            'school_class_id': self.class_11.pk,
+            'name': 'Science',
+            'code': 'sci',
+            'description': 'PCM/PCB',
+            'is_active': 'on',
+        }
+        response = self.client.post(reverse('academics-streams-list'), data=post_data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(AcademicStream.objects.filter(school_class=self.class_11, code='SCI').exists())
+
+    def test_streams_list_view_update_post(self):
+        st = StreamService.create_stream(
+            school_class_id=self.class_11.pk,
+            name='Commerce',
+            code='COMM'
+        )
+        post_data = {
+            'action': 'update',
+            'stream_id': st.pk,
+            'school_class_id': self.class_11.pk,
+            'name': 'Commerce (Standard)',
+            'code': 'COMM',
+            'description': 'Accountancy and Economics',
+            'is_active': 'on',
+        }
+        response = self.client.post(reverse('academics-streams-list'), data=post_data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        st.refresh_from_db()
+        self.assertEqual(st.name, 'Commerce (Standard)')
+        self.assertEqual(st.description, 'Accountancy and Economics')
+
+    def test_streams_list_view_delete_post(self):
+        st = StreamService.create_stream(
+            school_class_id=self.class_11.pk,
+            name='Arts',
+            code='ARTS'
+        )
+        post_data = {
+            'action': 'delete',
+            'stream_id': st.pk,
+            'reason': 'Removing unused stream',
+        }
+        response = self.client.post(reverse('academics-streams-list'), data=post_data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(AcademicStream.objects.filter(pk=st.pk).exists())
+
+    def test_streams_list_view_filter_by_class(self):
+        st_11 = StreamService.create_stream(school_class_id=self.class_11.pk, name='Science 11', code='SCI11')
+        st_12 = StreamService.create_stream(school_class_id=self.class_12.pk, name='Science 12', code='SCI12')
+
+        response = self.client.get(f"{reverse('academics-streams-list')}?class_id={self.class_11.pk}")
+        self.assertEqual(response.status_code, 200)
+        streams = list(response.context['streams'])
+        self.assertIn(st_11, streams)
+        self.assertNotIn(st_12, streams)
+
+
+class SubjectModelValidationTests(TestCase):
+    """
+    Tests for Subject model validation, code uppercase normalization, and component rules.
+    """
+
+    def test_valid_subject_creation_and_normalization(self):
+        sub = Subject(
+            name='  Mathematics  ',
+            code='  math-10  ',
+            subject_type=SubjectType.COMPULSORY,
+            is_theory=True,
+            is_practical=False
+        )
+        sub.full_clean()
+        sub.save()
+        self.assertEqual(sub.name, 'Mathematics')
+        self.assertEqual(sub.code, 'MATH-10')
+        self.assertEqual(sub.subject_type, SubjectType.COMPULSORY)
+        self.assertTrue(sub.is_theory)
+        self.assertFalse(sub.is_practical)
+        self.assertTrue(sub.is_active)
+
+    def test_empty_name_or_code_rejected(self):
+        with self.assertRaises(ValidationError):
+            s = Subject(name='', code='ENG-01')
+            s.full_clean()
+
+        with self.assertRaises(ValidationError):
+            s = Subject(name='English', code='')
+            s.full_clean()
+
+    def test_neither_theory_nor_practical_rejected(self):
+        with self.assertRaises(ValidationError) as ctx:
+            s = Subject(name='Physical Education', code='PED-01', is_theory=False, is_practical=False)
+            s.full_clean()
+        self.assertIn('at least one component', str(ctx.exception))
+
+    def test_practical_only_subject_allowed(self):
+        s = Subject(name='Computer Lab Practicals', code='COMP-LAB', is_theory=False, is_practical=True)
+        s.full_clean()
+        s.save()
+        self.assertFalse(s.is_theory)
+        self.assertTrue(s.is_practical)
+
+    def test_duplicate_code_case_insensitive_rejected(self):
+        Subject.objects.create(name='Social Science', code='SOC-10')
+        with self.assertRaises(ValidationError):
+            dup = Subject(name='Social Studies', code='soc-10')
+            dup.full_clean()
+
+
+class SubjectServiceTests(TestCase):
+    """
+    Tests for SubjectService CRUD methods, audit logging, and dependency protection.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='academic_sub_admin',
+            email='sub_admin@school.local',
+            password='Password123'
+        )
+
+    def test_create_subject_with_audit_log(self):
+        sub = SubjectService.create_subject(
+            name='Physics',
+            code='  phy-11  ',
+            subject_type=SubjectType.ELECTIVE,
+            is_theory=True,
+            is_practical=True,
+            description='Physics core',
+            actor=self.user,
+            reason='Initial subject setup'
+        )
+        self.assertEqual(sub.name, 'Physics')
+        self.assertEqual(sub.code, 'PHY-11')
+        self.assertTrue(sub.is_theory)
+        self.assertTrue(sub.is_practical)
+
+        audit = AuditLog.objects.filter(
+            module='academics',
+            entity_type='Subject',
+            entity_id=str(sub.pk),
+            action=AuditAction.CREATE
+        ).first()
+        self.assertIsNotNone(audit)
+        self.assertEqual(audit.actor, self.user)
+        self.assertEqual(audit.changes['code'], 'PHY-11')
+
+    def test_update_subject_with_audit_log(self):
+        sub = SubjectService.create_subject(name='Chemistry', code='CHEM-11', actor=self.user)
+        updated = SubjectService.update_subject(
+            subject_id=sub.pk,
+            actor=self.user,
+            name='Advanced Chemistry',
+            is_practical=True,
+            reason='Added practical lab'
+        )
+        self.assertEqual(updated.name, 'Advanced Chemistry')
+        self.assertTrue(updated.is_practical)
+
+        audit = AuditLog.objects.filter(
+            module='academics',
+            entity_type='Subject',
+            entity_id=str(sub.pk),
+            action=AuditAction.UPDATE
+        ).first()
+        self.assertIsNotNone(audit)
+        self.assertIn('is_practical', audit.changes)
+
+    def test_get_subject_and_list_subjects(self):
+        sub_comp = SubjectService.create_subject(name='English', code='ENG-01', subject_type=SubjectType.COMPULSORY)
+        sub_opt = SubjectService.create_subject(name='Sanskrit', code='SKT-01', subject_type=SubjectType.OPTIONAL)
+
+        retrieved = SubjectService.get_subject(sub_comp.pk)
+        self.assertEqual(retrieved.pk, sub_comp.pk)
+
+        with self.assertRaises(ResourceNotFoundError):
+            SubjectService.get_subject(99999)
+
+        comp_list = SubjectService.list_subjects(subject_type=SubjectType.COMPULSORY)
+        self.assertEqual(comp_list.count(), 1)
+        self.assertEqual(comp_list.first().pk, sub_comp.pk)
+
+        search_list = SubjectService.list_subjects(search='sanskrit')
+        self.assertEqual(search_list.count(), 1)
+        self.assertEqual(search_list.first().pk, sub_opt.pk)
+
+    def test_delete_subject_success_with_audit_log(self):
+        sub = SubjectService.create_subject(name='German', code='GER-01', actor=self.user)
+        sub_id = sub.pk
+        SubjectService.delete_subject(subject_id=sub_id, actor=self.user, reason='Removed language')
+        self.assertFalse(Subject.objects.filter(pk=sub_id).exists())
+
+        audit = AuditLog.objects.filter(
+            module='academics',
+            entity_type='Subject',
+            entity_id=str(sub_id),
+            action=AuditAction.DELETE
+        ).first()
+        self.assertIsNotNone(audit)
+
+    def test_delete_subject_prevented_when_mapped_to_sections(self):
+        sub = SubjectService.create_subject(name='Biology', code='BIO-11', actor=self.user)
+        school_class = SchoolClass.objects.create(name='Class 11', code='CL-11', order=11)
+        sec = Section.objects.create(school_class=school_class, name='A', stream=Stream.SCIENCE, capacity=35)
+        ClassSubject.objects.create(section=sec, subject=sub)
+
+        with self.assertRaises(BusinessConflictError) as ctx:
+            SubjectService.delete_subject(subject_id=sub.pk, actor=self.user)
+
+        self.assertIn('class-section mapping(s) are associated', str(ctx.exception))
+        self.assertTrue(Subject.objects.filter(pk=sub.pk).exists())
+
+
+class SubjectWebViewsTests(TestCase):
+    """
+    Tests for Subject Dashboard web views.
+    """
+
+    def setUp(self):
+        call_command('sync_permissions')
+        self.user = User.objects.create_superuser(
+            username='admin_sub_web',
+            email='sub_web@school.local',
+            password='Password123!',
+        )
+        self.client.force_login(self.user)
+
+    def test_subjects_list_view_get(self):
+        response = self.client.get(reverse('academics-subjects-list'))
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'dashboard/academics/subjects_list.html')
+        self.assertIn('Subject Master Management', response.content.decode('utf-8'))
+
+    def test_subjects_list_view_create_post(self):
+        post_data = {
+            'action': 'create',
+            'name': 'Economics',
+            'code': 'eco-11',
+            'subject_type': 'ELECTIVE',
+            'is_theory': 'on',
+            'is_practical': '',
+            'description': 'Micro and Macro economics',
+            'is_active': 'on',
+        }
+        response = self.client.post(reverse('academics-subjects-list'), data=post_data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(Subject.objects.filter(code='ECO-11').exists())
+
+    def test_subjects_list_view_update_post(self):
+        sub = SubjectService.create_subject(name='Business Studies', code='BST-11')
+        post_data = {
+            'action': 'update',
+            'subject_id': sub.pk,
+            'name': 'Business Studies & Management',
+            'code': 'BST-11',
+            'subject_type': 'COMPULSORY',
+            'is_theory': 'on',
+            'is_active': 'on',
+        }
+        response = self.client.post(reverse('academics-subjects-list'), data=post_data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        sub.refresh_from_db()
+        self.assertEqual(sub.name, 'Business Studies & Management')
+
+    def test_subjects_list_view_delete_post(self):
+        sub = SubjectService.create_subject(name='French', code='FR-01')
+        post_data = {
+            'action': 'delete',
+            'subject_id': sub.pk,
+            'reason': 'Removing unused elective',
+        }
+        response = self.client.post(reverse('academics-subjects-list'), data=post_data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(Subject.objects.filter(pk=sub.pk).exists())
+
+    def test_subjects_list_view_filter_and_search(self):
+        sub1 = SubjectService.create_subject(name='Hindi Core', code='HIN-01', subject_type=SubjectType.COMPULSORY)
+        sub2 = SubjectService.create_subject(name='Hindi Elective', code='HIN-02', subject_type=SubjectType.ELECTIVE)
+
+        # Filter by type
+        response = self.client.get(f"{reverse('academics-subjects-list')}?type=COMPULSORY")
+        self.assertEqual(response.status_code, 200)
+        subs = list(response.context['subjects'])
+        self.assertIn(sub1, subs)
+        self.assertNotIn(sub2, subs)
+
+        # Search query
+        response = self.client.get(f"{reverse('academics-subjects-list')}?q=HIN-02")
+        self.assertEqual(response.status_code, 200)
+        subs = list(response.context['subjects'])
+        self.assertNotIn(sub1, subs)
+        self.assertIn(sub2, subs)

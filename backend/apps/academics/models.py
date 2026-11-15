@@ -27,6 +27,22 @@ class SchoolClass(TimeStampedModel):
     def __str__(self):
         return self.name
 
+    @property
+    def is_senior_secondary(self):
+        """
+        Returns True if the class is Class 11 or Class 12.
+        Matches standard CBSE codes and names (e.g. CL-11, CL-12, 11, 12, XI, XII).
+        """
+        import re
+        normalized_code = (self.code or '').strip().upper()
+        normalized_name = (self.name or '').strip().upper()
+        senior_tokens = {'11', '12', 'XI', 'XII', 'CL-11', 'CL-12', 'CLASS 11', 'CLASS 12', 'CLASS XI', 'CLASS XII'}
+        if normalized_code in senior_tokens or normalized_name in senior_tokens:
+            return True
+        if re.search(r'\b(11|12|XI|XII)\b', normalized_name) or re.search(r'\b(11|12|XI|XII)\b', normalized_code):
+            return True
+        return False
+
     def clean(self):
         super().clean()
         if self.name:
@@ -113,22 +129,137 @@ class Section(TimeStampedModel):
         if self.capacity is not None and self.capacity < 1:
             raise ValidationError({'capacity': _("Capacity must be a positive integer (>= 1).")})
 
+        if self.school_class.is_senior_secondary:
+            if not self.stream or self.stream == Stream.NONE:
+                raise ValidationError({
+                    'stream': _(f"Senior secondary classes (Classes 11 and 12) must be assigned a valid academic stream (e.g. Science, Commerce, Arts). 'General' is not permitted for '{self.school_class.name}'.")
+                })
+        else:
+            if self.stream and self.stream != Stream.NONE:
+                raise ValidationError({
+                    'stream': _(f"Streams are applicable only to Classes 11 and 12. '{self.school_class.name}' cannot have a stream.")
+                })
+
     def save(self, *args, **kwargs):
         self.clean()
         super().save(*args, **kwargs)
 
 
+class AcademicStream(TimeStampedModel):
+    """
+    Configurable academic streams for senior-secondary classes (Classes 11 and 12).
+    E.g. Science, Commerce, Humanities / Arts.
+    """
+    school_class = models.ForeignKey(
+        SchoolClass,
+        on_delete=models.CASCADE,
+        related_name='academic_streams',
+        help_text=_("Must be Class 11 or Class 12.")
+    )
+    name = models.CharField(max_length=50, help_text=_("e.g. Science, Commerce, Arts"))
+    code = models.CharField(max_length=20, help_text=_("e.g. SCI, COMM, ARTS"))
+    description = models.TextField(blank=True, default='')
+
+    class Meta:
+        db_table = 'academic_streams'
+        unique_together = (('school_class', 'name'), ('school_class', 'code'))
+        ordering = ['school_class__order', 'name']
+
+    def __str__(self):
+        return f"{self.school_class.name} - {self.name} ({self.code})"
+
+    def clean(self):
+        super().clean()
+        if not hasattr(self, 'school_class') or self.school_class_id is None:
+            raise ValidationError({'school_class': _("School class is required.")})
+
+        if not self.school_class.is_senior_secondary:
+            raise ValidationError({
+                'school_class': _(f"Streams can only be configured for senior-secondary classes (Class 11 and 12). '{self.school_class.name}' is not eligible.")
+            })
+
+        if self.name:
+            self.name = str(self.name).strip()
+            if not self.name:
+                raise ValidationError({'name': _("Stream name cannot be empty.")})
+            qs = AcademicStream.objects.filter(school_class=self.school_class, name__iexact=self.name)
+            if self.pk:
+                qs = qs.exclude(pk=self.pk)
+            if qs.exists():
+                raise ValidationError({'name': _(f"A stream named '{self.name}' already exists for {self.school_class.name}.")})
+        else:
+            raise ValidationError({'name': _("Stream name is required.")})
+
+        if self.code:
+            self.code = str(self.code).strip().upper()
+            if not self.code:
+                raise ValidationError({'code': _("Stream code cannot be empty.")})
+            qs = AcademicStream.objects.filter(school_class=self.school_class, code__iexact=self.code)
+            if self.pk:
+                qs = qs.exclude(pk=self.pk)
+            if qs.exists():
+                raise ValidationError({'code': _(f"A stream with code '{self.code}' already exists for {self.school_class.name}.")})
+        else:
+            raise ValidationError({'code': _("Stream code is required.")})
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
+
+
+class SubjectType(models.TextChoices):
+    COMPULSORY = 'COMPULSORY', _('Compulsory')
+    OPTIONAL = 'OPTIONAL', _('Optional')
+    ELECTIVE = 'ELECTIVE', _('Elective')
+
+
 class Subject(TimeStampedModel):
-    name = models.CharField(max_length=100)
-    code = models.CharField(max_length=20, unique=True)
-    is_theory = models.BooleanField(default=True)
-    is_practical = models.BooleanField(default=False)
+    name = models.CharField(max_length=100, help_text=_("e.g. Mathematics, English, Physics"))
+    code = models.CharField(max_length=20, unique=True, help_text=_("Unique subject code, e.g. MATH-10, PHY-11"))
+    subject_type = models.CharField(
+        max_length=20,
+        choices=SubjectType.choices,
+        default=SubjectType.COMPULSORY,
+        help_text=_("Default subject classification")
+    )
+    is_theory = models.BooleanField(default=True, help_text=_("Has written/theory examination"))
+    is_practical = models.BooleanField(default=False, help_text=_("Has laboratory/practical examination"))
+    description = models.TextField(blank=True, default='')
 
     class Meta:
         db_table = 'academic_subjects'
+        ordering = ['name', 'code']
 
     def __str__(self):
         return f"{self.name} ({self.code})"
+
+    def clean(self):
+        super().clean()
+        if self.name:
+            self.name = str(self.name).strip()
+            if not self.name:
+                raise ValidationError({'name': _("Subject name cannot be empty.")})
+        else:
+            raise ValidationError({'name': _("Subject name is required.")})
+
+        if self.code:
+            self.code = str(self.code).strip().upper()
+            if not self.code:
+                raise ValidationError({'code': _("Subject code cannot be empty.")})
+            qs = Subject.objects.filter(code__iexact=self.code)
+            if self.pk:
+                qs = qs.exclude(pk=self.pk)
+            if qs.exists():
+                raise ValidationError({'code': _(f"A subject with code '{self.code}' already exists.")})
+        else:
+            raise ValidationError({'code': _("Subject code is required.")})
+
+        if not self.is_theory and not self.is_practical:
+            raise ValidationError(_("A subject must include at least one component: Theory, Practical, or both."))
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
 
 
 class ClassSubject(TimeStampedModel):
