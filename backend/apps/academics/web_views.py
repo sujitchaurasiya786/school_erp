@@ -9,8 +9,10 @@ from django.db.models import Count, Sum
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
-from apps.academics.models import AcademicStream, SchoolClass, Section, Stream, Subject, SubjectType
-from apps.academics.services import AcademicYearService, SchoolClassService, SectionService, StreamService, SubjectService
+from apps.academics.models import AcademicStream, ClassSubject, SchoolClass, Section, Stream, Subject, SubjectType
+from apps.academics.services import (
+    AcademicYearService, ClassSubjectService, SchoolClassService, SectionService, StreamService, SubjectService
+)
 from apps.rbac.services import RBACService
 from apps.school_config.models import AcademicYear, SchoolProfile
 from common.exceptions import BusinessConflictError, ResourceNotFoundError
@@ -633,3 +635,225 @@ def subjects_list_view(request):
         'can_manage': _check_academics_permission(request, 'academics.subjects.manage'),
     }
     return render(request, 'dashboard/academics/subjects_list.html', context)
+
+
+# ==============================================================================
+# 6. Class–Subject Mapping Management
+# ==============================================================================
+@login_required(login_url='login')
+def class_subjects_list_view(request):
+    """
+    Displays the list of subjects mapped to classes and sections, with metrics,
+    filtering by class/section/stream/type, single mapping modal, and bulk mapping to class/stream modal.
+    """
+    can_view = _check_academics_permission(request, 'academics.class_subject.view') or \
+               _check_academics_permission(request, 'academics.subjects.view')
+    if not can_view:
+        messages.error(request, "You do not have permission to view class-subject mappings.")
+        return redirect('home-dashboard')
+
+    can_manage = _check_academics_permission(request, 'academics.class_subject.manage') or \
+                 _check_academics_permission(request, 'academics.subjects.manage')
+
+    if request.method == 'POST':
+        if not can_manage:
+            messages.error(request, "You do not have permission to manage class-subject mappings.")
+            return redirect('academics-class-subjects-list')
+
+        action = request.POST.get('action', 'create')
+
+        if action == 'create':
+            section_id = request.POST.get('section_id')
+            subject_id = request.POST.get('subject_id')
+            subject_type = request.POST.get('subject_type') or SubjectType.COMPULSORY
+            teacher_id = request.POST.get('teacher_id') or None
+            academic_year_id = request.POST.get('academic_year_id') or None
+            is_active = request.POST.get('is_active') == 'on'
+            reason = request.POST.get('reason', '').strip()
+
+            try:
+                mapping = ClassSubjectService.create_mapping(
+                    section_id=section_id,
+                    subject_id=subject_id,
+                    subject_type=subject_type,
+                    academic_year_id=academic_year_id,
+                    teacher_id=teacher_id,
+                    is_active=is_active,
+                    actor=request.user,
+                    reason=reason or f"Mapped subject from dashboard",
+                    request=request,
+                )
+                messages.success(
+                    request,
+                    f"Subject '{mapping.subject.name}' mapped to '{mapping.section}' successfully."
+                )
+            except (ValidationError, ResourceNotFoundError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to map subject: {msg}")
+            except Exception as err:
+                messages.error(request, f"An unexpected error occurred: {err}")
+
+            return redirect('academics-class-subjects-list')
+
+        elif action == 'bulk_map':
+            school_class_id = request.POST.get('school_class_id')
+            stream = request.POST.get('stream', '').strip() or None
+            section_id = request.POST.get('section_id', '').strip() or None
+            subject_ids = request.POST.getlist('subject_ids')
+            default_subject_type = request.POST.get('default_subject_type', SubjectType.COMPULSORY)
+            academic_year_id = request.POST.get('academic_year_id', '').strip() or None
+            reason = request.POST.get('reason', '').strip()
+
+            try:
+                res = ClassSubjectService.bulk_map_subjects_to_class(
+                    school_class_id=school_class_id,
+                    subject_ids=subject_ids,
+                    stream=stream,
+                    section_id=section_id,
+                    subject_type=default_subject_type,
+                    academic_year_id=academic_year_id,
+                    actor=request.user,
+                    reason=reason or f"Bulk mapped subjects to class from dashboard",
+                    request=request,
+                )
+                messages.success(
+                    request,
+                    f"Successfully mapped {res['created_count']} subject(s) to sections "
+                    f"(skipped {res['skipped_count']} already mapped)."
+                )
+            except (ValidationError, ResourceNotFoundError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Bulk mapping failed: {msg}")
+            except Exception as err:
+                messages.error(request, f"An unexpected error occurred: {err}")
+
+            return redirect('academics-class-subjects-list')
+
+        elif action == 'update':
+            mapping_id = request.POST.get('mapping_id')
+            subject_type = request.POST.get('subject_type')
+            teacher_id = request.POST.get('teacher_id') or None
+            academic_year_id = request.POST.get('academic_year_id') or None
+            is_active = request.POST.get('is_active') == 'on'
+            reason = request.POST.get('reason', '').strip()
+
+            try:
+                mapping = ClassSubjectService.update_mapping(
+                    mapping_id=mapping_id,
+                    actor=request.user,
+                    subject_type=subject_type,
+                    teacher_id=teacher_id,
+                    academic_year_id=academic_year_id,
+                    is_active=is_active,
+                    reason=reason or "Updated ClassSubject mapping from dashboard",
+                    request=request,
+                )
+                messages.success(request, f"Mapping for '{mapping.subject.name}' updated successfully.")
+            except (ValidationError, ResourceNotFoundError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to update mapping: {msg}")
+            except Exception as err:
+                messages.error(request, f"An unexpected error occurred: {err}")
+
+            return redirect('academics-class-subjects-list')
+
+        elif action == 'delete':
+            mapping_id = request.POST.get('mapping_id')
+            reason = request.POST.get('reason', '').strip()
+
+            try:
+                ClassSubjectService.delete_mapping(
+                    mapping_id=mapping_id,
+                    actor=request.user,
+                    reason=reason or "Unmapped subject from dashboard",
+                    request=request,
+                )
+                messages.success(request, "Subject unmapped successfully.")
+            except BusinessConflictError as err:
+                messages.warning(request, str(err))
+            except (ResourceNotFoundError, ValidationError) as err:
+                messages.error(request, str(err))
+            except Exception as err:
+                messages.error(request, f"An unexpected error occurred: {err}")
+
+            return redirect('academics-class-subjects-list')
+
+        elif action == 'copy_section':
+            source_section_id = request.POST.get('source_section_id')
+            target_section_ids = request.POST.getlist('target_section_ids')
+            reason = request.POST.get('reason', '').strip()
+
+            try:
+                res = ClassSubjectService.copy_mappings_across_sections(
+                    source_section_id=source_section_id,
+                    target_section_ids=target_section_ids,
+                    actor=request.user,
+                    reason=reason or "Copied section mappings from dashboard",
+                    request=request,
+                )
+                messages.success(
+                    request,
+                    f"Successfully copied {res['copied_count']} subject mapping(s) "
+                    f"(skipped {res['skipped_count']} already present)."
+                )
+            except (ValidationError, ResourceNotFoundError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to copy mappings: {msg}")
+            except Exception as err:
+                messages.error(request, f"An unexpected error occurred: {err}")
+
+            return redirect('academics-class-subjects-list')
+
+    # Query params for filtering & search
+    selected_class_id = request.GET.get('class_id', '').strip()
+    selected_section_id = request.GET.get('section_id', '').strip()
+    selected_stream = request.GET.get('stream', '').strip()
+    selected_type = request.GET.get('subject_type', '').strip()
+    search_query = request.GET.get('q', '').strip()
+
+    mappings_qs = ClassSubjectService.list_mappings(
+        school_class_id=int(selected_class_id) if selected_class_id.isdigit() else None,
+        section_id=int(selected_section_id) if selected_section_id.isdigit() else None,
+        stream=selected_stream if selected_stream in dict(Stream.choices) else None,
+        subject_type=selected_type if selected_type in dict(SubjectType.choices) else None,
+        search=search_query or None,
+    )
+
+    all_classes = SchoolClass.objects.filter(is_active=True).order_by('order', 'name')
+    all_sections = Section.objects.filter(is_active=True).select_related('school_class').order_by('school_class__order', 'name')
+    all_subjects = Subject.objects.filter(is_active=True).order_by('name', 'code')
+
+    from apps.identity.models import User
+    all_teachers = User.objects.filter(is_active=True).order_by('first_name', 'last_name', 'username')
+    academic_years = AcademicYear.objects.all().order_by('-start_date')
+    current_year = AcademicYearService.get_current_year()
+
+    total_mappings = ClassSubject.objects.count()
+    active_mappings_count = ClassSubject.objects.filter(is_active=True).count()
+    compulsory_count = ClassSubject.objects.filter(subject_type=SubjectType.COMPULSORY).count()
+    elective_count = ClassSubject.objects.filter(subject_type__in=[SubjectType.ELECTIVE, SubjectType.OPTIONAL]).count()
+    classes_covered = ClassSubject.objects.values('section__school_class').distinct().count()
+
+    context = {
+        'mappings': mappings_qs,
+        'all_classes': all_classes,
+        'all_sections': all_sections,
+        'all_subjects': all_subjects,
+        'all_teachers': all_teachers,
+        'academic_years': academic_years,
+        'current_year': current_year,
+        'streams': Stream.choices,
+        'subject_types': SubjectType.choices,
+        'selected_class_id': int(selected_class_id) if selected_class_id.isdigit() else None,
+        'selected_section_id': int(selected_section_id) if selected_section_id.isdigit() else None,
+        'selected_stream': selected_stream,
+        'selected_type': selected_type,
+        'search_query': search_query,
+        'total_mappings': total_mappings,
+        'active_mappings_count': active_mappings_count,
+        'compulsory_count': compulsory_count,
+        'elective_count': elective_count,
+        'classes_covered': classes_covered,
+        'can_manage': can_manage,
+    }
+    return render(request, 'dashboard/academics/class_subjects_list.html', context)

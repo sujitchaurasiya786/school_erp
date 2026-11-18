@@ -9,6 +9,7 @@ from apps.academics.web_views import (
     sections_list_view,
     streams_list_view,
     subjects_list_view,
+    class_subjects_list_view,
 )
 
 urlpatterns = [
@@ -27,4 +28,7 @@ urlpatterns = [
 
     # Subject Master Management
     path('subjects/', subjects_list_view, name='academics-subjects-list'),
+
+    # Class–Subject Mapping Management
+    path('class-subjects/', class_subjects_list_view, name='academics-class-subjects-list'),
 ]

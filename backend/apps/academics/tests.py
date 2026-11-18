@@ -10,7 +10,9 @@ from django.urls import reverse
 from django.contrib.auth import get_user_model
 
 from apps.academics.models import AcademicStream, ClassSubject, SchoolClass, Section, Stream, Subject, SubjectType, TimetablePeriod, TimetableSlot
-from apps.academics.services import AcademicYearService, SchoolClassService, SectionService, StreamService, SubjectService
+from apps.academics.services import (
+    AcademicYearService, ClassSubjectService, SchoolClassService, SectionService, StreamService, SubjectService
+)
 from apps.audit.models import AuditAction, AuditLog
 from apps.rbac.models import Permission
 from apps.rbac.registry import PERMISSION_REGISTRY
@@ -1634,3 +1636,314 @@ class SubjectWebViewsTests(TestCase):
         subs = list(response.context['subjects'])
         self.assertNotIn(sub1, subs)
         self.assertIn(sub2, subs)
+
+
+# ==============================================================================
+# Phase 2 Step 5: Class–Subject Mapping Tests
+# ==============================================================================
+
+class ClassSubjectModelValidationTests(TestCase):
+    """
+    Unit tests for ClassSubject model validation rules.
+    """
+
+    def setUp(self):
+        self.school_class = SchoolClass.objects.create(name='Class 9', code='CL-09', order=9)
+        self.section = Section.objects.create(school_class=self.school_class, name='A')
+        self.subject = Subject.objects.create(name='Mathematics', code='MATH-09', is_theory=True)
+
+    def test_valid_class_subject_creation(self):
+        mapping = ClassSubject(
+            section=self.section,
+            subject=self.subject,
+            subject_type=SubjectType.COMPULSORY
+        )
+        mapping.full_clean()
+        mapping.save()
+        self.assertEqual(mapping.is_elective, False)
+        self.assertIn('Class 9 - A', str(mapping))
+        self.assertIn('Mathematics', str(mapping))
+
+    def test_inactive_subject_rejected(self):
+        self.subject.is_active = False
+        self.subject.save()
+        mapping = ClassSubject(section=self.section, subject=self.subject)
+        with self.assertRaises(ValidationError) as ctx:
+            mapping.full_clean()
+        self.assertIn('subject', ctx.exception.message_dict)
+
+    def test_duplicate_mapping_rejected(self):
+        ClassSubject.objects.create(section=self.section, subject=self.subject)
+        dup = ClassSubject(section=self.section, subject=self.subject)
+        with self.assertRaises(ValidationError) as ctx:
+            dup.full_clean()
+        self.assertIn('subject', ctx.exception.message_dict)
+
+    def test_is_elective_synced_with_subject_type(self):
+        mapping = ClassSubject(
+            section=self.section,
+            subject=self.subject,
+            subject_type=SubjectType.ELECTIVE
+        )
+        mapping.full_clean()
+        mapping.save()
+        self.assertTrue(mapping.is_elective)
+
+
+class ClassSubjectServiceTests(TestCase):
+    """
+    Focused unit tests for ClassSubjectService business logic, bulk mapping, and audit trails.
+    """
+
+    def setUp(self):
+        self.actor = User.objects.create_user(username='admin_sub_svc', email='admin_sub_svc@example.com', is_staff=True)
+        self.c10 = SchoolClassService.create_class(name='Class 10', code='CL-10', order=10, actor=self.actor)
+        self.sec10_a = SectionService.create_section(school_class_id=self.c10.pk, name='A', actor=self.actor)
+        self.sec10_b = SectionService.create_section(school_class_id=self.c10.pk, name='B', actor=self.actor)
+
+        self.c11 = SchoolClassService.create_class(name='Class 11', code='CL-11', order=11, actor=self.actor)
+        self.sec11_sci = SectionService.create_section(school_class_id=self.c11.pk, name='A', stream=Stream.SCIENCE, actor=self.actor)
+        self.sec11_comm = SectionService.create_section(school_class_id=self.c11.pk, name='B', stream=Stream.COMMERCE, actor=self.actor)
+
+        self.sub_eng = SubjectService.create_subject(name='English Core', code='ENG-10', actor=self.actor)
+        self.sub_math = SubjectService.create_subject(name='Mathematics Standard', code='MATH-10', actor=self.actor)
+        self.sub_phy = SubjectService.create_subject(name='Physics', code='PHY-11', is_theory=True, is_practical=True, actor=self.actor)
+        self.sub_chem = SubjectService.create_subject(name='Chemistry', code='CHEM-11', is_theory=True, is_practical=True, actor=self.actor)
+
+    def test_create_mapping_success_and_audit(self):
+        m = ClassSubjectService.create_mapping(
+            section_id=self.sec10_a.pk,
+            subject_id=self.sub_eng.pk,
+            subject_type=SubjectType.COMPULSORY,
+            actor=self.actor,
+            reason="Mapped English to 10-A"
+        )
+        self.assertEqual(m.section, self.sec10_a)
+        self.assertEqual(m.subject, self.sub_eng)
+        self.assertEqual(m.subject_type, SubjectType.COMPULSORY)
+        self.assertFalse(m.is_elective)
+
+        log = AuditLog.objects.filter(entity_type='ClassSubject', entity_id=str(m.pk), action=AuditAction.CREATE).first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.actor, self.actor)
+
+    def test_create_mapping_duplicate_fails(self):
+        ClassSubjectService.create_mapping(section_id=self.sec10_a.pk, subject_id=self.sub_eng.pk, actor=self.actor)
+        with self.assertRaises(ValidationError):
+            ClassSubjectService.create_mapping(section_id=self.sec10_a.pk, subject_id=self.sub_eng.pk, actor=self.actor)
+
+    def test_create_mapping_inactive_subject_fails(self):
+        inactive_sub = SubjectService.create_subject(name='Latin', code='LAT-01', is_active=False, actor=self.actor)
+        with self.assertRaises(ValidationError):
+            ClassSubjectService.create_mapping(section_id=self.sec10_a.pk, subject_id=inactive_sub.pk, actor=self.actor)
+
+    def test_bulk_map_subjects_to_junior_class(self):
+        res = ClassSubjectService.bulk_map_subjects_to_class(
+            school_class_id=self.c10.pk,
+            subject_ids=[self.sub_eng.pk, self.sub_math.pk],
+            default_subject_type=SubjectType.COMPULSORY if hasattr(SubjectType, 'COMPULSORY') else None,
+            actor=self.actor
+        )
+        # 2 subjects * 2 sections = 4 mappings
+        self.assertEqual(res['created_count'], 4)
+        self.assertEqual(res['skipped_count'], 0)
+        self.assertEqual(ClassSubject.objects.filter(section__school_class=self.c10).count(), 4)
+
+    def test_bulk_map_senior_class_with_stream(self):
+        res = ClassSubjectService.bulk_map_subjects_to_class(
+            school_class_id=self.c11.pk,
+            subject_ids=[self.sub_phy.pk, self.sub_chem.pk],
+            stream=Stream.SCIENCE,
+            actor=self.actor
+        )
+        # Mapped to sec11_sci only, not sec11_comm
+        self.assertEqual(res['created_count'], 2)
+        self.assertEqual(ClassSubject.objects.filter(section=self.sec11_sci).count(), 2)
+        self.assertEqual(ClassSubject.objects.filter(section=self.sec11_comm).count(), 0)
+
+    def test_bulk_map_senior_class_rejects_general_stream(self):
+        with self.assertRaises(ValidationError):
+            ClassSubjectService.bulk_map_subjects_to_class(
+                school_class_id=self.c11.pk,
+                subject_ids=[self.sub_phy.pk],
+                stream=Stream.NONE,
+                actor=self.actor
+            )
+
+    def test_bulk_map_junior_class_rejects_non_general_stream(self):
+        with self.assertRaises(ValidationError):
+            ClassSubjectService.bulk_map_subjects_to_class(
+                school_class_id=self.c10.pk,
+                subject_ids=[self.sub_eng.pk],
+                stream=Stream.SCIENCE,
+                actor=self.actor
+            )
+
+    def test_bulk_map_skips_existing_mappings(self):
+        # First map English to 10-A
+        ClassSubjectService.create_mapping(section_id=self.sec10_a.pk, subject_id=self.sub_eng.pk, actor=self.actor)
+
+        # Now bulk map English and Math to Class 10 (sections A & B)
+        res = ClassSubjectService.bulk_map_subjects_to_class(
+            school_class_id=self.c10.pk,
+            subject_ids=[self.sub_eng.pk, self.sub_math.pk],
+            actor=self.actor
+        )
+        # Section A already has English (1 skipped), needs Math (1 created)
+        # Section B needs English & Math (2 created)
+        self.assertEqual(res['created_count'], 3)
+        self.assertEqual(res['skipped_count'], 1)
+
+    def test_update_mapping_and_audit(self):
+        m = ClassSubjectService.create_mapping(section_id=self.sec10_a.pk, subject_id=self.sub_eng.pk, actor=self.actor)
+        updated = ClassSubjectService.update_mapping(
+            mapping_id=m.pk,
+            subject_type=SubjectType.ELECTIVE,
+            actor=self.actor,
+            reason="Converted to elective"
+        )
+        self.assertEqual(updated.subject_type, SubjectType.ELECTIVE)
+        self.assertTrue(updated.is_elective)
+
+        log = AuditLog.objects.filter(entity_type='ClassSubject', entity_id=str(m.pk), action=AuditAction.UPDATE).first()
+        self.assertIsNotNone(log)
+
+    def test_delete_mapping_success_and_audit(self):
+        m = ClassSubjectService.create_mapping(section_id=self.sec10_a.pk, subject_id=self.sub_eng.pk, actor=self.actor)
+        m_pk = m.pk
+        ClassSubjectService.delete_mapping(mapping_id=m_pk, actor=self.actor, reason="Removed subject")
+        self.assertFalse(ClassSubject.objects.filter(pk=m_pk).exists())
+
+        log = AuditLog.objects.filter(entity_type='ClassSubject', entity_id=str(m_pk), action=AuditAction.DELETE).first()
+        self.assertIsNotNone(log)
+
+    def test_delete_mapping_blocked_by_timetable_slots(self):
+        from apps.school_config.models import AcademicYear
+        ay = AcademicYear.objects.create(name='2026-2027', start_date=date(2026, 4, 1), end_date=date(2027, 3, 31))
+        period = TimetablePeriod.objects.create(period_number=1, name='P1', start_time='08:30', end_time='09:15')
+        m = ClassSubjectService.create_mapping(section_id=self.sec10_a.pk, subject_id=self.sub_eng.pk, actor=self.actor)
+
+        # Create dependent timetable slot
+        slot = TimetableSlot.objects.create(
+            academic_year=ay,
+            day_of_week=1,
+            period=period,
+            class_subject=m
+        )
+        with self.assertRaises(BusinessConflictError):
+            ClassSubjectService.delete_mapping(mapping_id=m.pk, actor=self.actor)
+
+        # Should still exist
+        self.assertTrue(ClassSubject.objects.filter(pk=m.pk).exists())
+
+    def test_copy_mappings_across_sections(self):
+        ClassSubjectService.create_mapping(section_id=self.sec10_a.pk, subject_id=self.sub_eng.pk, actor=self.actor)
+        ClassSubjectService.create_mapping(section_id=self.sec10_a.pk, subject_id=self.sub_math.pk, actor=self.actor)
+
+        res = ClassSubjectService.copy_mappings_across_sections(
+            source_section_id=self.sec10_a.pk,
+            target_section_ids=[self.sec10_b.pk],
+            actor=self.actor
+        )
+        self.assertEqual(res['copied_count'], 2)
+        self.assertEqual(ClassSubject.objects.filter(section=self.sec10_b).count(), 2)
+
+
+class ClassSubjectWebViewsTests(TestCase):
+    """
+    Integration tests for Class-Subject Mapping dashboard web views.
+    """
+
+    def setUp(self):
+        call_command('sync_permissions', verbosity=0)
+        self.superuser = User.objects.create_superuser(
+            username='admin_cs_web',
+            email='admin_cs_web@example.com',
+            password='Password123!'
+        )
+        self.c10 = SchoolClassService.create_class(name='Class 10', code='CL-10', order=10, actor=self.superuser)
+        self.sec10_a = SectionService.create_section(school_class_id=self.c10.pk, name='A', actor=self.superuser)
+        self.sub = SubjectService.create_subject(name='Computer Science', code='CS-01', actor=self.superuser)
+
+        self.client.force_login(self.superuser)
+
+    def test_anonymous_redirected_to_login(self):
+        self.client.logout()
+        response = self.client.get(reverse('academics-class-subjects-list'))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/login/', response.url)
+
+    def test_superuser_has_full_access(self):
+        response = self.client.get(reverse('academics-class-subjects-list'))
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'dashboard/academics/class_subjects_list.html')
+        self.assertTrue(response.context['can_manage'])
+
+    def test_class_subjects_list_view_single_create_post(self):
+        post_data = {
+            'action': 'create',
+            'section_id': self.sec10_a.pk,
+            'subject_id': self.sub.pk,
+            'subject_type': 'COMPULSORY',
+            'is_active': 'on',
+        }
+        response = self.client.post(reverse('academics-class-subjects-list'), data=post_data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(ClassSubject.objects.filter(section=self.sec10_a, subject=self.sub).exists())
+
+    def test_class_subjects_list_view_bulk_map_post(self):
+        sub2 = SubjectService.create_subject(name='Economics', code='ECO-10', actor=self.superuser)
+        post_data = {
+            'action': 'bulk_map',
+            'school_class_id': self.c10.pk,
+            'subject_ids': [self.sub.pk, sub2.pk],
+            'default_subject_type': 'OPTIONAL',
+        }
+        response = self.client.post(reverse('academics-class-subjects-list'), data=post_data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(ClassSubject.objects.filter(section=self.sec10_a).count(), 2)
+
+    def test_class_subjects_list_view_update_post(self):
+        m = ClassSubjectService.create_mapping(section_id=self.sec10_a.pk, subject_id=self.sub.pk, actor=self.superuser)
+        post_data = {
+            'action': 'update',
+            'mapping_id': m.pk,
+            'subject_type': 'ELECTIVE',
+            'is_active': 'on',
+        }
+        response = self.client.post(reverse('academics-class-subjects-list'), data=post_data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        m.refresh_from_db()
+        self.assertEqual(m.subject_type, SubjectType.ELECTIVE)
+        self.assertTrue(m.is_elective)
+
+    def test_class_subjects_list_view_delete_post(self):
+        m = ClassSubjectService.create_mapping(section_id=self.sec10_a.pk, subject_id=self.sub.pk, actor=self.superuser)
+        post_data = {
+            'action': 'delete',
+            'mapping_id': m.pk,
+            'reason': 'Removing subject from section',
+        }
+        response = self.client.post(reverse('academics-class-subjects-list'), data=post_data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(ClassSubject.objects.filter(pk=m.pk).exists())
+
+    def test_class_subjects_list_view_filtering(self):
+        sub2 = SubjectService.create_subject(name='History', code='HIS-10', actor=self.superuser)
+        m1 = ClassSubjectService.create_mapping(section_id=self.sec10_a.pk, subject_id=self.sub.pk, subject_type=SubjectType.COMPULSORY, actor=self.superuser)
+        m2 = ClassSubjectService.create_mapping(section_id=self.sec10_a.pk, subject_id=sub2.pk, subject_type=SubjectType.ELECTIVE, actor=self.superuser)
+
+        # Filter by subject_type
+        response = self.client.get(f"{reverse('academics-class-subjects-list')}?subject_type=COMPULSORY")
+        self.assertEqual(response.status_code, 200)
+        mappings = list(response.context['mappings'])
+        self.assertIn(m1, mappings)
+        self.assertNotIn(m2, mappings)
+
+        # Search query
+        response = self.client.get(f"{reverse('academics-class-subjects-list')}?q=History")
+        self.assertEqual(response.status_code, 200)
+        mappings = list(response.context['mappings'])
+        self.assertNotIn(m1, mappings)
+        self.assertIn(m2, mappings)
+

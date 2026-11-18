@@ -267,7 +267,21 @@ PERMISSION_REGISTRY = [
         "module": "academics",
         "action": "change",
         "name": "Manage Subjects",
-        "description": "Create, edit, and map subjects to classes and sections.",
+        "description": "Create and edit subjects in the master catalog.",
+    },
+    {
+        "codename": "academics.class_subject.view",
+        "module": "academics",
+        "action": "view",
+        "name": "View Class-Subject Mappings",
+        "description": "View curriculum subjects mapped to classes, streams, and sections.",
+    },
+    {
+        "codename": "academics.class_subject.manage",
+        "module": "academics",
+        "action": "change",
+        "name": "Manage Class-Subject Mappings",
+        "description": "Map subjects to classes, streams, and sections, and set compulsory/elective types.",
     },
     # ── Attendance ────────────────────────────────────────────────────────
     {

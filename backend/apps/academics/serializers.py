@@ -51,13 +51,31 @@ class SubjectSerializer(serializers.ModelSerializer):
 
 
 class ClassSubjectSerializer(serializers.ModelSerializer):
-    section_name = serializers.ReadOnlyField(source='section.__str__')
+    class_id = serializers.ReadOnlyField(source='section.school_class.id')
+    class_name = serializers.ReadOnlyField(source='section.school_class.name')
+    section_name = serializers.ReadOnlyField(source='section.name')
+    full_section_name = serializers.ReadOnlyField(source='section.__str__')
+    stream = serializers.ReadOnlyField(source='section.stream')
+    stream_display = serializers.ReadOnlyField(source='section.get_stream_display')
     subject_name = serializers.ReadOnlyField(source='subject.name')
+    subject_code = serializers.ReadOnlyField(source='subject.code')
+    is_theory = serializers.ReadOnlyField(source='subject.is_theory')
+    is_practical = serializers.ReadOnlyField(source='subject.is_practical')
+    subject_type_display = serializers.CharField(source='get_subject_type_display', read_only=True)
     teacher_name = serializers.ReadOnlyField(source='teacher.get_full_name')
+    academic_year_name = serializers.ReadOnlyField(source='academic_year.name')
 
     class Meta:
         model = ClassSubject
-        fields = ['id', 'section', 'section_name', 'subject', 'subject_name', 'teacher', 'teacher_name', 'is_elective']
+        fields = [
+            'id', 'section', 'full_section_name', 'class_id', 'class_name',
+            'section_name', 'stream', 'stream_display', 'subject', 'subject_name',
+            'subject_code', 'is_theory', 'is_practical', 'subject_type',
+            'subject_type_display', 'is_elective', 'academic_year',
+            'academic_year_name', 'teacher', 'teacher_name', 'is_active',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
 
 
 class TimetablePeriodSerializer(serializers.ModelSerializer):

@@ -4,7 +4,9 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
 
-from apps.academics.models import AcademicStream, SchoolClass, Section, Stream, Subject, SubjectType, TimetableSlot
+from apps.academics.models import (
+    AcademicStream, ClassSubject, SchoolClass, Section, Stream, Subject, SubjectType, TimetableSlot
+)
 from apps.audit.models import AuditAction
 from apps.audit.services import AuditService
 from apps.school_config.models import AcademicYear
@@ -405,7 +407,9 @@ class AcademicYearService:
         # Check for dependent records across ERP modules
         dependencies = []
 
-        from apps.academics.models import AcademicStream, SchoolClass, Section, Stream, Subject, SubjectType, TimetableSlot
+        from apps.academics.models import (
+    AcademicStream, ClassSubject, SchoolClass, Section, Stream, Subject, SubjectType, TimetableSlot
+)
         tt_count = TimetableSlot.objects.filter(academic_year=year).count()
         if tt_count:
             dependencies.append(f"{tt_count} timetable slot(s)")
@@ -1285,3 +1289,478 @@ class SubjectService:
             changes={"subject": subject_str},
             request=request,
         )
+
+
+class ClassSubjectService:
+    """
+    Class-Subject Mapping Service for School ERP.
+
+    Encapsulates all curriculum mapping business rules:
+      - Maps central Subject catalog records to Classes, Streams, and Sections.
+      - Enforces that only active subjects can be newly mapped.
+      - Manages curriculum classifications (Compulsory, Optional, Elective).
+      - Enforces senior secondary stream consistency (Classes 11-12).
+      - Provides atomic bulk mapping across sections of a class or stream.
+      - Provides copying of mappings from one section to other sections.
+      - Protects mapped subjects with dependent timetable slots from deletion.
+      - Logs all sensitive mapping events through AuditService.
+    """
+
+    @classmethod
+    @transaction.atomic
+    def create_mapping(
+        cls,
+        section_id,
+        subject_id,
+        subject_type=None,
+        academic_year_id=None,
+        teacher_id=None,
+        is_active=True,
+        actor=None,
+        reason="",
+        request=None
+    ):
+        """
+        Creates a single ClassSubject mapping for a section with validation and audit logging.
+        """
+        try:
+            section = Section.objects.select_for_update().select_related('school_class').get(pk=section_id)
+        except Section.DoesNotExist:
+            raise ResourceNotFoundError(f"Section with ID {section_id} not found.")
+
+        try:
+            subject = Subject.objects.get(pk=subject_id)
+        except Subject.DoesNotExist:
+            raise ResourceNotFoundError(f"Subject with ID {subject_id} not found.")
+
+        if not subject.is_active:
+            raise ValidationError({'subject': _(f"Cannot map inactive subject '{subject.name}'.")})
+
+        resolved_type = subject_type or subject.subject_type or SubjectType.COMPULSORY
+
+        academic_year = None
+        if academic_year_id:
+            try:
+                academic_year = AcademicYear.objects.get(pk=academic_year_id)
+            except AcademicYear.DoesNotExist:
+                raise ResourceNotFoundError(f"Academic Year with ID {academic_year_id} not found.")
+
+        teacher = None
+        if teacher_id:
+            from apps.identity.models import User
+            try:
+                teacher = User.objects.get(pk=teacher_id)
+            except User.DoesNotExist:
+                raise ResourceNotFoundError(f"User with ID {teacher_id} not found.")
+
+        if ClassSubject.objects.filter(section=section, subject=subject).exists():
+            raise ValidationError({
+                'subject': _(f"Subject '{subject.name}' is already mapped to Section '{section}'.")
+            })
+
+        is_elective_val = (resolved_type == SubjectType.ELECTIVE)
+
+        mapping = ClassSubject(
+            section=section,
+            subject=subject,
+            subject_type=resolved_type,
+            is_elective=is_elective_val,
+            academic_year=academic_year,
+            teacher=teacher,
+            is_active=is_active
+        )
+        mapping.clean()
+        mapping.save()
+
+        AuditService.log(
+            action=AuditAction.CREATE,
+            module="academics",
+            entity_type="ClassSubject",
+            entity_id=str(mapping.pk),
+            actor=actor,
+            reason=reason or f"Mapped subject {subject.name} to section {section}",
+            changes={
+                "section": str(section),
+                "subject": subject.name,
+                "code": subject.code,
+                "subject_type": resolved_type,
+                "is_elective": is_elective_val,
+                "teacher": teacher.get_full_name() if teacher else None,
+                "academic_year": academic_year.name if academic_year else None,
+            },
+            request=request,
+        )
+        return mapping
+
+    @classmethod
+    @transaction.atomic
+    def bulk_map_subjects_to_class(
+        cls,
+        school_class_id,
+        subject_ids,
+        stream=None,
+        section_id=None,
+        subject_type=None,
+        default_subject_type=None,
+        subject_type_map=None,
+        academic_year_id=None,
+        actor=None,
+        reason="",
+        request=None
+    ):
+        """
+        Bulk maps multiple subjects to all sections of a class/stream (or a specific section).
+        Skips already mapped subjects gracefully without failing the entire operation.
+        """
+        resolved_default_type = subject_type or default_subject_type
+        try:
+            school_class = SchoolClass.objects.get(pk=school_class_id)
+        except SchoolClass.DoesNotExist:
+            raise ResourceNotFoundError(f"Class with ID {school_class_id} not found.")
+
+        if not subject_ids:
+            raise ValidationError({'subjects': _("At least one subject must be selected for mapping.")})
+
+        # Validate stream compatibility with class
+        if school_class.is_senior_secondary:
+            if stream and stream == Stream.NONE:
+                raise ValidationError({'stream': _(f"Senior secondary classes require an academic stream. 'General' is invalid for '{school_class.name}'.")})
+        else:
+            if stream and stream != Stream.NONE:
+                raise ValidationError({'stream': _(f"Streams are applicable only to Classes 11 and 12. '{school_class.name}' cannot have a stream.")})
+
+        academic_year = None
+        if academic_year_id:
+            try:
+                academic_year = AcademicYear.objects.get(pk=academic_year_id)
+            except AcademicYear.DoesNotExist:
+                raise ResourceNotFoundError(f"Academic Year with ID {academic_year_id} not found.")
+
+        if section_id:
+            sections_qs = Section.objects.select_for_update().filter(pk=section_id, school_class=school_class, is_active=True)
+            if not sections_qs.exists():
+                raise ResourceNotFoundError(f"Active section {section_id} not found in {school_class.name}.")
+        else:
+            sections_qs = Section.objects.select_for_update().filter(school_class=school_class, is_active=True)
+            if stream and stream != Stream.NONE:
+                sections_qs = sections_qs.filter(stream=stream)
+
+        sections = list(sections_qs)
+        if not sections:
+            raise ValidationError({'sections': _(f"No active sections found for class '{school_class.name}' matching the criteria.")})
+
+        subjects = list(Subject.objects.filter(pk__in=subject_ids, is_active=True))
+        if not subjects:
+            raise ValidationError({'subjects': _("None of the selected subjects are active or valid.")})
+
+        created_mappings = []
+        skipped_count = 0
+
+        for section in sections:
+            existing_subject_ids = set(
+                ClassSubject.objects.filter(section=section).values_list('subject_id', flat=True)
+            )
+            for sub in subjects:
+                if sub.id in existing_subject_ids:
+                    skipped_count += 1
+                    continue
+
+                st = None
+                if subject_type_map and str(sub.id) in subject_type_map:
+                    st = subject_type_map[str(sub.id)]
+                elif resolved_default_type:
+                    st = resolved_default_type
+                else:
+                    st = sub.subject_type or SubjectType.COMPULSORY
+
+                is_elec = (st == SubjectType.ELECTIVE)
+
+                m = ClassSubject(
+                    section=section,
+                    subject=sub,
+                    subject_type=st,
+                    is_elective=is_elec,
+                    academic_year=academic_year,
+                    is_active=True
+                )
+                m.clean()
+                m.save()
+                created_mappings.append(m)
+                existing_subject_ids.add(sub.id)
+
+        created_count = len(created_mappings)
+
+        AuditService.log(
+            action=AuditAction.CREATE,
+            module="academics",
+            entity_type="ClassSubject",
+            entity_id=str(school_class.pk),
+            actor=actor,
+            reason=reason or f"Bulk mapped {created_count} subject(s) to class {school_class.name} (skipped {skipped_count})",
+            changes={
+                "school_class": school_class.name,
+                "stream": stream,
+                "sections_count": len(sections),
+                "created_count": created_count,
+                "skipped_count": skipped_count,
+            },
+            request=request,
+        )
+
+        return {
+            'created_count': created_count,
+            'skipped_count': skipped_count,
+            'created_mappings': created_mappings,
+        }
+
+    @classmethod
+    @transaction.atomic
+    def update_mapping(
+        cls,
+        mapping_id,
+        actor=None,
+        reason="",
+        request=None,
+        **kwargs
+    ):
+        """
+        Updates an existing ClassSubject mapping (subject_type, teacher, academic_year, is_active).
+        """
+        try:
+            mapping = ClassSubject.objects.select_for_update().select_related('section', 'subject').get(pk=mapping_id)
+        except ClassSubject.DoesNotExist:
+            raise ResourceNotFoundError(f"ClassSubject mapping with ID {mapping_id} not found.")
+
+        changes = {}
+
+        if 'subject_type' in kwargs:
+            st = kwargs['subject_type']
+            if st != mapping.subject_type:
+                changes['subject_type'] = {'old': mapping.subject_type, 'new': st}
+                mapping.subject_type = st
+                mapping.is_elective = (st == SubjectType.ELECTIVE)
+
+        if 'is_elective' in kwargs and 'subject_type' not in kwargs:
+            ie = bool(kwargs['is_elective'])
+            if ie != mapping.is_elective:
+                changes['is_elective'] = {'old': mapping.is_elective, 'new': ie}
+                mapping.is_elective = ie
+                if ie:
+                    mapping.subject_type = SubjectType.ELECTIVE
+
+        if 'teacher_id' in kwargs:
+            t_id = kwargs['teacher_id']
+            old_t = str(mapping.teacher) if mapping.teacher else None
+            if t_id:
+                from apps.identity.models import User
+                try:
+                    new_t = User.objects.get(pk=t_id)
+                    mapping.teacher = new_t
+                    changes['teacher'] = {'old': old_t, 'new': str(new_t)}
+                except User.DoesNotExist:
+                    raise ResourceNotFoundError(f"User with ID {t_id} not found.")
+            else:
+                mapping.teacher = None
+                changes['teacher'] = {'old': old_t, 'new': None}
+
+        if 'academic_year_id' in kwargs:
+            ay_id = kwargs['academic_year_id']
+            old_ay = str(mapping.academic_year) if mapping.academic_year else None
+            if ay_id:
+                try:
+                    new_ay = AcademicYear.objects.get(pk=ay_id)
+                    mapping.academic_year = new_ay
+                    changes['academic_year'] = {'old': old_ay, 'new': str(new_ay)}
+                except AcademicYear.DoesNotExist:
+                    raise ResourceNotFoundError(f"Academic Year with ID {ay_id} not found.")
+            else:
+                mapping.academic_year = None
+                changes['academic_year'] = {'old': old_ay, 'new': None}
+
+        if 'is_active' in kwargs:
+            ia = bool(kwargs['is_active'])
+            if ia != mapping.is_active:
+                changes['is_active'] = {'old': mapping.is_active, 'new': ia}
+                mapping.is_active = ia
+
+        mapping.clean()
+        mapping.save()
+
+        if changes:
+            AuditService.log(
+                action=AuditAction.UPDATE,
+                module="academics",
+                entity_type="ClassSubject",
+                entity_id=str(mapping.pk),
+                actor=actor,
+                reason=reason or f"Updated ClassSubject mapping {mapping}",
+                changes=changes,
+                request=request,
+            )
+
+        return mapping
+
+    @classmethod
+    @transaction.atomic
+    def delete_mapping(
+        cls,
+        mapping_id,
+        actor=None,
+        reason="",
+        request=None
+    ):
+        """
+        Deletes a ClassSubject mapping only if no dependent timetable slots exist.
+        Otherwise raises BusinessConflictError to preserve scheduling integrity.
+        """
+        try:
+            mapping = ClassSubject.objects.select_for_update().select_related('section', 'subject').get(pk=mapping_id)
+        except ClassSubject.DoesNotExist:
+            raise ResourceNotFoundError(f"ClassSubject mapping with ID {mapping_id} not found.")
+
+        # Check dependent timetable slots
+        slots_count = mapping.timetableslot_set.count()
+        if slots_count > 0:
+            raise BusinessConflictError(
+                f"Cannot unmap '{mapping.subject.name}' from '{mapping.section}': "
+                f"{slots_count} timetable slot(s) depend on this mapping. Remove the timetable slots first."
+            )
+
+        mapping_str = str(mapping)
+        mapping_pk = str(mapping.pk)
+        mapping.delete()
+
+        AuditService.log(
+            action=AuditAction.DELETE,
+            module="academics",
+            entity_type="ClassSubject",
+            entity_id=mapping_pk,
+            actor=actor,
+            reason=reason or f"Deleted ClassSubject mapping {mapping_str}",
+            changes={"mapping": mapping_str},
+            request=request,
+        )
+        return True
+
+    @classmethod
+    @transaction.atomic
+    def copy_mappings_across_sections(
+        cls,
+        source_section_id,
+        target_section_ids,
+        actor=None,
+        reason="",
+        request=None
+    ):
+        """
+        Copies all active subject mappings from source_section to target_sections, skipping duplicates.
+        """
+        try:
+            source_sec = Section.objects.get(pk=source_section_id)
+        except Section.DoesNotExist:
+            raise ResourceNotFoundError(f"Source section with ID {source_section_id} not found.")
+
+        source_mappings = list(ClassSubject.objects.filter(section=source_sec, is_active=True))
+        if not source_mappings:
+            raise ValidationError({'source_section': _(f"Source section '{source_sec}' has no active subject mappings to copy.")})
+
+        target_sections = list(Section.objects.filter(pk__in=target_section_ids, is_active=True))
+        if not target_sections:
+            raise ValidationError({'target_sections': _("No valid target sections provided.")})
+
+        copied_count = 0
+        skipped_count = 0
+
+        for tgt in target_sections:
+            if tgt.id == source_sec.id:
+                continue
+            existing_sub_ids = set(ClassSubject.objects.filter(section=tgt).values_list('subject_id', flat=True))
+            for sm in source_mappings:
+                if sm.subject_id in existing_sub_ids:
+                    skipped_count += 1
+                    continue
+                m = ClassSubject(
+                    section=tgt,
+                    subject=sm.subject,
+                    subject_type=sm.subject_type,
+                    is_elective=sm.is_elective,
+                    academic_year=sm.academic_year,
+                    is_active=True
+                )
+                m.clean()
+                m.save()
+                existing_sub_ids.add(sm.subject_id)
+                copied_count += 1
+
+        AuditService.log(
+            action=AuditAction.CREATE,
+            module="academics",
+            entity_type="ClassSubject",
+            entity_id=str(source_sec.pk),
+            actor=actor,
+            reason=reason or f"Copied {copied_count} mappings from {source_sec} to {len(target_sections)} section(s)",
+            changes={
+                "source_section": str(source_sec),
+                "copied_count": copied_count,
+                "skipped_count": skipped_count,
+            },
+            request=request,
+        )
+
+        return {'copied_count': copied_count, 'skipped_count': skipped_count}
+
+    @classmethod
+    def get_mapping(cls, mapping_id):
+        """
+        Retrieves a single ClassSubject mapping or raises ResourceNotFoundError.
+        """
+        try:
+            return ClassSubject.objects.select_related(
+                'section', 'section__school_class', 'subject', 'teacher', 'academic_year'
+            ).get(pk=mapping_id)
+        except ClassSubject.DoesNotExist:
+            raise ResourceNotFoundError(f"ClassSubject mapping with ID {mapping_id} not found.")
+
+    @classmethod
+    def list_mappings(
+        cls,
+        school_class_id=None,
+        section_id=None,
+        stream=None,
+        subject_type=None,
+        subject_id=None,
+        academic_year_id=None,
+        search=None,
+        is_active=None
+    ):
+        """
+        Returns a filtered QuerySet of ClassSubject mappings with select_related optimization.
+        """
+        qs = ClassSubject.objects.select_related(
+            'section', 'section__school_class', 'subject', 'teacher', 'academic_year'
+        ).all().order_by('section__school_class__order', 'section__name', 'subject__name')
+
+        if school_class_id:
+            qs = qs.filter(section__school_class_id=school_class_id)
+        if section_id:
+            qs = qs.filter(section_id=section_id)
+        if stream:
+            qs = qs.filter(section__stream=stream)
+        if subject_type:
+            qs = qs.filter(subject_type=subject_type)
+        if subject_id:
+            qs = qs.filter(subject_id=subject_id)
+        if academic_year_id:
+            qs = qs.filter(academic_year_id=academic_year_id)
+        if is_active is not None:
+            qs = qs.filter(is_active=is_active)
+        if search:
+            search = search.strip()
+            qs = qs.filter(
+                Q(subject__name__icontains=search) |
+                Q(subject__code__icontains=search) |
+                Q(section__name__icontains=search) |
+                Q(section__school_class__name__icontains=search)
+            )
+
+        return qs

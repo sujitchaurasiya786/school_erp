@@ -7,7 +7,10 @@ from apps.academics.serializers import (
     SchoolClassSerializer, SectionSerializer, SubjectSerializer,
     ClassSubjectSerializer, TimetablePeriodSerializer, TimetableSlotSerializer
 )
-from apps.academics.services import AcademicsService
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from rest_framework import status
+from apps.academics.services import AcademicsService, ClassSubjectService
 from apps.rbac.permissions import HasDynamicPermission
 
 
@@ -34,11 +37,41 @@ class SubjectViewSet(viewsets.ModelViewSet):
 
 
 class ClassSubjectViewSet(viewsets.ModelViewSet):
-    queryset = ClassSubject.objects.select_related('section', 'subject', 'teacher').all()
+    queryset = ClassSubject.objects.select_related(
+        'section', 'section__school_class', 'subject', 'teacher', 'academic_year'
+    ).all()
     serializer_class = ClassSubjectSerializer
     permission_classes = [IsAuthenticated, HasDynamicPermission]
     module_name = 'academics'
-    filterset_fields = ['section', 'subject', 'teacher']
+    filterset_fields = ['section', 'subject', 'teacher', 'subject_type', 'is_elective', 'is_active', 'academic_year']
+    search_fields = ['subject__name', 'subject__code', 'section__name', 'section__school_class__name']
+
+    @action(detail=False, methods=['post'], url_path='bulk-map')
+    def bulk_map(self, request):
+        school_class_id = request.data.get('school_class')
+        subject_ids = request.data.get('subjects', [])
+        stream = request.data.get('stream')
+        section_id = request.data.get('section')
+        subject_type = request.data.get('subject_type')
+        academic_year_id = request.data.get('academic_year')
+
+        result = ClassSubjectService.bulk_map_subjects_to_class(
+            school_class_id=school_class_id,
+            subject_ids=subject_ids,
+            stream=stream,
+            section_id=section_id,
+            subject_type=subject_type,
+            academic_year_id=academic_year_id,
+            actor=request.user,
+            reason=f"API bulk mapping to class {school_class_id}",
+            request=request,
+        )
+        serializer = self.get_serializer(result['created_mappings'], many=True)
+        return Response({
+            'created_count': result['created_count'],
+            'skipped_count': result['skipped_count'],
+            'created_mappings': serializer.data
+        }, status=status.HTTP_201_CREATED)
 
 
 class TimetablePeriodViewSet(viewsets.ModelViewSet):

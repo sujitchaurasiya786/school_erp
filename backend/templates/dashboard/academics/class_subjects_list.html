@@ -1,0 +1,877 @@
+{% extends "dashboard/base.html" %}
+{% load static %}
+
+{% block title %}Class–Subject Mapping | School ERP{% endblock %}
+
+{% block admin %}
+<div class="container-fluid px-0">
+    <!-- Breadcrumb & Header -->
+    <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-4">
+        <div>
+            <nav aria-label="breadcrumb">
+                <ol class="breadcrumb mb-1">
+                    <li class="breadcrumb-item"><a href="{% url 'home-dashboard' %}">Dashboard</a></li>
+                    <li class="breadcrumb-item">Academics</li>
+                    <li class="breadcrumb-item active" aria-current="page">Class–Subject Mapping</li>
+                </ol>
+            </nav>
+            <h2 class="h4 fw-bold text-dark mb-0">Class–Subject Mapping</h2>
+            <p class="text-muted small mb-0">Define curriculum subjects for classes, streams (Classes 11–12), and sections with compulsory/elective rules.</p>
+        </div>
+        <div class="mt-3 mt-md-0 d-flex flex-wrap gap-2">
+            <a href="{% url 'academics-subjects-list' %}" class="btn btn-outline-secondary">
+                <i class="ti ti-books me-1"></i> Subjects Catalog
+            </a>
+            {% if can_manage %}
+            <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#copySectionModal">
+                <i class="ti ti-copy me-1"></i> Copy Between Sections
+            </button>
+            <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#bulkMapModal">
+                <i class="ti ti-layers-linked me-1"></i> Map to Class / Stream
+            </button>
+            <button type="button" class="btn btn-primary shadow-sm" data-bs-toggle="modal" data-bs-target="#createMappingModal">
+                <i class="ti ti-plus me-1"></i> Add Single Mapping
+            </button>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Django Messages Alerts -->
+    {% if messages %}
+    <div class="mb-3">
+        {% for message in messages %}
+        <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show shadow-sm" role="alert">
+            <i class="ti ti-info-circle me-1"></i> {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Metrics Cards -->
+    <div class="row g-3 mb-4">
+        <div class="col-sm-6 col-xl-3">
+            <div class="card border-0 shadow-sm rounded-3">
+                <div class="card-body d-flex align-items-center">
+                    <div class="avatar avatar-md bg-light-primary text-primary rounded-3 me-3 p-3 d-flex align-items-center justify-content-center">
+                        <i class="ti ti-link fs-3"></i>
+                    </div>
+                    <div>
+                        <span class="text-muted small text-uppercase fw-semibold d-block">Total Mappings</span>
+                        <h4 class="fw-bold mb-0">{{ total_mappings }}</h4>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-6 col-xl-3">
+            <div class="card border-0 shadow-sm rounded-3">
+                <div class="card-body d-flex align-items-center">
+                    <div class="avatar avatar-md bg-light-success text-success rounded-3 me-3 p-3 d-flex align-items-center justify-content-center">
+                        <i class="ti ti-building fs-3"></i>
+                    </div>
+                    <div>
+                        <span class="text-muted small text-uppercase fw-semibold d-block">Classes Covered</span>
+                        <h4 class="fw-bold text-success mb-0">{{ classes_covered }} / {{ all_classes|length }}</h4>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-6 col-xl-3">
+            <div class="card border-0 shadow-sm rounded-3">
+                <div class="card-body d-flex align-items-center">
+                    <div class="avatar avatar-md bg-light-info text-info rounded-3 me-3 p-3 d-flex align-items-center justify-content-center">
+                        <i class="ti ti-check fs-3"></i>
+                    </div>
+                    <div>
+                        <span class="text-muted small text-uppercase fw-semibold d-block">Compulsory Mappings</span>
+                        <h4 class="fw-bold text-info mb-0">{{ compulsory_count }}</h4>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-6 col-xl-3">
+            <div class="card border-0 shadow-sm rounded-3">
+                <div class="card-body d-flex align-items-center">
+                    <div class="avatar avatar-md bg-light-warning text-warning rounded-3 me-3 p-3 d-flex align-items-center justify-content-center">
+                        <i class="ti ti-adjustments-horizontal fs-3"></i>
+                    </div>
+                    <div>
+                        <span class="text-muted small text-uppercase fw-semibold d-block">Electives & Optionals</span>
+                        <h4 class="fw-bold text-warning mb-0">{{ elective_count }}</h4>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Filters & Search Bar -->
+    <div class="card border-0 shadow-sm rounded-3 mb-4">
+        <div class="card-body p-3">
+            <form method="get" class="row g-2 align-items-center">
+                <!-- Class filter -->
+                <div class="col-12 col-sm-6 col-lg-2">
+                    <select name="class_id" class="form-select form-select-sm" onchange="this.form.submit()">
+                        <option value="">All Classes</option>
+                        {% for c in all_classes %}
+                        <option value="{{ c.id }}" {% if selected_class_id == c.id %}selected{% endif %}>
+                            {{ c.name }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- Section filter -->
+                <div class="col-12 col-sm-6 col-lg-2">
+                    <select name="section_id" class="form-select form-select-sm" onchange="this.form.submit()">
+                        <option value="">All Sections</option>
+                        {% for s in all_sections %}
+                        <option value="{{ s.id }}" {% if selected_section_id == s.id %}selected{% endif %}>
+                            {{ s }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- Stream filter -->
+                <div class="col-12 col-sm-6 col-lg-2">
+                    <select name="stream" class="form-select form-select-sm" onchange="this.form.submit()">
+                        <option value="">All Streams</option>
+                        {% for s_val, s_label in streams %}
+                        <option value="{{ s_val }}" {% if selected_stream == s_val %}selected{% endif %}>
+                            {{ s_label }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- Subject Type filter -->
+                <div class="col-12 col-sm-6 col-lg-2">
+                    <select name="subject_type" class="form-select form-select-sm" onchange="this.form.submit()">
+                        <option value="">All Types</option>
+                        {% for t_val, t_label in subject_types %}
+                        <option value="{{ t_val }}" {% if selected_type == t_val %}selected{% endif %}>
+                            {{ t_label }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- Search Input -->
+                <div class="col-12 col-sm-8 col-lg-3">
+                    <div class="input-group input-group-sm">
+                        <span class="input-group-text bg-light border-end-0"><i class="ti ti-search text-muted"></i></span>
+                        <input type="text" name="q" class="form-control border-start-0 ps-0" placeholder="Search subject or code..." value="{{ search_query }}">
+                    </div>
+                </div>
+
+                <!-- Submit / Clear -->
+                <div class="col-12 col-sm-4 col-lg-1 d-flex gap-1">
+                    <button type="submit" class="btn btn-sm btn-primary w-100">Filter</button>
+                    {% if selected_class_id or selected_section_id or selected_stream or selected_type or search_query %}
+                    <a href="{% url 'academics-class-subjects-list' %}" class="btn btn-sm btn-outline-secondary" title="Clear Filters">
+                        <i class="ti ti-x"></i>
+                    </a>
+                    {% endif %}
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Mappings Table -->
+    <div class="card border-0 shadow-sm rounded-3">
+        <div class="card-header bg-white border-0 py-3 d-flex justify-content-between align-items-center">
+            <h5 class="card-title fw-bold text-dark mb-0">Active Curriculum Mappings</h5>
+            <span class="badge bg-light-primary text-primary px-3 py-2 rounded-pill font-monospace">
+                {{ mappings|length }} record{{ mappings|length|pluralize }}
+            </span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th class="ps-4">Class & Section</th>
+                        <th>Stream</th>
+                        <th>Subject</th>
+                        <th>Code</th>
+                        <th>Components</th>
+                        <th>Classification</th>
+                        <th>Assigned Teacher</th>
+                        <th>Status</th>
+                        <th class="text-end pe-4">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for m in mappings %}
+                    <tr>
+                        <td class="ps-4">
+                            <div class="fw-semibold text-dark">{{ m.section.school_class.name }}</div>
+                            <span class="badge bg-light text-secondary border">Section {{ m.section.name }}</span>
+                        </td>
+                        <td>
+                            {% if m.section.school_class.is_senior_secondary %}
+                                {% if m.section.stream == 'SCIENCE' %}
+                                <span class="badge bg-light-primary text-primary"><i class="ti ti-atom me-1"></i>Science</span>
+                                {% elif m.section.stream == 'COMMERCE' %}
+                                <span class="badge bg-light-success text-success"><i class="ti ti-chart-line me-1"></i>Commerce</span>
+                                {% elif m.section.stream == 'ARTS' %}
+                                <span class="badge bg-light-warning text-warning"><i class="ti ti-palette me-1"></i>Arts</span>
+                                {% else %}
+                                <span class="badge bg-light-secondary text-secondary">{{ m.section.get_stream_display }}</span>
+                                {% endif %}
+                            {% else %}
+                            <span class="text-muted small">General (N–10)</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="fw-semibold text-dark">{{ m.subject.name }}</div>
+                            {% if m.academic_year %}
+                            <span class="text-muted small"><i class="ti ti-calendar me-1"></i>{{ m.academic_year.name }}</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <span class="badge bg-light-dark text-dark font-monospace fw-bold">{{ m.subject.code }}</span>
+                        </td>
+                        <td>
+                            {% if m.subject.is_theory %}
+                            <span class="badge bg-light-primary text-primary me-1" title="Written Examination"><i class="ti ti-file-text me-1"></i>Theory</span>
+                            {% endif %}
+                            {% if m.subject.is_practical %}
+                            <span class="badge bg-light-info text-info" title="Laboratory / Practical Examination"><i class="ti ti-flask me-1"></i>Practical</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if m.subject_type == 'COMPULSORY' %}
+                            <span class="badge bg-light-primary text-primary fw-semibold"><i class="ti ti-circle-check me-1"></i>Compulsory</span>
+                            {% elif m.subject_type == 'ELECTIVE' %}
+                            <span class="badge bg-light-info text-info fw-semibold"><i class="ti ti-list-check me-1"></i>Elective</span>
+                            {% elif m.subject_type == 'OPTIONAL' %}
+                            <span class="badge bg-light-warning text-warning fw-semibold"><i class="ti ti-adjustments me-1"></i>Optional</span>
+                            {% else %}
+                            <span class="badge bg-light text-secondary">{{ m.get_subject_type_display }}</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if m.teacher %}
+                            <span class="badge bg-light-secondary text-dark border">
+                                <i class="ti ti-user me-1"></i>{{ m.teacher.get_full_name|default:m.teacher.username }}
+                            </span>
+                            {% else %}
+                            <span class="text-muted small fst-italic">Unassigned</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if m.is_active %}
+                            <span class="badge bg-light-success text-success"><i class="ti ti-check me-1"></i>Active</span>
+                            {% else %}
+                            <span class="badge bg-light-secondary text-muted"><i class="ti ti-x me-1"></i>Inactive</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end pe-4">
+                            {% if can_manage %}
+                            <div class="dropdown">
+                                <button class="btn btn-sm btn-icon btn-light" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                                    <i class="ti ti-dots-vertical"></i>
+                                </button>
+                                <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+                                    <li>
+                                        <button class="dropdown-item edit-mapping-btn"
+                                                data-id="{{ m.id }}"
+                                                data-section="{{ m.section }}"
+                                                data-subject="{{ m.subject.name }} ({{ m.subject.code }})"
+                                                data-subject-type="{{ m.subject_type }}"
+                                                data-teacher-id="{{ m.teacher_id|default:'' }}"
+                                                data-academic-year-id="{{ m.academic_year_id|default:'' }}"
+                                                data-is-active="{{ m.is_active|yesno:'true,false' }}">
+                                            <i class="ti ti-edit me-2 text-primary"></i> Edit Mapping
+                                        </button>
+                                    </li>
+                                    <li><hr class="dropdown-divider"></li>
+                                    <li>
+                                        <button class="dropdown-item text-danger delete-mapping-btn"
+                                                data-id="{{ m.id }}"
+                                                data-subject="{{ m.subject.name }}"
+                                                data-section="{{ m.section }}">
+                                            <i class="ti ti-trash me-2"></i> Unmap Subject
+                                        </button>
+                                    </li>
+                                </ul>
+                            </div>
+                            {% else %}
+                            <span class="text-muted small"><i class="ti ti-lock"></i></span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="9" class="text-center py-5">
+                            <div class="text-muted mb-2"><i class="ti ti-link-off fs-1"></i></div>
+                            <h6 class="fw-bold text-dark mb-1">No Subject Mappings Found</h6>
+                            <p class="text-muted small mb-3">
+                                {% if selected_class_id or selected_section_id or selected_stream or selected_type or search_query %}
+                                No mappings match the selected filter criteria. Try adjusting your filters.
+                                {% else %}
+                                No subjects have been mapped to classes or sections yet. Use the buttons above to map subjects.
+                                {% endif %}
+                            </p>
+                            {% if can_manage and not mappings %}
+                            <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#bulkMapModal">
+                                <i class="ti ti-layers-linked me-1"></i> Map Subjects to Class
+                            </button>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================================= -->
+<!-- Modal 1: Map Subjects to Class / Stream (Bulk Mapping)                  -->
+<!-- ======================================================================= -->
+{% if can_manage %}
+<div class="modal fade" id="bulkMapModal" tabindex="-1" aria-labelledby="bulkMapModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <form method="post" action="{% url 'academics-class-subjects-list' %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="bulk_map">
+                <div class="modal-header bg-light">
+                    <h5 class="modal-title fw-bold text-dark" id="bulkMapModalLabel">
+                        <i class="ti ti-layers-linked me-2 text-primary"></i> Map Subjects to Class / Stream
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <p class="text-muted small mb-3">
+                        Select a Class, optional Stream (for senior secondary), and check the subjects you want to map across all active sections.
+                    </p>
+
+                    <div class="row g-3 mb-3">
+                        <!-- Select Class -->
+                        <div class="col-md-6">
+                            <label for="bulkClassSelect" class="form-label fw-semibold">Target Class <span class="text-danger">*</span></label>
+                            <select class="form-select" id="bulkClassSelect" name="school_class_id" required>
+                                <option value="" disabled selected>-- Choose Class --</option>
+                                {% for c in all_classes %}
+                                <option value="{{ c.id }}" data-is-senior="{{ c.is_senior_secondary|yesno:'true,false' }}">
+                                    {{ c.name }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <!-- Stream Selector (dynamically shown/hidden) -->
+                        <div class="col-md-6" id="bulkStreamWrapper">
+                            <label for="bulkStreamSelect" class="form-label fw-semibold">Academic Stream <span class="text-danger" id="bulkStreamAsterisk">*</span></label>
+                            <select class="form-select" id="bulkStreamSelect" name="stream">
+                                <option value="NONE" id="bulkOptGeneral" selected>General (Nursery–Class 10)</option>
+                                <option value="SCIENCE" id="bulkOptSci">Science</option>
+                                <option value="COMMERCE" id="bulkOptComm">Commerce</option>
+                                <option value="ARTS" id="bulkOptArts">Humanities / Arts</option>
+                            </select>
+                            <div class="form-text small" id="bulkStreamHelpText">Senior secondary classes require an academic stream.</div>
+                        </div>
+
+                        <!-- Specific Section (Optional) -->
+                        <div class="col-md-6">
+                            <label for="bulkSectionSelect" class="form-label fw-semibold">Scope of Mapping</label>
+                            <select class="form-select" id="bulkSectionSelect" name="section_id">
+                                <option value="">Apply to ALL matching active sections</option>
+                                {% for s in all_sections %}
+                                <option value="{{ s.id }}" data-class-id="{{ s.school_class_id }}" data-stream="{{ s.stream }}" class="bulk-section-option d-none">
+                                    {{ s }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                            <div class="form-text small">Leave as 'ALL' to map across all sections in the selected class/stream.</div>
+                        </div>
+
+                        <!-- Default Subject Classification -->
+                        <div class="col-md-6">
+                            <label for="bulkDefaultType" class="form-label fw-semibold">Default Classification <span class="text-danger">*</span></label>
+                            <select class="form-select" id="bulkDefaultType" name="default_subject_type" required>
+                                <option value="COMPULSORY" selected>Compulsory (Core Curriculum)</option>
+                                <option value="OPTIONAL">Optional</option>
+                                <option value="ELECTIVE">Elective</option>
+                            </select>
+                        </div>
+
+                        <!-- Academic Session -->
+                        <div class="col-md-6">
+                            <label for="bulkYearSelect" class="form-label fw-semibold">Academic Session</label>
+                            <select class="form-select" id="bulkYearSelect" name="academic_year_id">
+                                <option value="">Default (No year constraint)</option>
+                                {% for yr in academic_years %}
+                                <option value="{{ yr.id }}" {% if current_year and current_year.id == yr.id %}selected{% endif %}>
+                                    {{ yr.name }} {% if yr.is_current %}(Current){% endif %}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Subjects Checklist -->
+                    <div class="mb-3">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <label class="form-label fw-semibold mb-0">Select Subjects to Map <span class="text-danger">*</span></label>
+                            <div class="btn-group btn-group-sm">
+                                <button type="button" class="btn btn-outline-secondary" id="bulkSelectAllBtn">Select All</button>
+                                <button type="button" class="btn btn-outline-secondary" id="bulkDeselectAllBtn">Clear All</button>
+                            </div>
+                        </div>
+                        <div class="border rounded p-3 bg-light" style="max-height: 220px; overflow-y: auto;">
+                            <div class="row g-2">
+                                {% for sub in all_subjects %}
+                                <div class="col-md-6">
+                                    <div class="form-check">
+                                        <input class="form-check-input bulk-subject-checkbox" type="checkbox" name="subject_ids" value="{{ sub.id }}" id="subCheck_{{ sub.id }}">
+                                        <label class="form-check-label d-block text-truncate" for="subCheck_{{ sub.id }}" title="{{ sub.name }} ({{ sub.code }})">
+                                            <span class="badge bg-secondary font-monospace me-1">{{ sub.code }}</span>
+                                            {{ sub.name }}
+                                        </label>
+                                    </div>
+                                </div>
+                                {% empty %}
+                                <div class="col-12 text-muted small">No active subjects available in the master catalog.</div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Reason -->
+                    <div class="mb-0">
+                        <label for="bulkReason" class="form-label fw-semibold">Audit Reason</label>
+                        <input type="text" class="form-control" id="bulkReason" name="reason" placeholder="e.g. Initial CBSE curriculum mapping for Class 10">
+                    </div>
+                </div>
+                <div class="modal-footer bg-light">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="ti ti-check me-1"></i> Apply Mappings
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================================= -->
+<!-- Modal 2: Add Single Mapping                                             -->
+<!-- ======================================================================= -->
+<div class="modal fade" id="createMappingModal" tabindex="-1" aria-labelledby="createMappingModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <form method="post" action="{% url 'academics-class-subjects-list' %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="create">
+                <div class="modal-header bg-light">
+                    <h5 class="modal-title fw-bold text-dark" id="createMappingModalLabel">
+                        <i class="ti ti-plus me-2 text-primary"></i> Add Single Class–Subject Mapping
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <!-- Section -->
+                    <div class="mb-3">
+                        <label for="createSectionSelect" class="form-label fw-semibold">Target Section <span class="text-danger">*</span></label>
+                        <select class="form-select" id="createSectionSelect" name="section_id" required>
+                            <option value="" disabled selected>-- Select Class & Section --</option>
+                            {% for s in all_sections %}
+                            <option value="{{ s.id }}">{{ s }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <!-- Subject -->
+                    <div class="mb-3">
+                        <label for="createSubjectSelect" class="form-label fw-semibold">Subject <span class="text-danger">*</span></label>
+                        <select class="form-select" id="createSubjectSelect" name="subject_id" required>
+                            <option value="" disabled selected>-- Select Subject --</option>
+                            {% for sub in all_subjects %}
+                            <option value="{{ sub.id }}">{{ sub.name }} ({{ sub.code }})</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <!-- Subject Type -->
+                    <div class="mb-3">
+                        <label for="createTypeSelect" class="form-label fw-semibold">Classification <span class="text-danger">*</span></label>
+                        <select class="form-select" id="createTypeSelect" name="subject_type" required>
+                            {% for t_val, t_label in subject_types %}
+                            <option value="{{ t_val }}" {% if t_val == 'COMPULSORY' %}selected{% endif %}>{{ t_label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <!-- Assigned Teacher (Optional) -->
+                    <div class="mb-3">
+                        <label for="createTeacherSelect" class="form-label fw-semibold">Assigned Teacher (Optional)</label>
+                        <select class="form-select" id="createTeacherSelect" name="teacher_id">
+                            <option value="">-- Unassigned (Assign Later in Phase 3) --</option>
+                            {% for t in all_teachers %}
+                            <option value="{{ t.id }}">{{ t.get_full_name|default:t.username }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <!-- Academic Session -->
+                    <div class="mb-3">
+                        <label for="createYearSelect" class="form-label fw-semibold">Academic Session (Optional)</label>
+                        <select class="form-select" id="createYearSelect" name="academic_year_id">
+                            <option value="">-- Default / All Sessions --</option>
+                            {% for yr in academic_years %}
+                            <option value="{{ yr.id }}" {% if current_year and current_year.id == yr.id %}selected{% endif %}>
+                                {{ yr.name }} {% if yr.is_current %}(Current){% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <!-- Active status -->
+                    <div class="form-check form-switch mb-3">
+                        <input class="form-check-input" type="checkbox" id="createIsActive" name="is_active" checked>
+                        <label class="form-check-label" for="createIsActive">Active Mapping</label>
+                    </div>
+
+                    <!-- Reason -->
+                    <div class="mb-0">
+                        <label for="createReason" class="form-label fw-semibold">Audit Reason</label>
+                        <input type="text" class="form-control" id="createReason" name="reason" placeholder="e.g. Mapped elective subject">
+                    </div>
+                </div>
+                <div class="modal-footer bg-light">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="ti ti-check me-1"></i> Save Mapping
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================================= -->
+<!-- Modal 3: Edit Mapping                                                   -->
+<!-- ======================================================================= -->
+<div class="modal fade" id="editMappingModal" tabindex="-1" aria-labelledby="editMappingModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <form method="post" action="{% url 'academics-class-subjects-list' %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="update">
+                <input type="hidden" name="mapping_id" id="editMappingId">
+                <div class="modal-header bg-light">
+                    <h5 class="modal-title fw-bold text-dark" id="editMappingModalLabel">
+                        <i class="ti ti-edit me-2 text-primary"></i> Edit Class–Subject Mapping
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="alert alert-light border mb-3">
+                        <div class="d-flex justify-content-between">
+                            <span class="text-muted small">Section:</span>
+                            <span class="fw-bold" id="editSectionDisplay"></span>
+                        </div>
+                        <div class="d-flex justify-content-between mt-1">
+                            <span class="text-muted small">Subject:</span>
+                            <span class="fw-bold text-primary" id="editSubjectDisplay"></span>
+                        </div>
+                    </div>
+
+                    <!-- Classification -->
+                    <div class="mb-3">
+                        <label for="editSubjectType" class="form-label fw-semibold">Classification <span class="text-danger">*</span></label>
+                        <select class="form-select" id="editSubjectType" name="subject_type" required>
+                            {% for t_val, t_label in subject_types %}
+                            <option value="{{ t_val }}">{{ t_label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <!-- Assigned Teacher -->
+                    <div class="mb-3">
+                        <label for="editTeacherSelect" class="form-label fw-semibold">Assigned Teacher</label>
+                        <select class="form-select" id="editTeacherSelect" name="teacher_id">
+                            <option value="">-- Unassigned --</option>
+                            {% for t in all_teachers %}
+                            <option value="{{ t.id }}">{{ t.get_full_name|default:t.username }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <!-- Academic Session -->
+                    <div class="mb-3">
+                        <label for="editAcademicYearSelect" class="form-label fw-semibold">Academic Session</label>
+                        <select class="form-select" id="editAcademicYearSelect" name="academic_year_id">
+                            <option value="">-- None / All Sessions --</option>
+                            {% for yr in academic_years %}
+                            <option value="{{ yr.id }}">{{ yr.name }} {% if yr.is_current %}(Current){% endif %}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <!-- Active Toggle -->
+                    <div class="form-check form-switch mb-3">
+                        <input class="form-check-input" type="checkbox" id="editIsActive" name="is_active">
+                        <label class="form-check-label" for="editIsActive">Active Mapping</label>
+                    </div>
+
+                    <!-- Reason -->
+                    <div class="mb-0">
+                        <label for="editReason" class="form-label fw-semibold">Audit Reason</label>
+                        <input type="text" class="form-control" id="editReason" name="reason" placeholder="e.g. Changed classification to Elective">
+                    </div>
+                </div>
+                <div class="modal-footer bg-light">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="ti ti-check me-1"></i> Update Mapping
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================================= -->
+<!-- Modal 4: Copy Mappings Across Sections                                  -->
+<!-- ======================================================================= -->
+<div class="modal fade" id="copySectionModal" tabindex="-1" aria-labelledby="copySectionModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <form method="post" action="{% url 'academics-class-subjects-list' %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="copy_section">
+                <div class="modal-header bg-light">
+                    <h5 class="modal-title fw-bold text-dark" id="copySectionModalLabel">
+                        <i class="ti ti-copy me-2 text-primary"></i> Copy Mappings Between Sections
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <p class="text-muted small mb-3">
+                        Quickly duplicate all subject mappings from a source section (e.g. Section A) to other target sections. Existing mappings in the target sections are preserved.
+                    </p>
+
+                    <!-- Source Section -->
+                    <div class="mb-3">
+                        <label for="copySourceSection" class="form-label fw-semibold">Source Section (Copy From) <span class="text-danger">*</span></label>
+                        <select class="form-select" id="copySourceSection" name="source_section_id" required>
+                            <option value="" disabled selected>-- Choose Source Section --</option>
+                            {% for s in all_sections %}
+                            <option value="{{ s.id }}">{{ s }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <!-- Target Sections -->
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Target Section(s) (Copy To) <span class="text-danger">*</span></label>
+                        <div class="border rounded p-3 bg-light" style="max-height: 180px; overflow-y: auto;">
+                            {% for s in all_sections %}
+                            <div class="form-check">
+                                <input class="form-check-input copy-target-checkbox" type="checkbox" name="target_section_ids" value="{{ s.id }}" id="copyTarget_{{ s.id }}">
+                                <label class="form-check-label" for="copyTarget_{{ s.id }}">
+                                    {{ s }}
+                                </label>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    <!-- Reason -->
+                    <div class="mb-0">
+                        <label for="copyReason" class="form-label fw-semibold">Audit Reason</label>
+                        <input type="text" class="form-control" id="copyReason" name="reason" placeholder="e.g. Synchronized Section B with Section A">
+                    </div>
+                </div>
+                <div class="modal-footer bg-light">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="ti ti-copy me-1"></i> Copy Mappings
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================================= -->
+<!-- Modal 5: Delete / Unmap Subject                                         -->
+<!-- ======================================================================= -->
+<div class="modal fade" id="deleteMappingModal" tabindex="-1" aria-labelledby="deleteMappingModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <form method="post" action="{% url 'academics-class-subjects-list' %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="delete">
+                <input type="hidden" name="mapping_id" id="deleteMappingId">
+                <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title fw-bold" id="deleteMappingModalLabel">
+                        <i class="ti ti-alert-triangle me-2"></i> Confirm Subject Unmapping
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <p class="mb-2">Are you sure you want to unmap <strong id="deleteSubjectName"></strong> from <strong id="deleteSectionName"></strong>?</p>
+                    <div class="alert alert-warning py-2 px-3 small mb-3">
+                        <i class="ti ti-info-circle me-1"></i> If this subject has dependent timetable slots or exam assessments, the system will reject deletion to prevent scheduling corruption.
+                    </div>
+                    <div class="mb-0">
+                        <label for="deleteReason" class="form-label fw-semibold">Reason for Unmapping <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="deleteReason" name="reason" placeholder="e.g. Curriculum update" required>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-danger">
+                        <i class="ti ti-trash me-1"></i> Confirm Unmap
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Client-side dynamic scripting -->
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // 1. Dynamic stream toggle for Bulk Map modal
+    const bulkClassSelect = document.getElementById('bulkClassSelect');
+    const bulkStreamSelect = document.getElementById('bulkStreamSelect');
+    const bulkStreamWrapper = document.getElementById('bulkStreamWrapper');
+    const bulkStreamAsterisk = document.getElementById('bulkStreamAsterisk');
+    const bulkOptGeneral = document.getElementById('bulkOptGeneral');
+    const bulkOptSci = document.getElementById('bulkOptSci');
+    const bulkOptComm = document.getElementById('bulkOptComm');
+    const bulkOptArts = document.getElementById('bulkOptArts');
+    const bulkStreamHelpText = document.getElementById('bulkStreamHelpText');
+    const bulkSectionSelect = document.getElementById('bulkSectionSelect');
+    const bulkSectionOptions = document.querySelectorAll('.bulk-section-option');
+
+    function syncBulkClassAndStream() {
+        if (!bulkClassSelect) return;
+        const selectedOpt = bulkClassSelect.options[bulkClassSelect.selectedIndex];
+        if (!selectedOpt || !selectedOpt.value) {
+            return;
+        }
+        const isSenior = selectedOpt.getAttribute('data-is-senior') === 'true';
+
+        if (isSenior) {
+            // Senior Secondary (Class 11/12): General is invalid. Must pick Science, Commerce, Arts
+            bulkOptGeneral.disabled = true;
+            bulkOptGeneral.style.display = 'none';
+            bulkOptSci.disabled = false;
+            bulkOptSci.style.display = '';
+            bulkOptComm.disabled = false;
+            bulkOptComm.style.display = '';
+            bulkOptArts.disabled = false;
+            bulkOptArts.style.display = '';
+
+            if (bulkStreamSelect.value === 'NONE') {
+                bulkStreamSelect.value = 'SCIENCE';
+            }
+            bulkStreamSelect.required = true;
+            if (bulkStreamAsterisk) bulkStreamAsterisk.style.display = 'inline';
+            if (bulkStreamHelpText) {
+                bulkStreamHelpText.textContent = "Senior secondary classes require an academic stream.";
+                bulkStreamHelpText.className = "form-text small text-primary fw-semibold";
+            }
+        } else {
+            // Junior Classes (Nursery-10): Only General is valid
+            bulkOptGeneral.disabled = false;
+            bulkOptGeneral.style.display = '';
+            bulkOptGeneral.selected = true;
+
+            bulkOptSci.disabled = true;
+            bulkOptSci.style.display = 'none';
+            bulkOptComm.disabled = true;
+            bulkOptComm.style.display = 'none';
+            bulkOptArts.disabled = true;
+            bulkOptArts.style.display = 'none';
+
+            bulkStreamSelect.required = false;
+            if (bulkStreamAsterisk) bulkStreamAsterisk.style.display = 'none';
+            if (bulkStreamHelpText) {
+                bulkStreamHelpText.textContent = "Junior classes (Nursery to 10) are restricted to General curriculum.";
+                bulkStreamHelpText.className = "form-text small text-muted";
+            }
+        }
+
+        // Filter sections dropdown for the selected class
+        const classId = selectedOpt.value;
+        const streamVal = bulkStreamSelect.value;
+        bulkSectionOptions.forEach(opt => {
+            const optClass = opt.getAttribute('data-class-id');
+            const optStream = opt.getAttribute('data-stream');
+            if (optClass === classId && (isSenior ? optStream === streamVal : true)) {
+                opt.classList.remove('d-none');
+            } else {
+                opt.classList.add('d-none');
+            }
+        });
+    }
+
+    if (bulkClassSelect) {
+        bulkClassSelect.addEventListener('change', syncBulkClassAndStream);
+        if (bulkStreamSelect) {
+            bulkStreamSelect.addEventListener('change', function() {
+                const selectedOpt = bulkClassSelect.options[bulkClassSelect.selectedIndex];
+                if (selectedOpt) syncBulkClassAndStream();
+            });
+        }
+    }
+
+    // 2. Select All / Deselect All for Bulk Subjects
+    const bulkSelectAllBtn = document.getElementById('bulkSelectAllBtn');
+    const bulkDeselectAllBtn = document.getElementById('bulkDeselectAllBtn');
+    const bulkSubjectCheckboxes = document.querySelectorAll('.bulk-subject-checkbox');
+
+    if (bulkSelectAllBtn) {
+        bulkSelectAllBtn.addEventListener('click', function() {
+            bulkSubjectCheckboxes.forEach(cb => cb.checked = true);
+        });
+    }
+    if (bulkDeselectAllBtn) {
+        bulkDeselectAllBtn.addEventListener('click', function() {
+            bulkSubjectCheckboxes.forEach(cb => cb.checked = false);
+        });
+    }
+
+    // 3. Edit Mapping Modal prefill
+    const editModal = document.getElementById('editMappingModal');
+    if (editModal) {
+        document.querySelectorAll('.edit-mapping-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                document.getElementById('editMappingId').value = this.getAttribute('data-id');
+                document.getElementById('editSectionDisplay').textContent = this.getAttribute('data-section');
+                document.getElementById('editSubjectDisplay').textContent = this.getAttribute('data-subject');
+                document.getElementById('editSubjectType').value = this.getAttribute('data-subject-type');
+                document.getElementById('editTeacherSelect').value = this.getAttribute('data-teacher-id');
+                document.getElementById('editAcademicYearSelect').value = this.getAttribute('data-academic-year-id');
+                document.getElementById('editIsActive').checked = (this.getAttribute('data-is-active') === 'true');
+
+                new bootstrap.Modal(editModal).show();
+            });
+        });
+    }
+
+    // 4. Delete Mapping Modal prefill
+    const deleteModal = document.getElementById('deleteMappingModal');
+    if (deleteModal) {
+        document.querySelectorAll('.delete-mapping-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                document.getElementById('deleteMappingId').value = this.getAttribute('data-id');
+                document.getElementById('deleteSubjectName').textContent = this.getAttribute('data-subject');
+                document.getElementById('deleteSectionName').textContent = this.getAttribute('data-section');
+
+                new bootstrap.Modal(deleteModal).show();
+            });
+        });
+    }
+});
+</script>
+{% endblock %}

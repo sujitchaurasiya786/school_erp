@@ -264,25 +264,71 @@ class Subject(TimeStampedModel):
 
 class ClassSubject(TimeStampedModel):
     """
-    Subject mapped to a Class-Section with teacher assignment.
+    Subject mapped to a Class-Section with curriculum classification and optional teacher assignment.
     """
     section = models.ForeignKey(Section, on_delete=models.CASCADE, related_name='class_subjects')
     subject = models.ForeignKey(Subject, on_delete=models.CASCADE, related_name='subject_mappings')
+    subject_type = models.CharField(
+        max_length=20,
+        choices=SubjectType.choices,
+        default=SubjectType.COMPULSORY,
+        help_text=_("Subject classification for this section (Compulsory, Optional, Elective)")
+    )
+    is_elective = models.BooleanField(default=False, help_text=_("Flag indicating whether subject is elective"))
+    academic_year = models.ForeignKey(
+        'school_config.AcademicYear',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='class_subjects',
+        help_text=_("Associated academic session context")
+    )
     teacher = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='teaching_subjects'
+        related_name='teaching_subjects',
+        help_text=_("Assigned subject teacher (optional)")
     )
-    is_elective = models.BooleanField(default=False)
 
     class Meta:
         db_table = 'academic_class_subjects'
         unique_together = ('section', 'subject')
+        ordering = ['section__school_class__order', 'section__name', 'subject__name']
 
     def __str__(self):
-        return f"{self.section} - {self.subject.name}"
+        return f"{self.section} - {self.subject.name} ({self.get_subject_type_display()})"
+
+    def clean(self):
+        super().clean()
+        if not hasattr(self, 'section') or self.section_id is None:
+            raise ValidationError({'section': _("Section is required.")})
+
+        if not hasattr(self, 'subject') or self.subject_id is None:
+            raise ValidationError({'subject': _("Subject is required.")})
+
+        if self.subject_id and hasattr(self, 'subject'):
+            if not self.subject.is_active:
+                raise ValidationError({'subject': _(f"Cannot map inactive subject '{self.subject.name}'.")})
+
+        # Sync is_elective boolean flag with subject_type choice
+        if self.subject_type == SubjectType.ELECTIVE:
+            self.is_elective = True
+        elif not self.is_elective:
+            self.is_elective = False
+
+        qs = ClassSubject.objects.filter(section=self.section, subject=self.subject)
+        if self.pk:
+            qs = qs.exclude(pk=self.pk)
+        if qs.exists():
+            raise ValidationError({
+                'subject': _(f"Subject '{self.subject.name}' is already mapped to Section '{self.section}'.")
+            })
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
 
 
 class TimetablePeriod(TimeStampedModel):
