@@ -9,10 +9,13 @@ from django.db.models import Count, Sum
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
-from apps.academics.models import AcademicStream, ClassSubject, SchoolClass, Section, Stream, Subject, SubjectType
+from apps.academics.models import (
+    AcademicStream, ClassSubject, SchoolClass, Section, Stream, Subject, SubjectType,
+    TimetablePeriod, TimetableSlot
+)
 from apps.academics.services import (
     AcademicYearService, ClassSubjectService, SchoolClassService, SectionService, StreamService, SubjectService,
-    TeacherAssignmentService
+    TeacherAssignmentService, TimetablePeriodService, TimetableService
 )
 from apps.rbac.services import RBACService
 from apps.school_config.models import AcademicYear, SchoolProfile
@@ -1064,3 +1067,232 @@ def teacher_assignments_view(request):
         'can_manage': can_manage,
     }
     return render(request, 'dashboard/academics/teacher_assignments.html', context)
+
+
+# ==============================================================================
+# 8. Timetable & Scheduling Management (Phase 4)
+# ==============================================================================
+@login_required(login_url='login')
+def timetable_view(request):
+    """
+    Consolidated Timetable & Scheduling Dashboard:
+      - Tab 1: Section Timetable Matrix (Weekly Grid by Section, with conflict-checked slot assignment modals)
+      - Tab 2: Teacher Timetable Matrix (Weekly Grid by Faculty member)
+      - Tab 3: Bell Schedule / Period Management (Timetable Periods, times, break flags, CBSE defaults generation)
+    """
+    if not _check_academics_permission(request, 'academics.timetable.view'):
+        messages.error(request, "You do not have permission to view timetables.")
+        return redirect('home-dashboard')
+
+    can_manage = _check_academics_permission(request, 'academics.timetable.manage')
+
+    active_tab = request.GET.get('tab', 'section_matrix').strip()
+    if active_tab not in ('section_matrix', 'teacher_matrix', 'periods'):
+        active_tab = 'section_matrix'
+
+    if request.method == 'POST':
+        if not can_manage:
+            messages.error(request, "You do not have permission to manage timetables.")
+            return redirect('academics-timetable-list')
+
+        action = request.POST.get('action')
+
+        # 1. Period Actions
+        if action == 'create_period':
+            period_number = request.POST.get('period_number')
+            name = request.POST.get('name', 'Period')
+            start_time = request.POST.get('start_time')
+            end_time = request.POST.get('end_time')
+            is_break = request.POST.get('is_break') == 'on'
+
+            try:
+                p = TimetablePeriodService.create_period(
+                    period_number=period_number,
+                    start_time=start_time,
+                    end_time=end_time,
+                    name=name,
+                    is_break=is_break,
+                    actor=request.user,
+                    request=request,
+                )
+                messages.success(request, f"Period '{p.name} {p.period_number}' created successfully.")
+            except (ValidationError, BusinessConflictError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to create period: {msg}")
+            return redirect(f"{request.path}?tab=periods")
+
+        elif action == 'update_period':
+            period_id = request.POST.get('period_id')
+            period_number = request.POST.get('period_number')
+            name = request.POST.get('name')
+            start_time = request.POST.get('start_time')
+            end_time = request.POST.get('end_time')
+            is_break = request.POST.get('is_break') == 'on'
+
+            try:
+                p = TimetablePeriodService.update_period(
+                    period_id=period_id,
+                    period_number=period_number,
+                    name=name,
+                    start_time=start_time,
+                    end_time=end_time,
+                    is_break=is_break,
+                    actor=request.user,
+                    request=request,
+                )
+                messages.success(request, f"Period '{p.name} {p.period_number}' updated successfully.")
+            except (ValidationError, ResourceNotFoundError, BusinessConflictError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to update period: {msg}")
+            return redirect(f"{request.path}?tab=periods")
+
+        elif action == 'delete_period':
+            period_id = request.POST.get('period_id')
+            try:
+                TimetablePeriodService.delete_period(period_id=period_id, actor=request.user, request=request)
+                messages.success(request, "Period deleted successfully.")
+            except (ResourceNotFoundError, BusinessConflictError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to delete period: {msg}")
+            return redirect(f"{request.path}?tab=periods")
+
+        elif action == 'generate_cbse_periods':
+            try:
+                periods = TimetablePeriodService.bulk_create_cbse_standard_periods(actor=request.user, request=request)
+                messages.success(request, f"Generated {len(periods)} CBSE standard periods (with Assembly, Breaks & 8 Teaching Periods).")
+            except BusinessConflictError as err:
+                messages.error(request, str(err))
+            return redirect(f"{request.path}?tab=periods")
+
+        # 2. Slot Actions
+        elif action == 'create_slot':
+            day_of_week = request.POST.get('day_of_week')
+            period_id = request.POST.get('period_id')
+            class_subject_id = request.POST.get('class_subject_id')
+            room = request.POST.get('room', '')
+            section_id = request.POST.get('section_id')
+
+            try:
+                slot = TimetableService.create_slot(
+                    day_of_week=day_of_week,
+                    period_id=period_id,
+                    class_subject_id=class_subject_id,
+                    room=room,
+                    actor=request.user,
+                    request=request,
+                )
+                day_name = dict(TimetableSlot.DAYS_OF_WEEK).get(int(day_of_week), '')
+                messages.success(request, f"Scheduled {slot.class_subject.subject.name} for {slot.class_subject.section} on {day_name} ({slot.period.name} {slot.period.period_number}).")
+            except (ValidationError, ResourceNotFoundError, BusinessConflictError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Collision / Scheduling Error: {msg}")
+
+            redirect_url = f"{request.path}?tab=section_matrix"
+            if section_id:
+                redirect_url += f"&section_id={section_id}"
+            return redirect(redirect_url)
+
+        elif action == 'update_slot':
+            slot_id = request.POST.get('slot_id')
+            class_subject_id = request.POST.get('class_subject_id')
+            room = request.POST.get('room', '')
+            section_id = request.POST.get('section_id')
+
+            update_data = {}
+            if class_subject_id:
+                update_data['class_subject_id'] = class_subject_id
+            if room is not None:
+                update_data['room'] = room
+
+            try:
+                slot = TimetableService.update_slot(
+                    slot_id=slot_id,
+                    actor=request.user,
+                    request=request,
+                    **update_data
+                )
+                messages.success(request, "Timetable slot updated successfully.")
+            except (ValidationError, ResourceNotFoundError, BusinessConflictError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Collision / Scheduling Error: {msg}")
+
+            redirect_url = f"{request.path}?tab=section_matrix"
+            if section_id:
+                redirect_url += f"&section_id={section_id}"
+            return redirect(redirect_url)
+
+        elif action == 'delete_slot':
+            slot_id = request.POST.get('slot_id')
+            section_id = request.POST.get('section_id')
+            try:
+                TimetableService.delete_slot(slot_id=slot_id, actor=request.user, request=request)
+                messages.success(request, "Class period unassigned from timetable.")
+            except (ResourceNotFoundError, ValidationError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to delete slot: {msg}")
+
+            redirect_url = f"{request.path}?tab=section_matrix"
+            if section_id:
+                redirect_url += f"&section_id={section_id}"
+            return redirect(redirect_url)
+
+    # Context Data
+    all_periods = TimetablePeriodService.list_periods()
+    all_classes = SchoolClass.objects.filter(is_active=True).order_by('order', 'name')
+    all_sections = Section.objects.filter(is_active=True).select_related('school_class').order_by('school_class__order', 'name')
+    all_teachers = TeacherAssignmentService.get_eligible_faculty_queryset()
+    current_year = AcademicYearService.get_current_year()
+
+    # Section Matrix
+    selected_section_id = request.GET.get('section_id', '').strip()
+    selected_section = None
+    if selected_section_id.isdigit():
+        selected_section = Section.objects.filter(pk=int(selected_section_id), is_active=True).first()
+    elif all_sections.exists():
+        selected_section = all_sections.first()
+
+    section_matrix = None
+    available_subjects = []
+    if selected_section:
+        section_matrix = TimetableService.get_section_timetable_matrix(selected_section.pk)
+        available_subjects = ClassSubject.objects.filter(
+            section=selected_section, is_active=True
+        ).select_related('subject', 'teacher').order_by('subject__name')
+
+    # Teacher Matrix
+    selected_teacher_id = request.GET.get('teacher_id', '').strip()
+    selected_teacher = None
+    teacher_matrix = None
+    if selected_teacher_id.isdigit():
+        selected_teacher = all_teachers.filter(pk=int(selected_teacher_id)).first()
+    elif all_teachers.exists() and active_tab == 'teacher_matrix':
+        selected_teacher = all_teachers.first()
+
+    if selected_teacher:
+        teacher_matrix = TimetableService.get_teacher_timetable_matrix(selected_teacher.pk)
+
+    total_periods_count = all_periods.count()
+    teaching_periods_count = all_periods.filter(is_break=False).count()
+    break_periods_count = total_periods_count - teaching_periods_count
+    total_slots_count = TimetableSlot.objects.count()
+
+    context = {
+        'active_tab': active_tab,
+        'all_periods': all_periods,
+        'all_classes': all_classes,
+        'all_sections': all_sections,
+        'all_teachers': all_teachers,
+        'current_year': current_year,
+        'selected_section': selected_section,
+        'section_matrix': section_matrix,
+        'available_subjects': available_subjects,
+        'selected_teacher': selected_teacher,
+        'teacher_matrix': teacher_matrix,
+        'days_of_week': TimetableSlot.DAYS_OF_WEEK,
+        'total_periods_count': total_periods_count,
+        'teaching_periods_count': teaching_periods_count,
+        'break_periods_count': break_periods_count,
+        'total_slots_count': total_slots_count,
+        'can_manage': can_manage,
+    }
+    return render(request, 'dashboard/academics/timetable.html', context)

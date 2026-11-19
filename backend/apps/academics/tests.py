@@ -12,7 +12,7 @@ from django.contrib.auth import get_user_model
 from apps.academics.models import AcademicStream, ClassSubject, SchoolClass, Section, Stream, Subject, SubjectType, TimetablePeriod, TimetableSlot
 from apps.academics.services import (
     AcademicYearService, ClassSubjectService, SchoolClassService, SectionService, StreamService, SubjectService,
-    TeacherAssignmentService
+    TeacherAssignmentService, TimetablePeriodService, TimetableService
 )
 from apps.audit.models import AuditAction, AuditLog
 from apps.rbac.models import Permission
@@ -21,6 +21,7 @@ from apps.school_config.models import AcademicYear, SchoolProfile
 from common.exceptions import BusinessConflictError, ResourceNotFoundError
 
 from apps.identity.models import UserType
+from rest_framework.test import APIClient
 
 User = get_user_model()
 
@@ -2227,6 +2228,558 @@ class TeacherAssignmentWebViewsTests(TestCase):
         self.assertEqual(response_workload.status_code, 200)
         workload_teachers = [w['teacher'] for w in response_workload.context['faculty_workload_list']]
         self.assertIn(scoped_teacher, workload_teachers)
+
+
+class TeacherAssignmentAPITests(TestCase):
+    """
+    Unit & Integration tests for Teacher Assignment DRF REST API endpoints (/api/v1/academics/...).
+    """
+
+    def setUp(self):
+        call_command('sync_permissions', verbosity=0)
+        self.superuser = User.objects.create_superuser(
+            username='admin_ta_api',
+            email='admin_ta_api@example.com',
+            password='Password123!'
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.superuser)
+
+        self.teacher = User.objects.create_user(
+            username='t_neha',
+            first_name='Neha',
+            last_name='Kapoor',
+            email='neha@school.edu',
+            user_type=UserType.TEACHER,
+            is_staff=False
+        )
+
+        self.c10 = SchoolClassService.create_class(name='Class 10', code='CL-10', order=10, actor=self.superuser)
+        self.sec10_a = SectionService.create_section(school_class_id=self.c10.pk, name='A', actor=self.superuser)
+        self.sub_sci = SubjectService.create_subject(name='Physics', code='PHY-10', actor=self.superuser)
+        self.mapping = ClassSubjectService.create_mapping(section_id=self.sec10_a.pk, subject_id=self.sub_sci.pk, actor=self.superuser)
+
+    def test_assign_class_teacher_api(self):
+        url = f"/api/v1/academics/sections/{self.sec10_a.pk}/assign-class-teacher/"
+        response = self.client.post(url, {'teacher_id': self.teacher.pk})
+        self.assertEqual(response.status_code, 200)
+        self.sec10_a.refresh_from_db()
+        self.assertEqual(self.sec10_a.class_teacher, self.teacher)
+
+    def test_remove_class_teacher_api(self):
+        self.sec10_a.class_teacher = self.teacher
+        self.sec10_a.save()
+        url = f"/api/v1/academics/sections/{self.sec10_a.pk}/remove-class-teacher/"
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 200)
+        self.sec10_a.refresh_from_db()
+        self.assertIsNone(self.sec10_a.class_teacher)
+
+    def test_assign_subject_teacher_api(self):
+        url = f"/api/v1/academics/class-subjects/{self.mapping.pk}/assign-teacher/"
+        response = self.client.post(url, {'teacher_id': self.teacher.pk})
+        self.assertEqual(response.status_code, 200)
+        self.mapping.refresh_from_db()
+        self.assertEqual(self.mapping.teacher, self.teacher)
+
+    def test_remove_subject_teacher_api(self):
+        self.mapping.teacher = self.teacher
+        self.mapping.save()
+        url = f"/api/v1/academics/class-subjects/{self.mapping.pk}/remove-teacher/"
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 200)
+        self.mapping.refresh_from_db()
+        self.assertIsNone(self.mapping.teacher)
+
+    def test_bulk_assign_subject_teacher_api(self):
+        url = "/api/v1/academics/class-subjects/bulk-assign-teacher/"
+        response = self.client.post(url, {
+            'class_subjects': [self.mapping.pk],
+            'teacher_id': self.teacher.pk,
+        }, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['assigned_count'], 1)
+        self.mapping.refresh_from_db()
+        self.assertEqual(self.mapping.teacher, self.teacher)
+
+    def test_faculty_workload_api(self):
+        url = "/api/v1/academics/class-subjects/faculty-workload/"
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIsInstance(response.data, list)
+        teacher_entry = [w for w in response.data if w['teacher_id'] == self.teacher.pk]
+        self.assertEqual(len(teacher_entry), 1)
+
+    def test_eligible_faculty_api(self):
+        url = "/api/v1/academics/class-subjects/eligible-faculty/"
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIsInstance(response.data, list)
+        faculty_ids = [f['id'] for f in response.data]
+        self.assertIn(self.teacher.pk, faculty_ids)
+
+
+# ==============================================================================
+# Phase 4: Timetable & Scheduling Tests
+# ==============================================================================
+
+class TimetablePeriodServiceTests(TestCase):
+    """
+    Unit tests for TimetablePeriodService (Bell schedule, time validation, overlap detection).
+    """
+
+    def setUp(self):
+        self.admin = User.objects.create_superuser(
+            username='admin_period_svc',
+            email='admin_p_svc@example.com',
+            password='Password123!'
+        )
+
+    def test_create_period_success_and_audit(self):
+        p = TimetablePeriodService.create_period(
+            period_number=1,
+            name="Period 1",
+            start_time="08:30:00",
+            end_time="09:15:00",
+            is_break=False,
+            actor=self.admin,
+            reason="Morning initial period"
+        )
+        self.assertEqual(p.period_number, 1)
+        self.assertEqual(p.name, "Period 1")
+        self.assertFalse(p.is_break)
+
+        log = AuditLog.objects.filter(entity_type='TimetablePeriod', entity_id=str(p.pk), action=AuditAction.CREATE).first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.actor, self.admin)
+
+    def test_create_period_end_before_start_fails(self):
+        with self.assertRaises(ValidationError) as ctx:
+            TimetablePeriodService.create_period(
+                period_number=1,
+                name="Invalid Period",
+                start_time="10:00:00",
+                end_time="09:00:00",
+                actor=self.admin
+            )
+        self.assertIn('end_time', ctx.exception.message_dict)
+
+    def test_create_period_time_overlap_fails(self):
+        TimetablePeriodService.create_period(
+            period_number=1,
+            name="Period 1",
+            start_time="08:30:00",
+            end_time="09:15:00",
+            actor=self.admin
+        )
+        # Overlapping period (09:00 to 09:45 overlaps with 08:30 to 09:15)
+        with self.assertRaises(ValidationError) as ctx:
+            TimetablePeriodService.create_period(
+                period_number=2,
+                name="Period 2",
+                start_time="09:00:00",
+                end_time="09:45:00",
+                actor=self.admin
+            )
+        self.assertIn('start_time', ctx.exception.message_dict)
+
+    def test_create_period_duplicate_number_fails(self):
+        TimetablePeriodService.create_period(
+            period_number=1,
+            name="Period 1",
+            start_time="08:30:00",
+            end_time="09:15:00",
+            actor=self.admin
+        )
+        with self.assertRaises(ValidationError) as ctx:
+            TimetablePeriodService.create_period(
+                period_number=1,
+                name="Period 1 Duplicate",
+                start_time="09:20:00",
+                end_time="10:05:00",
+                actor=self.admin
+            )
+        self.assertIn('period_number', ctx.exception.message_dict)
+
+    def test_update_period_success_and_audit(self):
+        p = TimetablePeriodService.create_period(
+            period_number=1,
+            name="Period 1",
+            start_time="08:30:00",
+            end_time="09:15:00",
+            actor=self.admin
+        )
+        updated = TimetablePeriodService.update_period(
+            period_id=p.pk,
+            name="Assembly / Period 1",
+            is_break=True,
+            actor=self.admin,
+            reason="Combined session"
+        )
+        self.assertEqual(updated.name, "Assembly / Period 1")
+        self.assertTrue(updated.is_break)
+
+        log = AuditLog.objects.filter(entity_type='TimetablePeriod', entity_id=str(p.pk), action=AuditAction.UPDATE).first()
+        self.assertIsNotNone(log)
+
+    def test_bulk_create_cbse_standard_periods(self):
+        periods = TimetablePeriodService.bulk_create_cbse_standard_periods(actor=self.admin)
+        self.assertEqual(len(periods), 11)
+        # Should fail if called again
+        with self.assertRaises(BusinessConflictError):
+            TimetablePeriodService.bulk_create_cbse_standard_periods(actor=self.admin)
+
+
+class TimetableServiceTests(TestCase):
+    """
+    Unit tests for TimetableService & Collision Detection Engine (Section, Teacher, Room clashes).
+    """
+
+    def setUp(self):
+        self.admin = User.objects.create_superuser(
+            username='admin_tt_svc',
+            email='admin_tt_svc@example.com',
+            password='Password123!'
+        )
+        self.academic_year = AcademicYearService.create_academic_year(
+            name="2026-2027",
+            start_date_val="2026-04-01",
+            end_date_val="2027-03-31",
+            is_current=True,
+            is_active=True,
+            actor=self.admin
+        )
+
+        # Teachers
+        self.teacher_math = User.objects.create_user(
+            username='t_math', email='t_math@school.edu', first_name='Ramanujan', user_type=UserType.TEACHER, is_staff=True
+        )
+        self.teacher_sci = User.objects.create_user(
+            username='t_sci', email='t_sci@school.edu', first_name='Curie', user_type=UserType.TEACHER, is_staff=True
+        )
+
+        # Classes & Sections
+        self.c10 = SchoolClassService.create_class(name='Class 10', code='CL-10', order=10, actor=self.admin)
+        self.sec10_a = SectionService.create_section(school_class_id=self.c10.pk, name='A', room_number='Room 101', actor=self.admin)
+        self.sec10_b = SectionService.create_section(school_class_id=self.c10.pk, name='B', room_number='Room 102', actor=self.admin)
+
+        # Subjects & Mappings
+        self.sub_math = SubjectService.create_subject(name='Mathematics', code='M-10', actor=self.admin)
+        self.sub_sci = SubjectService.create_subject(name='Science', code='S-10', actor=self.admin)
+
+        self.map_math_a = ClassSubjectService.create_mapping(section_id=self.sec10_a.pk, subject_id=self.sub_math.pk, actor=self.admin)
+        self.map_sci_a = ClassSubjectService.create_mapping(section_id=self.sec10_a.pk, subject_id=self.sub_sci.pk, actor=self.admin)
+        self.map_math_b = ClassSubjectService.create_mapping(section_id=self.sec10_b.pk, subject_id=self.sub_math.pk, actor=self.admin)
+
+        TeacherAssignmentService.assign_subject_teacher(self.map_math_a.pk, self.teacher_math.pk, actor=self.admin)
+        TeacherAssignmentService.assign_subject_teacher(self.map_math_b.pk, self.teacher_math.pk, actor=self.admin)
+        TeacherAssignmentService.assign_subject_teacher(self.map_sci_a.pk, self.teacher_sci.pk, actor=self.admin)
+
+        # Periods
+        self.period_1 = TimetablePeriodService.create_period(period_number=1, name="Period 1", start_time="08:30", end_time="09:15", is_break=False, actor=self.admin)
+        self.period_2 = TimetablePeriodService.create_period(period_number=2, name="Period 2", start_time="09:15", end_time="10:00", is_break=False, actor=self.admin)
+        self.break_period = TimetablePeriodService.create_period(period_number=3, name="Recess", start_time="10:00", end_time="10:30", is_break=True, actor=self.admin)
+
+    def test_create_slot_success_and_audit(self):
+        slot = TimetableService.create_slot(
+            day_of_week=1,  # Monday
+            period_id=self.period_1.pk,
+            class_subject_id=self.map_math_a.pk,
+            room="Room 101",
+            actor=self.admin
+        )
+        self.assertEqual(slot.day_of_week, 1)
+        self.assertEqual(slot.period, self.period_1)
+        self.assertEqual(slot.class_subject, self.map_math_a)
+        self.assertEqual(slot.room, "Room 101")
+
+        log = AuditLog.objects.filter(entity_type='TimetableSlot', entity_id=str(slot.pk), action=AuditAction.CREATE).first()
+        self.assertIsNotNone(log)
+
+    def test_schedule_during_break_period_fails(self):
+        with self.assertRaises(ValidationError) as ctx:
+            TimetableService.create_slot(
+                day_of_week=1,
+                period_id=self.break_period.pk,
+                class_subject_id=self.map_math_a.pk,
+                actor=self.admin
+            )
+        self.assertIn('period', ctx.exception.message_dict)
+
+    def test_section_collision_prevention(self):
+        # 10-A has Math on Monday Period 1
+        TimetableService.create_slot(
+            day_of_week=1,
+            period_id=self.period_1.pk,
+            class_subject_id=self.map_math_a.pk,
+            actor=self.admin
+        )
+        # Attempting to also schedule Science for 10-A on Monday Period 1 must raise BusinessConflictError
+        with self.assertRaises(BusinessConflictError) as ctx:
+            TimetableService.create_slot(
+                day_of_week=1,
+                period_id=self.period_1.pk,
+                class_subject_id=self.map_sci_a.pk,
+                actor=self.admin
+            )
+        self.assertIn("already has", str(ctx.exception))
+
+    def test_teacher_collision_prevention(self):
+        # Teacher Ramanujan teaches 10-A on Monday Period 1
+        TimetableService.create_slot(
+            day_of_week=1,
+            period_id=self.period_1.pk,
+            class_subject_id=self.map_math_a.pk,
+            room="Room 101",
+            actor=self.admin
+        )
+        # Attempting to assign Ramanujan to 10-B also on Monday Period 1 must fail
+        with self.assertRaises(BusinessConflictError) as ctx:
+            TimetableService.create_slot(
+                day_of_week=1,
+                period_id=self.period_1.pk,
+                class_subject_id=self.map_math_b.pk,
+                room="Room 102",
+                actor=self.admin
+            )
+        self.assertIn("already assigned to teach", str(ctx.exception))
+
+    def test_room_collision_prevention(self):
+        # 10-A is in Room 101 on Monday Period 1
+        TimetableService.create_slot(
+            day_of_week=1,
+            period_id=self.period_1.pk,
+            class_subject_id=self.map_sci_a.pk,
+            room="Room 101",
+            actor=self.admin
+        )
+        # 10-B with different teacher also booking Room 101 at the same period must fail
+        with self.assertRaises(BusinessConflictError) as ctx:
+            TimetableService.create_slot(
+                day_of_week=1,
+                period_id=self.period_1.pk,
+                class_subject_id=self.map_math_b.pk,
+                room="Room 101",
+                actor=self.admin
+            )
+        self.assertIn("already booked", str(ctx.exception))
+
+    def test_update_slot_collision_exclusion(self):
+        slot = TimetableService.create_slot(
+            day_of_week=1,
+            period_id=self.period_1.pk,
+            class_subject_id=self.map_math_a.pk,
+            room="Room 101",
+            actor=self.admin
+        )
+        updated = TimetableService.update_slot(
+            slot_id=slot.pk,
+            room="Lab 1",
+            actor=self.admin
+        )
+        self.assertEqual(updated.room, "Lab 1")
+
+    def test_delete_period_with_slots_fails(self):
+        TimetableService.create_slot(
+            day_of_week=1,
+            period_id=self.period_1.pk,
+            class_subject_id=self.map_math_a.pk,
+            actor=self.admin
+        )
+        with self.assertRaises(BusinessConflictError):
+            TimetablePeriodService.delete_period(self.period_1.pk, actor=self.admin)
+
+    def test_get_section_timetable_matrix(self):
+        TimetableService.create_slot(
+            day_of_week=1,
+            period_id=self.period_1.pk,
+            class_subject_id=self.map_math_a.pk,
+            actor=self.admin
+        )
+        matrix = TimetableService.get_section_timetable_matrix(self.sec10_a.pk)
+        self.assertEqual(matrix['total_scheduled'], 1)
+        self.assertIn('Mathematics', matrix['subject_counts'])
+        self.assertEqual(matrix['subject_counts']['Mathematics'], 1)
+
+    def test_get_teacher_timetable_matrix(self):
+        TimetableService.create_slot(
+            day_of_week=1,
+            period_id=self.period_1.pk,
+            class_subject_id=self.map_math_a.pk,
+            actor=self.admin
+        )
+        matrix = TimetableService.get_teacher_timetable_matrix(self.teacher_math.pk)
+        self.assertEqual(matrix['total_scheduled'], 1)
+        self.assertIn(str(self.sec10_a), matrix['sections_covered'])
+
+
+class TimetableWebViewsTests(TestCase):
+    """
+    Unit & Integration tests for Timetable dashboard web views and modal workflows.
+    """
+
+    def setUp(self):
+        call_command('sync_permissions', verbosity=0)
+        self.superuser = User.objects.create_superuser(
+            username='admin_tt_web',
+            email='admin_tt_web@example.com',
+            password='Password123!'
+        )
+        self.academic_year = AcademicYearService.create_academic_year(
+            name="2026-2027",
+            start_date_val="2026-04-01",
+            end_date_val="2027-03-31",
+            is_current=True,
+            is_active=True,
+            actor=self.superuser
+        )
+
+        self.c10 = SchoolClassService.create_class(name='Class 10', code='CL-10', order=10, actor=self.superuser)
+        self.sec = SectionService.create_section(school_class_id=self.c10.pk, name='A', actor=self.superuser)
+        self.sub = SubjectService.create_subject(name='English', code='ENG-10', actor=self.superuser)
+        self.map = ClassSubjectService.create_mapping(section_id=self.sec.pk, subject_id=self.sub.pk, actor=self.superuser)
+
+        self.period = TimetablePeriodService.create_period(
+            period_number=1, name="Period 1", start_time="08:30", end_time="09:15", is_break=False, actor=self.superuser
+        )
+
+        self.client.force_login(self.superuser)
+
+    def test_anonymous_redirected_to_login(self):
+        self.client.logout()
+        response = self.client.get(reverse('academics-timetable-list'))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/login/', response.url)
+
+    def test_superuser_has_full_access(self):
+        response = self.client.get(reverse('academics-timetable-list'))
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'dashboard/academics/timetable.html')
+        self.assertTrue(response.context['can_manage'])
+
+    def test_create_slot_post_action(self):
+        post_data = {
+            'action': 'create_slot',
+            'day_of_week': 1,
+            'period_id': self.period.pk,
+            'class_subject_id': self.map.pk,
+            'room': 'Room 101',
+            'section_id': self.sec.pk,
+        }
+        response = self.client.post(reverse('academics-timetable-list'), data=post_data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(TimetableSlot.objects.filter(class_subject=self.map, day_of_week=1).exists())
+
+    def test_delete_slot_post_action(self):
+        slot = TimetableService.create_slot(
+            day_of_week=1,
+            period_id=self.period.pk,
+            class_subject_id=self.map.pk,
+            actor=self.superuser
+        )
+        post_data = {
+            'action': 'delete_slot',
+            'slot_id': slot.pk,
+            'section_id': self.sec.pk,
+        }
+        response = self.client.post(reverse('academics-timetable-list'), data=post_data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(TimetableSlot.objects.filter(pk=slot.pk).exists())
+
+    def test_tabs_rendering(self):
+        for tab_name in ('section_matrix', 'teacher_matrix', 'periods'):
+            response = self.client.get(f"{reverse('academics-timetable-list')}?tab={tab_name}")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.context['active_tab'], tab_name)
+
+
+class TimetableAPITests(TestCase):
+    """
+    Unit & Integration tests for Timetable DRF REST API endpoints (/api/v1/academics/periods/, /api/v1/academics/timetable-slots/).
+    """
+
+    def setUp(self):
+        call_command('sync_permissions', verbosity=0)
+        self.superuser = User.objects.create_superuser(
+            username='admin_tt_api',
+            email='admin_tt_api@example.com',
+            password='Password123!'
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.superuser)
+
+        self.academic_year = AcademicYearService.create_academic_year(
+            name="2026-2027",
+            start_date_val="2026-04-01",
+            end_date_val="2027-03-31",
+            is_current=True,
+            is_active=True,
+            actor=self.superuser
+        )
+
+        self.teacher = User.objects.create_user(
+            username='t_hindi', email='t_hindi@school.edu', first_name='Premchand', user_type=UserType.TEACHER, is_staff=True
+        )
+
+        self.c10 = SchoolClassService.create_class(name='Class 10', code='CL-10', order=10, actor=self.superuser)
+        self.sec = SectionService.create_section(school_class_id=self.c10.pk, name='A', actor=self.superuser)
+        self.sub = SubjectService.create_subject(name='Hindi', code='HIN-10', actor=self.superuser)
+        self.map = ClassSubjectService.create_mapping(section_id=self.sec.pk, subject_id=self.sub.pk, actor=self.superuser)
+        TeacherAssignmentService.assign_subject_teacher(self.map.pk, self.teacher.pk, actor=self.superuser)
+
+        self.period = TimetablePeriodService.create_period(
+            period_number=1, name="Period 1", start_time="08:30", end_time="09:15", is_break=False, actor=self.superuser
+        )
+
+    def test_period_viewset_list(self):
+        url = "/api/v1/academics/periods/"
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_slot_viewset_create_and_conflict_check(self):
+        url = "/api/v1/academics/timetable-slots/"
+        post_data = {
+            'academic_year': self.academic_year.pk,
+            'day_of_week': 1,
+            'period': self.period.pk,
+            'class_subject': self.map.pk,
+            'room': 'Room 101'
+        }
+        response = self.client.post(url, post_data)
+        self.assertEqual(response.status_code, 201)
+
+        # Attempting duplicate slot on same section/day/period must fail with 400
+        response_dup = self.client.post(url, post_data)
+        self.assertEqual(response_dup.status_code, 400)
+
+    def test_section_matrix_api(self):
+        # Create a slot first
+        TimetableService.create_slot(
+            day_of_week=1,
+            period_id=self.period.pk,
+            class_subject_id=self.map.pk,
+            actor=self.superuser
+        )
+        url = f"/api/v1/academics/timetable-slots/section-matrix/?section_id={self.sec.pk}"
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('grid', response.data)
+        self.assertEqual(response.data['total_scheduled'], 1)
+
+    def test_teacher_matrix_api(self):
+        TimetableService.create_slot(
+            day_of_week=1,
+            period_id=self.period.pk,
+            class_subject_id=self.map.pk,
+            actor=self.superuser
+        )
+        url = f"/api/v1/academics/timetable-slots/teacher-matrix/?teacher_id={self.teacher.pk}"
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('grid', response.data)
+        self.assertEqual(response.data['total_scheduled'], 1)
+
+
 
 
 

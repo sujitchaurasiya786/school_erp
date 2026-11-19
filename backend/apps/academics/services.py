@@ -5,7 +5,8 @@ from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
 
 from apps.academics.models import (
-    AcademicStream, ClassSubject, SchoolClass, Section, Stream, Subject, SubjectType, TimetableSlot
+    AcademicStream, ClassSubject, SchoolClass, Section, Stream, Subject, SubjectType,
+    TimetablePeriod, TimetableSlot
 )
 from apps.audit.models import AuditAction
 from apps.audit.services import AuditService
@@ -22,8 +23,31 @@ class AcademicsService:
 
     @classmethod
     def validate_slot_conflicts(cls, academic_year, day_of_week, period, class_subject, room=None, exclude_slot_id=None):
-        # 1. Teacher conflict check
-        teacher = class_subject.teacher
+        # 0. Break period check
+        if period and getattr(period, 'is_break', False):
+            raise ValidationError({'period': _(f"Cannot schedule academic classes during break period '{period.name}'.")})
+
+        day_name = dict(TimetableSlot.DAYS_OF_WEEK).get(day_of_week, f"Day {day_of_week}")
+
+        # 1. Section conflict check (Section cannot have two subjects at the same period)
+        if class_subject and hasattr(class_subject, 'section'):
+            section_conflict = TimetableSlot.objects.filter(
+                academic_year=academic_year,
+                day_of_week=day_of_week,
+                period=period,
+                class_subject__section=class_subject.section
+            )
+            if exclude_slot_id:
+                section_conflict = section_conflict.exclude(id=exclude_slot_id)
+            if section_conflict.exists():
+                existing = section_conflict.first()
+                raise BusinessConflictError(
+                    f"Section '{class_subject.section}' already has '{existing.class_subject.subject.name}' "
+                    f"scheduled on {day_name} during {period.name} {period.period_number}."
+                )
+
+        # 2. Teacher conflict check
+        teacher = getattr(class_subject, 'teacher', None)
         if teacher:
             teacher_conflict = TimetableSlot.objects.filter(
                 academic_year=academic_year,
@@ -34,20 +58,31 @@ class AcademicsService:
             if exclude_slot_id:
                 teacher_conflict = teacher_conflict.exclude(id=exclude_slot_id)
             if teacher_conflict.exists():
-                raise BusinessConflictError(f"Teacher {teacher} is already assigned to another class during this period.")
+                existing = teacher_conflict.first()
+                teacher_name = teacher.get_full_name() or teacher.username
+                raise BusinessConflictError(
+                    f"Teacher '{teacher_name}' is already assigned to teach '{existing.class_subject.subject.name}' "
+                    f"in '{existing.class_subject.section}' on {day_name} during {period.name} {period.period_number}."
+                )
 
-        # 2. Room conflict check
+        # 3. Room conflict check
         if room:
-            room_conflict = TimetableSlot.objects.filter(
-                academic_year=academic_year,
-                day_of_week=day_of_week,
-                period=period,
-                room=room
-            )
-            if exclude_slot_id:
-                room_conflict = room_conflict.exclude(id=exclude_slot_id)
-            if room_conflict.exists():
-                raise BusinessConflictError(f"Room {room} is already booked for another session in this period.")
+            cleaned_room = str(room).strip()
+            if cleaned_room:
+                room_conflict = TimetableSlot.objects.filter(
+                    academic_year=academic_year,
+                    day_of_week=day_of_week,
+                    period=period,
+                    room__iexact=cleaned_room
+                )
+                if exclude_slot_id:
+                    room_conflict = room_conflict.exclude(id=exclude_slot_id)
+                if room_conflict.exists():
+                    existing = room_conflict.first()
+                    raise BusinessConflictError(
+                        f"Room '{cleaned_room}' is already booked for '{existing.class_subject.section}' "
+                        f"({existing.class_subject.subject.name}) on {day_name} during {period.name} {period.period_number}."
+                    )
 
 
 class AcademicYearService:
@@ -409,7 +444,8 @@ class AcademicYearService:
         dependencies = []
 
         from apps.academics.models import (
-    AcademicStream, ClassSubject, SchoolClass, Section, Stream, Subject, SubjectType, TimetableSlot
+    AcademicStream, ClassSubject, SchoolClass, Section, Stream, Subject, SubjectType,
+    TimetablePeriod, TimetableSlot
 )
         tt_count = TimetableSlot.objects.filter(academic_year=year).count()
         if tt_count:
@@ -2227,3 +2263,566 @@ class TeacherAssignmentService:
                 Q(teacher__username__icontains=search)
             )
         return qs
+
+
+class TimetablePeriodService:
+    """
+    Manages Timetable Periods (the institutional bell schedule).
+    Enforces time order, period sequencing, overlap protection, and audit logging.
+    """
+
+    @classmethod
+    @transaction.atomic
+    def create_period(
+        cls,
+        period_number,
+        start_time,
+        end_time,
+        name="Period",
+        is_break=False,
+        actor=None,
+        reason="",
+        request=None
+    ):
+        try:
+            p_num = int(period_number)
+            if p_num <= 0:
+                raise ValueError()
+        except (ValueError, TypeError):
+            raise ValidationError({'period_number': _("Period number must be a positive integer (>= 1).")})
+
+        if TimetablePeriod.objects.filter(period_number=p_num).exists():
+            raise ValidationError({'period_number': _(f"Period number {p_num} already exists.")})
+
+        if isinstance(start_time, str):
+            start_time = cls._parse_time(start_time, 'start_time')
+        if isinstance(end_time, str):
+            end_time = cls._parse_time(end_time, 'end_time')
+
+        if start_time >= end_time:
+            raise ValidationError({'end_time': _("Period end time must be after start time.")})
+
+        cls._validate_time_overlap(start_time, end_time)
+
+        period = TimetablePeriod(
+            period_number=p_num,
+            name=str(name or "Period").strip(),
+            start_time=start_time,
+            end_time=end_time,
+            is_break=bool(is_break)
+        )
+        period.save()
+
+        AuditService.log(
+            action=AuditAction.CREATE,
+            module="academics",
+            entity_type="TimetablePeriod",
+            entity_id=str(period.pk),
+            actor=actor,
+            reason=reason or f"Created timetable period {period}",
+            changes={
+                "period_number": period.period_number,
+                "name": period.name,
+                "start_time": str(period.start_time),
+                "end_time": str(period.end_time),
+                "is_break": period.is_break,
+            },
+            request=request,
+        )
+        return period
+
+    @classmethod
+    @transaction.atomic
+    def update_period(
+        cls,
+        period_id,
+        actor=None,
+        reason="",
+        request=None,
+        **kwargs
+    ):
+        try:
+            period = TimetablePeriod.objects.select_for_update().get(pk=period_id)
+        except TimetablePeriod.DoesNotExist:
+            raise ResourceNotFoundError(f"Timetable period with ID {period_id} not found.")
+
+        old_state = {
+            "period_number": period.period_number,
+            "name": period.name,
+            "start_time": str(period.start_time),
+            "end_time": str(period.end_time),
+            "is_break": period.is_break,
+        }
+
+        if 'period_number' in kwargs:
+            p_num = int(kwargs['period_number'])
+            if p_num <= 0:
+                raise ValidationError({'period_number': _("Period number must be a positive integer.")})
+            if TimetablePeriod.objects.filter(period_number=p_num).exclude(pk=period.pk).exists():
+                raise ValidationError({'period_number': _(f"Period number {p_num} already exists.")})
+            period.period_number = p_num
+
+        if 'name' in kwargs:
+            period.name = str(kwargs['name']).strip()
+
+        if 'start_time' in kwargs:
+            st = kwargs['start_time']
+            if isinstance(st, str):
+                st = cls._parse_time(st, 'start_time')
+            period.start_time = st
+
+        if 'end_time' in kwargs:
+            et = kwargs['end_time']
+            if isinstance(et, str):
+                et = cls._parse_time(et, 'end_time')
+            period.end_time = et
+
+        if 'is_break' in kwargs:
+            period.is_break = bool(kwargs['is_break'])
+
+        if period.start_time >= period.end_time:
+            raise ValidationError({'end_time': _("Period end time must be after start time.")})
+
+        cls._validate_time_overlap(period.start_time, period.end_time, exclude_period_id=period.pk)
+
+        period.save()
+
+        new_state = {
+            "period_number": period.period_number,
+            "name": period.name,
+            "start_time": str(period.start_time),
+            "end_time": str(period.end_time),
+            "is_break": period.is_break,
+        }
+        changes = {k: {"old": old_state[k], "new": new_state[k]} for k in old_state if old_state[k] != new_state[k]}
+
+        if changes:
+            AuditService.log(
+                action=AuditAction.UPDATE,
+                module="academics",
+                entity_type="TimetablePeriod",
+                entity_id=str(period.pk),
+                actor=actor,
+                reason=reason or f"Updated timetable period {period}",
+                changes=changes,
+                request=request,
+            )
+        return period
+
+    @classmethod
+    @transaction.atomic
+    def delete_period(cls, period_id, actor=None, reason="", request=None):
+        try:
+            period = TimetablePeriod.objects.select_for_update().get(pk=period_id)
+        except TimetablePeriod.DoesNotExist:
+            raise ResourceNotFoundError(f"Timetable period with ID {period_id} not found.")
+
+        slot_count = TimetableSlot.objects.filter(period=period).count()
+        if slot_count > 0:
+            raise BusinessConflictError(
+                f"Cannot delete period '{period.name} {period.period_number}' because {slot_count} timetable slot(s) "
+                "are scheduled during this period. Delete or reassign the slots first."
+            )
+
+        period_id_str = str(period.pk)
+        period_str = str(period)
+        period.delete()
+
+        AuditService.log(
+            action=AuditAction.DELETE,
+            module="academics",
+            entity_type="TimetablePeriod",
+            entity_id=period_id_str,
+            actor=actor,
+            reason=reason or f"Deleted timetable period {period_str}",
+            changes={"period": period_str},
+            request=request,
+        )
+
+    @classmethod
+    def get_period(cls, period_id):
+        try:
+            return TimetablePeriod.objects.get(pk=period_id)
+        except TimetablePeriod.DoesNotExist:
+            raise ResourceNotFoundError(f"Timetable period with ID {period_id} not found.")
+
+    @classmethod
+    def list_periods(cls):
+        return TimetablePeriod.objects.all().order_by('period_number')
+
+    @classmethod
+    @transaction.atomic
+    def bulk_create_cbse_standard_periods(cls, actor=None, request=None):
+        if TimetablePeriod.objects.exists():
+            raise BusinessConflictError("Timetable periods already exist. Clear existing periods before generating defaults.")
+
+        default_schedule = [
+            (1, "Morning Assembly", "08:00", "08:20", True),
+            (2, "Period 1", "08:20", "09:05", False),
+            (3, "Period 2", "09:05", "09:50", False),
+            (4, "Period 3", "09:50", "10:35", False),
+            (5, "Short Break", "10:35", "10:55", True),
+            (6, "Period 4", "10:55", "11:40", False),
+            (7, "Period 5", "11:40", "12:25", False),
+            (8, "Lunch Break", "12:25", "13:05", True),
+            (9, "Period 6", "13:05", "13:50", False),
+            (10, "Period 7", "13:50", "14:30", False),
+            (11, "Period 8", "14:30", "15:10", False),
+        ]
+        created = []
+        for p_num, name, st, et, is_break in default_schedule:
+            p = cls.create_period(
+                period_number=p_num,
+                name=name,
+                start_time=st,
+                end_time=et,
+                is_break=is_break,
+                actor=actor,
+                reason="Generated CBSE standard default bell schedule",
+                request=request
+            )
+            created.append(p)
+        return created
+
+    @classmethod
+    def _parse_time(cls, time_str, field_name):
+        from datetime import datetime
+        time_str = str(time_str).strip()
+        for fmt in ('%H:%M:%S', '%H:%M'):
+            try:
+                return datetime.strptime(time_str, fmt).time()
+            except ValueError:
+                pass
+        raise ValidationError({field_name: _(f"Invalid time format '{time_str}'. Use HH:MM or HH:MM:SS.")})
+
+    @classmethod
+    def _validate_time_overlap(cls, start_time, end_time, exclude_period_id=None):
+        qs = TimetablePeriod.objects.all()
+        if exclude_period_id:
+            qs = qs.exclude(pk=exclude_period_id)
+        for p in qs:
+            if start_time < p.end_time and end_time > p.start_time:
+                raise ValidationError({
+                    'start_time': _(
+                        f"Period times ({start_time.strftime('%H:%M')} - {end_time.strftime('%H:%M')}) "
+                        f"overlap with existing period '{p.name} {p.period_number}' ({p.start_time.strftime('%H:%M')} - {p.end_time.strftime('%H:%M')})."
+                    )
+                })
+
+
+class TimetableService:
+    """
+    Timetable & Scheduling Service for School ERP (Academics Module Phase 4).
+    Enforces collision detection (Section, Teacher, Room, Break time),
+    matrix construction, schedule querying, and audit logging.
+    """
+
+    @classmethod
+    @transaction.atomic
+    def create_slot(
+        cls,
+        day_of_week,
+        period_id,
+        class_subject_id,
+        academic_year_id=None,
+        room="",
+        actor=None,
+        reason="",
+        request=None
+    ):
+        if academic_year_id:
+            try:
+                academic_year = AcademicYear.objects.get(pk=academic_year_id)
+            except AcademicYear.DoesNotExist:
+                raise ResourceNotFoundError(f"AcademicYear with ID {academic_year_id} not found.")
+        else:
+            academic_year = AcademicYearService.get_current_year()
+            if not academic_year:
+                raise ValidationError({'academic_year': _("No active academic year found. Please activate an academic year first.")})
+
+        try:
+            day_num = int(day_of_week)
+            if day_num not in dict(TimetableSlot.DAYS_OF_WEEK):
+                raise ValueError()
+        except (ValueError, TypeError):
+            valid_days = ", ".join(f"{k}={v}" for k, v in TimetableSlot.DAYS_OF_WEEK)
+            raise ValidationError({'day_of_week': _(f"Invalid day_of_week. Must be one of: {valid_days}")})
+
+        try:
+            period = TimetablePeriod.objects.get(pk=period_id)
+        except TimetablePeriod.DoesNotExist:
+            raise ResourceNotFoundError(f"TimetablePeriod with ID {period_id} not found.")
+
+        if period.is_break:
+            raise ValidationError({'period': _(f"Cannot schedule academic classes during break period '{period.name}'.")})
+
+        try:
+            class_sub = ClassSubject.objects.select_related(
+                'section', 'section__school_class', 'subject', 'teacher'
+            ).get(pk=class_subject_id)
+        except ClassSubject.DoesNotExist:
+            raise ResourceNotFoundError(f"ClassSubject mapping with ID {class_subject_id} not found.")
+
+        if not class_sub.is_active:
+            raise ValidationError({'class_subject': _("Cannot schedule an inactive subject mapping.")})
+
+        cleaned_room = str(room or "").strip()
+        if not cleaned_room and class_sub.section.room_number:
+            cleaned_room = class_sub.section.room_number
+
+        AcademicsService.validate_slot_conflicts(
+            academic_year=academic_year,
+            day_of_week=day_num,
+            period=period,
+            class_subject=class_sub,
+            room=cleaned_room
+        )
+
+        slot = TimetableSlot(
+            academic_year=academic_year,
+            day_of_week=day_num,
+            period=period,
+            class_subject=class_sub,
+            room=cleaned_room
+        )
+        slot.save()
+
+        day_name = dict(TimetableSlot.DAYS_OF_WEEK).get(day_num, str(day_num))
+        teacher_name = (class_sub.teacher.get_full_name() or class_sub.teacher.username) if class_sub.teacher else "Unassigned"
+
+        AuditService.log(
+            action=AuditAction.CREATE,
+            module="academics",
+            entity_type="TimetableSlot",
+            entity_id=str(slot.pk),
+            actor=actor,
+            reason=reason or f"Scheduled {class_sub.subject.name} for {class_sub.section} on {day_name} {period}",
+            changes={
+                "academic_year": academic_year.name,
+                "day_of_week": day_name,
+                "period": f"{period.name} {period.period_number}",
+                "section": str(class_sub.section),
+                "subject": class_sub.subject.name,
+                "teacher": teacher_name,
+                "room": cleaned_room,
+            },
+            request=request,
+        )
+        return slot
+
+    @classmethod
+    @transaction.atomic
+    def update_slot(
+        cls,
+        slot_id,
+        actor=None,
+        reason="",
+        request=None,
+        **kwargs
+    ):
+        try:
+            slot = TimetableSlot.objects.select_for_update().select_related(
+                'academic_year', 'period', 'class_subject', 'class_subject__section', 'class_subject__subject', 'class_subject__teacher'
+            ).get(pk=slot_id)
+        except TimetableSlot.DoesNotExist:
+            raise ResourceNotFoundError(f"Timetable slot with ID {slot_id} not found.")
+
+        old_state = {
+            "day_of_week": slot.day_of_week,
+            "period_id": slot.period_id,
+            "class_subject_id": slot.class_subject_id,
+            "room": slot.room,
+        }
+
+        if 'day_of_week' in kwargs:
+            day_num = int(kwargs['day_of_week'])
+            if day_num not in dict(TimetableSlot.DAYS_OF_WEEK):
+                raise ValidationError({'day_of_week': _("Invalid day_of_week.")})
+            slot.day_of_week = day_num
+
+        if 'period_id' in kwargs:
+            period = TimetablePeriod.objects.get(pk=kwargs['period_id'])
+            if period.is_break:
+                raise ValidationError({'period': _(f"Cannot schedule classes during break period '{period.name}'.")})
+            slot.period = period
+
+        if 'class_subject_id' in kwargs:
+            class_sub = ClassSubject.objects.select_related(
+                'section', 'section__school_class', 'subject', 'teacher'
+            ).get(pk=kwargs['class_subject_id'])
+            if not class_sub.is_active:
+                raise ValidationError({'class_subject': _("Cannot schedule an inactive subject mapping.")})
+            slot.class_subject = class_sub
+
+        if 'room' in kwargs:
+            slot.room = str(kwargs['room'] or "").strip()
+
+        AcademicsService.validate_slot_conflicts(
+            academic_year=slot.academic_year,
+            day_of_week=slot.day_of_week,
+            period=slot.period,
+            class_subject=slot.class_subject,
+            room=slot.room,
+            exclude_slot_id=slot.pk
+        )
+
+        slot.save()
+
+        new_state = {
+            "day_of_week": slot.day_of_week,
+            "period_id": slot.period_id,
+            "class_subject_id": slot.class_subject_id,
+            "room": slot.room,
+        }
+        changes = {k: {"old": old_state[k], "new": new_state[k]} for k in old_state if old_state[k] != new_state[k]}
+
+        if changes:
+            AuditService.log(
+                action=AuditAction.UPDATE,
+                module="academics",
+                entity_type="TimetableSlot",
+                entity_id=str(slot.pk),
+                actor=actor,
+                reason=reason or f"Updated timetable slot {slot}",
+                changes=changes,
+                request=request,
+            )
+        return slot
+
+    @classmethod
+    @transaction.atomic
+    def delete_slot(cls, slot_id, actor=None, reason="", request=None):
+        try:
+            slot = TimetableSlot.objects.select_for_update().select_related(
+                'period', 'class_subject', 'class_subject__section', 'class_subject__subject'
+            ).get(pk=slot_id)
+        except TimetableSlot.DoesNotExist:
+            raise ResourceNotFoundError(f"Timetable slot with ID {slot_id} not found.")
+
+        slot_id_str = str(slot.pk)
+        slot_desc = str(slot)
+        slot.delete()
+
+        AuditService.log(
+            action=AuditAction.DELETE,
+            module="academics",
+            entity_type="TimetableSlot",
+            entity_id=slot_id_str,
+            actor=actor,
+            reason=reason or f"Deleted timetable slot {slot_desc}",
+            changes={"slot": slot_desc},
+            request=request,
+        )
+
+    @classmethod
+    def get_section_timetable_matrix(cls, section_id, academic_year_id=None):
+        """
+        Constructs the full weekly schedule matrix for a class section.
+        Rows: Days of Week (Monday to Saturday)
+        Columns: Timetable Periods
+        Cells: TimetableSlot details or None (or break marker)
+        """
+        if not academic_year_id:
+            ay = AcademicYearService.get_current_year()
+        else:
+            ay = AcademicYear.objects.filter(pk=academic_year_id).first()
+
+        periods = list(TimetablePeriod.objects.all().order_by('period_number'))
+        days = list(TimetableSlot.DAYS_OF_WEEK)
+
+        slots = TimetableSlot.objects.filter(
+            class_subject__section_id=section_id
+        ).select_related(
+            'period', 'class_subject', 'class_subject__subject', 'class_subject__teacher'
+        )
+        if ay:
+            slots = slots.filter(academic_year=ay)
+
+        slot_map = {(s.day_of_week, s.period_id): s for s in slots}
+
+        grid = []
+        total_scheduled = len(slots)
+        subject_counts = {}
+
+        for day_code, day_name in days:
+            row_cells = []
+            for p in periods:
+                slot = slot_map.get((day_code, p.pk))
+                if slot:
+                    sub_name = slot.class_subject.subject.name
+                    subject_counts[sub_name] = subject_counts.get(sub_name, 0) + 1
+
+                row_cells.append({
+                    'period': p,
+                    'is_break': p.is_break,
+                    'slot': slot,
+                })
+
+            grid.append({
+                'day_code': day_code,
+                'day_name': day_name,
+                'periods': row_cells,
+            })
+
+        return {
+            'days': days,
+            'periods': periods,
+            'grid': grid,
+            'total_scheduled': total_scheduled,
+            'subject_counts': subject_counts,
+        }
+
+    @classmethod
+    def get_teacher_timetable_matrix(cls, teacher_id, academic_year_id=None):
+        """
+        Constructs a teacher's personal weekly schedule across all sections.
+        """
+        if not academic_year_id:
+            ay = AcademicYearService.get_current_year()
+        else:
+            ay = AcademicYear.objects.filter(pk=academic_year_id).first()
+
+        periods = list(TimetablePeriod.objects.all().order_by('period_number'))
+        days = list(TimetableSlot.DAYS_OF_WEEK)
+
+        slots = TimetableSlot.objects.filter(
+            class_subject__teacher_id=teacher_id
+        ).select_related(
+            'period', 'class_subject', 'class_subject__section',
+            'class_subject__section__school_class', 'class_subject__subject'
+        )
+        if ay:
+            slots = slots.filter(academic_year=ay)
+
+        slot_map = {(s.day_of_week, s.period_id): s for s in slots}
+
+        grid = []
+        total_scheduled = len(slots)
+        sections_covered = set()
+
+        for day_code, day_name in days:
+            row_cells = []
+            for p in periods:
+                slot = slot_map.get((day_code, p.pk))
+                if slot:
+                    sections_covered.add(str(slot.class_subject.section))
+
+                row_cells.append({
+                    'period': p,
+                    'is_break': p.is_break,
+                    'slot': slot,
+                })
+
+            grid.append({
+                'day_code': day_code,
+                'day_name': day_name,
+                'periods': row_cells,
+            })
+
+        return {
+            'days': days,
+            'periods': periods,
+            'grid': grid,
+            'total_scheduled': total_scheduled,
+            'sections_covered': sorted(sections_covered),
+        }
