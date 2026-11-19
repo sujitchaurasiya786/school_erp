@@ -10,11 +10,11 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
 from apps.academics.models import (
-    AcademicStream, ClassSubject, SchoolClass, Section, Stream, Subject, SubjectType,
+    AcademicStream, ClassSubject, Room, RoomType, SchoolClass, Section, Stream, Subject, SubjectType,
     TimetablePeriod, TimetableSlot
 )
 from apps.academics.services import (
-    AcademicYearService, ClassSubjectService, SchoolClassService, SectionService, StreamService, SubjectService,
+    AcademicYearService, ClassSubjectService, RoomService, SchoolClassService, SectionService, StreamService, SubjectService,
     TeacherAssignmentService, TimetablePeriodService, TimetableService
 )
 from apps.rbac.services import RBACService
@@ -1080,25 +1080,28 @@ def timetable_view(request):
       - Tab 2: Teacher Timetable Matrix (Weekly Grid by Faculty member)
       - Tab 3: Bell Schedule / Period Management (Timetable Periods, times, break flags, CBSE defaults generation)
     """
-    if not _check_academics_permission(request, 'academics.timetable.view'):
-        messages.error(request, "You do not have permission to view timetables.")
+    has_timetable_view = _check_academics_permission(request, 'academics.timetable.view')
+    has_room_view = _check_academics_permission(request, 'academics.room.view')
+    if not (has_timetable_view or has_room_view):
+        messages.error(request, "You do not have permission to view timetables or rooms.")
         return redirect('home-dashboard')
 
-    can_manage = _check_academics_permission(request, 'academics.timetable.manage')
+    can_manage_timetable = _check_academics_permission(request, 'academics.timetable.manage')
+    can_manage_room = _check_academics_permission(request, 'academics.room.manage') or can_manage_timetable
+    can_manage = can_manage_timetable or can_manage_room
 
     active_tab = request.GET.get('tab', 'section_matrix').strip()
-    if active_tab not in ('section_matrix', 'teacher_matrix', 'periods'):
+    if active_tab not in ('section_matrix', 'teacher_matrix', 'periods', 'rooms'):
         active_tab = 'section_matrix'
 
     if request.method == 'POST':
-        if not can_manage:
-            messages.error(request, "You do not have permission to manage timetables.")
-            return redirect('academics-timetable-list')
-
         action = request.POST.get('action')
 
         # 1. Period Actions
         if action == 'create_period':
+            if not can_manage_timetable:
+                messages.error(request, "You do not have permission to manage timetables.")
+                return redirect('academics-timetable-list')
             period_number = request.POST.get('period_number')
             name = request.POST.get('name', 'Period')
             start_time = request.POST.get('start_time')
@@ -1122,6 +1125,9 @@ def timetable_view(request):
             return redirect(f"{request.path}?tab=periods")
 
         elif action == 'update_period':
+            if not can_manage_timetable:
+                messages.error(request, "You do not have permission to manage timetables.")
+                return redirect('academics-timetable-list')
             period_id = request.POST.get('period_id')
             period_number = request.POST.get('period_number')
             name = request.POST.get('name')
@@ -1147,6 +1153,9 @@ def timetable_view(request):
             return redirect(f"{request.path}?tab=periods")
 
         elif action == 'delete_period':
+            if not can_manage_timetable:
+                messages.error(request, "You do not have permission to manage timetables.")
+                return redirect('academics-timetable-list')
             period_id = request.POST.get('period_id')
             try:
                 TimetablePeriodService.delete_period(period_id=period_id, actor=request.user, request=request)
@@ -1156,7 +1165,10 @@ def timetable_view(request):
                 messages.error(request, f"Failed to delete period: {msg}")
             return redirect(f"{request.path}?tab=periods")
 
-        elif action == 'generate_cbse_periods':
+        elif action == 'generate_cbSE_periods' or action == 'generate_cbse_periods':
+            if not can_manage_timetable:
+                messages.error(request, "You do not have permission to manage timetables.")
+                return redirect('academics-timetable-list')
             try:
                 periods = TimetablePeriodService.bulk_create_cbse_standard_periods(actor=request.user, request=request)
                 messages.success(request, f"Generated {len(periods)} CBSE standard periods (with Assembly, Breaks & 8 Teaching Periods).")
@@ -1166,9 +1178,13 @@ def timetable_view(request):
 
         # 2. Slot Actions
         elif action == 'create_slot':
+            if not can_manage_timetable:
+                messages.error(request, "You do not have permission to manage timetables.")
+                return redirect('academics-timetable-list')
             day_of_week = request.POST.get('day_of_week')
             period_id = request.POST.get('period_id')
             class_subject_id = request.POST.get('class_subject_id')
+            room_id = request.POST.get('room_id')
             room = request.POST.get('room', '')
             section_id = request.POST.get('section_id')
 
@@ -1178,6 +1194,7 @@ def timetable_view(request):
                     period_id=period_id,
                     class_subject_id=class_subject_id,
                     room=room,
+                    room_id=int(room_id) if room_id and room_id.isdigit() else None,
                     actor=request.user,
                     request=request,
                 )
@@ -1193,15 +1210,21 @@ def timetable_view(request):
             return redirect(redirect_url)
 
         elif action == 'update_slot':
+            if not can_manage_timetable:
+                messages.error(request, "You do not have permission to manage timetables.")
+                return redirect('academics-timetable-list')
             slot_id = request.POST.get('slot_id')
             class_subject_id = request.POST.get('class_subject_id')
+            room_id = request.POST.get('room_id')
             room = request.POST.get('room', '')
             section_id = request.POST.get('section_id')
 
             update_data = {}
             if class_subject_id:
                 update_data['class_subject_id'] = class_subject_id
-            if room is not None:
+            if room_id and room_id.isdigit():
+                update_data['room_id'] = int(room_id)
+            elif room is not None:
                 update_data['room'] = room
 
             try:
@@ -1222,6 +1245,9 @@ def timetable_view(request):
             return redirect(redirect_url)
 
         elif action == 'delete_slot':
+            if not can_manage_timetable:
+                messages.error(request, "You do not have permission to manage timetables.")
+                return redirect('academics-timetable-list')
             slot_id = request.POST.get('slot_id')
             section_id = request.POST.get('section_id')
             try:
@@ -1235,6 +1261,106 @@ def timetable_view(request):
             if section_id:
                 redirect_url += f"&section_id={section_id}"
             return redirect(redirect_url)
+
+        # 3. Room Actions
+        elif action == 'create_room':
+            if not can_manage_room:
+                messages.error(request, "You do not have permission to manage rooms.")
+                return redirect(f"{request.path}?tab=rooms")
+
+            room_number = request.POST.get('room_number', '').strip()
+            name = request.POST.get('name', '').strip()
+            room_type = request.POST.get('room_type', RoomType.CLASSROOM).strip()
+            capacity = request.POST.get('capacity', 40)
+            floor = request.POST.get('floor', '').strip()
+            description = request.POST.get('description', '').strip()
+            is_active = request.POST.get('is_active') == 'on'
+
+            try:
+                room_obj = RoomService.create_room(
+                    room_number=room_number,
+                    room_type=room_type,
+                    capacity=capacity,
+                    name=name,
+                    floor=floor,
+                    description=description,
+                    is_active=is_active,
+                    actor=request.user,
+                    request=request
+                )
+                messages.success(request, f"Room '{room_obj.room_number}' created successfully.")
+            except (ValidationError, BusinessConflictError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to create room: {msg}")
+            return redirect(f"{request.path}?tab=rooms")
+
+        elif action == 'update_room':
+            if not can_manage_room:
+                messages.error(request, "You do not have permission to manage rooms.")
+                return redirect(f"{request.path}?tab=rooms")
+
+            room_id = request.POST.get('room_id')
+            room_number = request.POST.get('room_number', '').strip()
+            name = request.POST.get('name', '').strip()
+            room_type = request.POST.get('room_type')
+            capacity = request.POST.get('capacity')
+            floor = request.POST.get('floor', '').strip()
+            description = request.POST.get('description', '').strip()
+            is_active = request.POST.get('is_active') == 'on'
+
+            try:
+                room_obj = RoomService.update_room(
+                    room_id=room_id,
+                    room_number=room_number,
+                    name=name,
+                    room_type=room_type,
+                    capacity=capacity,
+                    floor=floor,
+                    description=description,
+                    is_active=is_active,
+                    actor=request.user,
+                    request=request
+                )
+                messages.success(request, f"Room '{room_obj.room_number}' updated successfully.")
+            except (ValidationError, ResourceNotFoundError, BusinessConflictError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to update room: {msg}")
+            return redirect(f"{request.path}?tab=rooms")
+
+        elif action == 'toggle_room_status':
+            if not can_manage_room:
+                messages.error(request, "You do not have permission to manage rooms.")
+                return redirect(f"{request.path}?tab=rooms")
+
+            room_id = request.POST.get('room_id')
+            target_status = request.POST.get('is_active') == 'true'
+            try:
+                room_obj = RoomService.toggle_room_status(
+                    room_id=room_id,
+                    is_active=target_status,
+                    actor=request.user,
+                    request=request
+                )
+                messages.success(request, f"Room '{room_obj.room_number}' {'activated' if target_status else 'deactivated'} successfully.")
+            except (ResourceNotFoundError, ValidationError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to change status: {msg}")
+            return redirect(f"{request.path}?tab=rooms")
+
+        elif action == 'delete_room':
+            if not can_manage_room:
+                messages.error(request, "You do not have permission to manage rooms.")
+                return redirect(f"{request.path}?tab=rooms")
+
+            room_id = request.POST.get('room_id')
+            try:
+                RoomService.delete_room(room_id=room_id, actor=request.user, request=request)
+                messages.success(request, "Room deleted successfully.")
+            except (BusinessConflictError, ResourceNotFoundError) as err:
+                messages.warning(request, str(err))
+            except Exception as err:
+                messages.error(request, f"An unexpected error occurred: {err}")
+            return redirect(f"{request.path}?tab=rooms")
 
     # Context Data
     all_periods = TimetablePeriodService.list_periods()
@@ -1276,6 +1402,17 @@ def timetable_view(request):
     break_periods_count = total_periods_count - teaching_periods_count
     total_slots_count = TimetableSlot.objects.count()
 
+    # Room Master data
+    selected_room_type = request.GET.get('room_type', '').strip()
+    room_search_query = request.GET.get('q', '').strip()
+    all_rooms_qs = RoomService.list_rooms(
+        room_type=selected_room_type if selected_room_type else None,
+        search=room_search_query if room_search_query else None
+    )
+    active_rooms = RoomService.list_rooms(is_active=True)
+    total_rooms_count = Room.objects.count()
+    active_rooms_count = Room.objects.filter(is_active=True).count()
+
     context = {
         'active_tab': active_tab,
         'all_periods': all_periods,
@@ -1288,11 +1425,19 @@ def timetable_view(request):
         'available_subjects': available_subjects,
         'selected_teacher': selected_teacher,
         'teacher_matrix': teacher_matrix,
+        'all_rooms': all_rooms_qs,
+        'active_rooms': active_rooms,
+        'room_types': RoomType.choices,
+        'selected_room_type': selected_room_type,
+        'room_search_query': room_search_query,
+        'total_rooms_count': total_rooms_count,
+        'active_rooms_count': active_rooms_count,
         'days_of_week': TimetableSlot.DAYS_OF_WEEK,
         'total_periods_count': total_periods_count,
         'teaching_periods_count': teaching_periods_count,
         'break_periods_count': break_periods_count,
         'total_slots_count': total_slots_count,
         'can_manage': can_manage,
+        'can_manage_room': can_manage_room,
     }
     return render(request, 'dashboard/academics/timetable.html', context)

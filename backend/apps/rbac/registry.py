@@ -256,6 +256,20 @@ PERMISSION_REGISTRY = [
         "description": "Create and edit class timetables and teacher assignments.",
     },
     {
+        "codename": "academics.room.view",
+        "module": "academics",
+        "action": "view",
+        "name": "View Rooms & Facilities",
+        "description": "View school classrooms, laboratories, facilities, and capacity details.",
+    },
+    {
+        "codename": "academics.room.manage",
+        "module": "academics",
+        "action": "change",
+        "name": "Manage Rooms & Facilities",
+        "description": "Create, edit, configure, and activate/deactivate school rooms and laboratories.",
+    },
+    {
         "codename": "academics.subjects.view",
         "module": "academics",
         "action": "view",

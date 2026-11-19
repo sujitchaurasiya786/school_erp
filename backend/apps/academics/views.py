@@ -1,10 +1,10 @@
 from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated
 from apps.academics.models import (
-    SchoolClass, Section, Subject, ClassSubject, TimetablePeriod, TimetableSlot
+    Room, RoomType, SchoolClass, Section, Subject, ClassSubject, TimetablePeriod, TimetableSlot
 )
 from apps.academics.serializers import (
-    SchoolClassSerializer, SectionSerializer, SubjectSerializer,
+    RoomSerializer, SchoolClassSerializer, SectionSerializer, SubjectSerializer,
     ClassSubjectSerializer, TimetablePeriodSerializer, TimetableSlotSerializer
 )
 from rest_framework.decorators import action
@@ -12,7 +12,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.core.exceptions import ValidationError
 from apps.academics.services import (
-    AcademicsService, ClassSubjectService, TeacherAssignmentService,
+    AcademicsService, ClassSubjectService, RoomService, TeacherAssignmentService,
     TimetablePeriodService, TimetableService
 )
 from apps.rbac.permissions import HasDynamicPermission
@@ -235,10 +235,67 @@ class TimetablePeriodViewSet(viewsets.ModelViewSet):
             return Response({'error': msg}, status=status.HTTP_400_BAD_REQUEST)
 
 
+class RoomViewSet(viewsets.ModelViewSet):
+    queryset = Room.objects.all()
+    serializer_class = RoomSerializer
+    permission_classes = [IsAuthenticated, HasDynamicPermission]
+    module_name = 'academics'
+    filterset_fields = ['room_type', 'is_active']
+    search_fields = ['room_number', 'name', 'floor']
+
+    def perform_create(self, serializer):
+        data = serializer.validated_data
+        RoomService.create_room(
+            room_number=data.get('room_number'),
+            room_type=data.get('room_type', RoomType.CLASSROOM),
+            capacity=data.get('capacity', 40),
+            name=data.get('name', ''),
+            floor=data.get('floor', ''),
+            description=data.get('description', ''),
+            is_active=data.get('is_active', True),
+            actor=self.request.user,
+            request=self.request,
+        )
+
+    def perform_update(self, serializer):
+        data = serializer.validated_data
+        RoomService.update_room(
+            room_id=serializer.instance.pk,
+            actor=self.request.user,
+            request=self.request,
+            **data
+        )
+
+    def perform_destroy(self, instance):
+        RoomService.delete_room(
+            room_id=instance.pk,
+            actor=self.request.user,
+            request=self.request,
+        )
+
+    @action(detail=True, methods=['post'], url_path='toggle-status')
+    def toggle_status(self, request, pk=None):
+        room = self.get_object()
+        new_status = not room.is_active
+        if 'is_active' in request.data:
+            val = request.data['is_active']
+            if isinstance(val, str):
+                new_status = val.strip().lower() in ('true', '1', 't', 'yes', 'on')
+            else:
+                new_status = bool(val)
+        room = RoomService.toggle_room_status(
+            room_id=room.pk,
+            is_active=new_status,
+            actor=request.user,
+            request=request,
+        )
+        return Response(self.get_serializer(room).data, status=status.HTTP_200_OK)
+
+
 class TimetableSlotViewSet(viewsets.ModelViewSet):
     queryset = TimetableSlot.objects.select_related(
         'academic_year', 'period', 'class_subject', 'class_subject__section',
-        'class_subject__subject', 'class_subject__teacher'
+        'class_subject__subject', 'class_subject__teacher', 'room_ref'
     ).all()
     serializer_class = TimetableSlotSerializer
     permission_classes = [IsAuthenticated, HasDynamicPermission]
@@ -247,10 +304,13 @@ class TimetableSlotViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         data = serializer.validated_data
+        room_val = data.get('room_ref') or data.get('room')
         AcademicsService.validate_slot_conflicts(
             data['academic_year'], data['day_of_week'], data['period'],
-            data['class_subject'], data.get('room')
+            data['class_subject'], room_val
         )
+        if data.get('room_ref') and not data.get('room'):
+            serializer.validated_data['room'] = data['room_ref'].room_number
         serializer.save()
 
     def perform_update(self, serializer):
@@ -259,16 +319,18 @@ class TimetableSlotViewSet(viewsets.ModelViewSet):
         day_of_week = data.get('day_of_week', serializer.instance.day_of_week)
         period = data.get('period', serializer.instance.period)
         class_subject = data.get('class_subject', serializer.instance.class_subject)
-        room = data.get('room', serializer.instance.room)
+        room_val = data.get('room_ref', serializer.instance.room_ref) or data.get('room', serializer.instance.room)
 
         AcademicsService.validate_slot_conflicts(
             academic_year=academic_year,
             day_of_week=day_of_week,
             period=period,
             class_subject=class_subject,
-            room=room,
+            room=room_val,
             exclude_slot_id=serializer.instance.pk
         )
+        if data.get('room_ref') and not data.get('room'):
+            serializer.validated_data['room'] = data['room_ref'].room_number
         serializer.save()
 
     @action(detail=False, methods=['get'], url_path='section-matrix')

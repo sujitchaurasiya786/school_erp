@@ -5,7 +5,7 @@ from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
 
 from apps.academics.models import (
-    AcademicStream, ClassSubject, SchoolClass, Section, Stream, Subject, SubjectType,
+    AcademicStream, ClassSubject, Room, RoomType, SchoolClass, Section, Stream, Subject, SubjectType,
     TimetablePeriod, TimetableSlot
 )
 from apps.audit.models import AuditAction
@@ -67,7 +67,18 @@ class AcademicsService:
 
         # 3. Room conflict check
         if room:
-            cleaned_room = str(room).strip()
+            room_obj = None
+            if isinstance(room, Room):
+                room_obj = room
+                cleaned_room = str(room.room_number).strip()
+            else:
+                cleaned_room = str(room).strip()
+                if cleaned_room:
+                    room_obj = Room.objects.filter(room_number__iexact=cleaned_room).first()
+
+            if room_obj and not room_obj.is_active:
+                raise ValidationError({'room': _(f"Cannot schedule in inactive room '{room_obj.room_number}'. Please activate the room first.")})
+
             if cleaned_room:
                 room_conflict = TimetableSlot.objects.filter(
                     academic_year=academic_year,
@@ -444,7 +455,7 @@ class AcademicYearService:
         dependencies = []
 
         from apps.academics.models import (
-    AcademicStream, ClassSubject, SchoolClass, Section, Stream, Subject, SubjectType,
+    AcademicStream, ClassSubject, Room, RoomType, SchoolClass, Section, Stream, Subject, SubjectType,
     TimetablePeriod, TimetableSlot
 )
         tt_count = TimetableSlot.objects.filter(academic_year=year).count()
@@ -703,11 +714,13 @@ class SectionService:
         capacity=40,
         stream=Stream.NONE,
         room_number="",
+        room_ref_id=None,
         class_teacher_id=None,
         is_active=True,
         actor=None,
         reason="",
-        request=None
+        request=None,
+        **kwargs
     ):
         """
         Creates a new Section with validation and audit logging.
@@ -725,12 +738,25 @@ class SectionService:
         if parsed_capacity < 1:
             raise ValidationError({'capacity': _("Capacity must be a positive integer (>= 1).")})
 
+        room_ref = None
+        cleaned_room_number = str(room_number or "").strip()
+        ref_id = room_ref_id or kwargs.get('room_id')
+        if ref_id:
+            try:
+                room_ref = Room.objects.get(pk=ref_id)
+                cleaned_room_number = room_ref.room_number
+            except Room.DoesNotExist:
+                raise ResourceNotFoundError(f"Room with ID {room_ref_id} not found.")
+        elif cleaned_room_number:
+            room_ref = Room.objects.filter(room_number__iexact=cleaned_room_number).first()
+
         section = Section(
             school_class=school_class,
             name=cleaned_name,
             capacity=parsed_capacity,
             stream=stream or Stream.NONE,
-            room_number=str(room_number or "").strip(),
+            room_number=cleaned_room_number,
+            room_ref=room_ref,
             class_teacher_id=class_teacher_id,
             is_active=bool(is_active)
         )
@@ -781,6 +807,7 @@ class SectionService:
             "capacity": section.capacity,
             "stream": section.stream,
             "room_number": section.room_number,
+            "room_ref_id": section.room_ref_id,
             "class_teacher_id": section.class_teacher_id,
             "is_active": section.is_active,
             "school_class_id": section.school_class_id,
@@ -799,8 +826,22 @@ class SectionService:
             section.capacity = int(kwargs['capacity'])
         if 'stream' in kwargs:
             section.stream = kwargs['stream'] or Stream.NONE
-        if 'room_number' in kwargs:
-            section.room_number = str(kwargs['room_number'] or "").strip()
+        if 'room_ref_id' in kwargs or 'room_id' in kwargs:
+            rid = kwargs.get('room_ref_id') or kwargs.get('room_id')
+            if rid:
+                try:
+                    robj = Room.objects.get(pk=rid)
+                    section.room_ref = robj
+                    section.room_number = robj.room_number
+                except Room.DoesNotExist:
+                    raise ResourceNotFoundError(f"Room with ID {rid} not found.")
+            else:
+                section.room_ref = None
+                section.room_number = ""
+        elif 'room_number' in kwargs:
+            rnum = str(kwargs['room_number'] or "").strip()
+            section.room_number = rnum
+            section.room_ref = Room.objects.filter(room_number__iexact=rnum).first()
         if 'class_teacher_id' in kwargs:
             section.class_teacher_id = kwargs['class_teacher_id']
         if 'is_active' in kwargs:
@@ -814,6 +855,7 @@ class SectionService:
             "capacity": section.capacity,
             "stream": section.stream,
             "room_number": section.room_number,
+            "room_ref_id": section.room_ref_id,
             "class_teacher_id": section.class_teacher_id,
             "is_active": section.is_active,
             "school_class_id": section.school_class_id,
@@ -2526,9 +2568,12 @@ class TimetableService:
         class_subject_id,
         academic_year_id=None,
         room="",
+        room_id=None,
+        room_ref_id=None,
         actor=None,
         reason="",
-        request=None
+        request=None,
+        **kwargs
     ):
         if academic_year_id:
             try:
@@ -2566,16 +2611,49 @@ class TimetableService:
         if not class_sub.is_active:
             raise ValidationError({'class_subject': _("Cannot schedule an inactive subject mapping.")})
 
-        cleaned_room = str(room or "").strip()
-        if not cleaned_room and class_sub.section.room_number:
-            cleaned_room = class_sub.section.room_number
+        room_obj = None
+        cleaned_room = ""
+        target_room_id = room_id or room_ref_id or kwargs.get('room_ref_id') or kwargs.get('room_id')
+
+        if target_room_id:
+            try:
+                room_obj = Room.objects.get(pk=target_room_id)
+            except Room.DoesNotExist:
+                raise ResourceNotFoundError(f"Room with ID {target_room_id} not found.")
+            if not room_obj.is_active:
+                raise ValidationError({'room': _(f"Cannot schedule in inactive room '{room_obj.room_number}'. Please activate the room first.")})
+            cleaned_room = room_obj.room_number
+        elif room:
+            if isinstance(room, Room):
+                room_obj = room
+                cleaned_room = room_obj.room_number
+                if not room_obj.is_active:
+                    raise ValidationError({'room': _(f"Cannot schedule in inactive room '{room_obj.room_number}'. Please activate the room first.")})
+            else:
+                cleaned_room = str(room).strip()
+                matched = Room.objects.filter(room_number__iexact=cleaned_room).first()
+                if matched:
+                    room_obj = matched
+                    cleaned_room = matched.room_number
+                    if not matched.is_active:
+                        raise ValidationError({'room': _(f"Cannot schedule in inactive room '{matched.room_number}'. Please activate the room first.")})
+        elif class_sub.section.room_ref or class_sub.section.room_number:
+            if class_sub.section.room_ref:
+                room_obj = class_sub.section.room_ref
+                cleaned_room = room_obj.room_number
+            else:
+                cleaned_room = class_sub.section.room_number
+                matched = Room.objects.filter(room_number__iexact=cleaned_room).first()
+                if matched:
+                    room_obj = matched
+                    cleaned_room = matched.room_number
 
         AcademicsService.validate_slot_conflicts(
             academic_year=academic_year,
             day_of_week=day_num,
             period=period,
             class_subject=class_sub,
-            room=cleaned_room
+            room=room_obj or cleaned_room
         )
 
         slot = TimetableSlot(
@@ -2583,7 +2661,8 @@ class TimetableService:
             day_of_week=day_num,
             period=period,
             class_subject=class_sub,
-            room=cleaned_room
+            room=cleaned_room,
+            room_ref=room_obj
         )
         slot.save()
 
@@ -2632,6 +2711,7 @@ class TimetableService:
             "period_id": slot.period_id,
             "class_subject_id": slot.class_subject_id,
             "room": slot.room,
+            "room_ref_id": slot.room_ref_id,
         }
 
         if 'day_of_week' in kwargs:
@@ -2654,15 +2734,44 @@ class TimetableService:
                 raise ValidationError({'class_subject': _("Cannot schedule an inactive subject mapping.")})
             slot.class_subject = class_sub
 
-        if 'room' in kwargs:
-            slot.room = str(kwargs['room'] or "").strip()
+        if 'room_id' in kwargs or 'room_ref_id' in kwargs:
+            rid = kwargs.get('room_id') or kwargs.get('room_ref_id')
+            if rid:
+                try:
+                    robj = Room.objects.get(pk=rid)
+                    if not robj.is_active:
+                        raise ValidationError({'room': _(f"Cannot schedule in inactive room '{robj.room_number}'. Please activate the room first.")})
+                    slot.room_ref = robj
+                    slot.room = robj.room_number
+                except Room.DoesNotExist:
+                    raise ResourceNotFoundError(f"Room with ID {rid} not found.")
+            else:
+                slot.room_ref = None
+                slot.room = ""
+        elif 'room' in kwargs:
+            val = kwargs['room']
+            if isinstance(val, Room):
+                if not val.is_active:
+                    raise ValidationError({'room': _(f"Cannot schedule in inactive room '{val.room_number}'. Please activate the room first.")})
+                slot.room_ref = val
+                slot.room = val.room_number
+            else:
+                cleaned = str(val or "").strip()
+                slot.room = cleaned
+                matched = Room.objects.filter(room_number__iexact=cleaned).first()
+                if matched:
+                    if not matched.is_active:
+                        raise ValidationError({'room': _(f"Cannot schedule in inactive room '{matched.room_number}'. Please activate the room first.")})
+                    slot.room_ref = matched
+                else:
+                    slot.room_ref = None
 
         AcademicsService.validate_slot_conflicts(
             academic_year=slot.academic_year,
             day_of_week=slot.day_of_week,
             period=slot.period,
             class_subject=slot.class_subject,
-            room=slot.room,
+            room=slot.room_ref or slot.room,
             exclude_slot_id=slot.pk
         )
 
@@ -2673,6 +2782,7 @@ class TimetableService:
             "period_id": slot.period_id,
             "class_subject_id": slot.class_subject_id,
             "room": slot.room,
+            "room_ref_id": slot.room_ref_id,
         }
         changes = {k: {"old": old_state[k], "new": new_state[k]} for k in old_state if old_state[k] != new_state[k]}
 
@@ -2826,3 +2936,241 @@ class TimetableService:
             'total_scheduled': total_scheduled,
             'sections_covered': sorted(sections_covered),
         }
+
+
+class RoomService:
+    """
+    Service for managing school rooms, laboratories, and physical facilities.
+    """
+
+    @classmethod
+    @transaction.atomic
+    def create_room(
+        cls,
+        room_number,
+        room_type=RoomType.CLASSROOM,
+        capacity=40,
+        name="",
+        floor="",
+        description="",
+        is_active=True,
+        actor=None,
+        reason="",
+        request=None
+    ):
+        room_number = str(room_number or "").strip()
+        if not room_number:
+            raise ValidationError({'room_number': _("Room number/code is required.")})
+
+        if Room.objects.filter(room_number__iexact=room_number).exists():
+            raise BusinessConflictError(f"A room with number/code '{room_number}' already exists.")
+
+        try:
+            capacity_val = int(capacity)
+            if capacity_val < 1:
+                raise ValidationError({'capacity': _("Room capacity must be a positive integer (>= 1).")})
+        except (ValueError, TypeError):
+            raise ValidationError({'capacity': _("Room capacity must be a valid number.")})
+
+        valid_types = dict(RoomType.choices)
+        if room_type not in valid_types:
+            raise ValidationError({'room_type': _(f"Invalid room type. Choices are: {', '.join(valid_types.keys())}")})
+
+        room = Room(
+            room_number=room_number,
+            room_type=room_type,
+            capacity=capacity_val,
+            name=str(name or "").strip(),
+            floor=str(floor or "").strip(),
+            description=str(description or "").strip(),
+            is_active=bool(is_active)
+        )
+        room.save()
+
+        AuditService.log(
+            action=AuditAction.CREATE,
+            module="academics",
+            entity_type="Room",
+            entity_id=str(room.pk),
+            actor=actor,
+            reason=reason or f"Created room {room.room_number} ({room.get_room_type_display()})",
+            changes={
+                "room_number": room.room_number,
+                "room_type": room.room_type,
+                "capacity": room.capacity,
+                "name": room.name,
+                "floor": room.floor,
+                "is_active": room.is_active,
+            },
+            request=request,
+        )
+        return room
+
+    @classmethod
+    @transaction.atomic
+    def update_room(
+        cls,
+        room_id,
+        actor=None,
+        reason="",
+        request=None,
+        **kwargs
+    ):
+        try:
+            room = Room.objects.select_for_update().get(pk=room_id)
+        except Room.DoesNotExist:
+            raise ResourceNotFoundError(f"Room with ID {room_id} not found.")
+
+        old_state = {
+            "room_number": room.room_number,
+            "name": room.name,
+            "room_type": room.room_type,
+            "capacity": room.capacity,
+            "floor": room.floor,
+            "description": room.description,
+            "is_active": room.is_active,
+        }
+
+        if 'room_number' in kwargs:
+            num = str(kwargs['room_number'] or "").strip()
+            if not num:
+                raise ValidationError({'room_number': _("Room number/code cannot be empty.")})
+            if Room.objects.filter(room_number__iexact=num).exclude(pk=room.pk).exists():
+                raise BusinessConflictError(f"A room with number/code '{num}' already exists.")
+            room.room_number = num
+
+        if 'name' in kwargs:
+            room.name = str(kwargs['name'] or "").strip()
+
+        if 'room_type' in kwargs:
+            rtype = kwargs['room_type']
+            if rtype not in dict(RoomType.choices):
+                raise ValidationError({'room_type': _("Invalid room type.")})
+            room.room_type = rtype
+
+        if 'capacity' in kwargs:
+            try:
+                cap = int(kwargs['capacity'])
+                if cap < 1:
+                    raise ValidationError({'capacity': _("Room capacity must be a positive integer (>= 1).")})
+                room.capacity = cap
+            except (ValueError, TypeError):
+                raise ValidationError({'capacity': _("Room capacity must be a valid number.")})
+
+        if 'floor' in kwargs:
+            room.floor = str(kwargs['floor'] or "").strip()
+
+        if 'description' in kwargs:
+            room.description = str(kwargs['description'] or "").strip()
+
+        if 'is_active' in kwargs:
+            room.is_active = bool(kwargs['is_active'])
+
+        room.save()
+
+        new_state = {
+            "room_number": room.room_number,
+            "name": room.name,
+            "room_type": room.room_type,
+            "capacity": room.capacity,
+            "floor": room.floor,
+            "description": room.description,
+            "is_active": room.is_active,
+        }
+        changes = {k: {"old": old_state[k], "new": new_state[k]} for k in old_state if old_state[k] != new_state[k]}
+
+        if changes:
+            AuditService.log(
+                action=AuditAction.UPDATE,
+                module="academics",
+                entity_type="Room",
+                entity_id=str(room.pk),
+                actor=actor,
+                reason=reason or f"Updated room {room.room_number}",
+                changes=changes,
+                request=request,
+            )
+        return room
+
+    @classmethod
+    @transaction.atomic
+    def toggle_room_status(cls, room_id, is_active, actor=None, reason="", request=None):
+        return cls.update_room(
+            room_id=room_id,
+            is_active=is_active,
+            actor=actor,
+            reason=reason or f"{'Activated' if is_active else 'Deactivated'} room",
+            request=request
+        )
+
+    @classmethod
+    @transaction.atomic
+    def delete_room(cls, room_id, actor=None, reason="", request=None):
+        try:
+            room = Room.objects.select_for_update().get(pk=room_id)
+        except Room.DoesNotExist:
+            raise ResourceNotFoundError(f"Room with ID {room_id} not found.")
+
+        # Check references in TimetableSlot (via room_ref or room text)
+        slot_refs = TimetableSlot.objects.filter(
+            Q(room_ref=room) | Q(room__iexact=room.room_number)
+        )
+        if slot_refs.exists():
+            raise BusinessConflictError(
+                f"Cannot delete room '{room.room_number}' because it is referenced by {slot_refs.count()} timetable schedule slot(s). "
+                f"Please deactivate the room instead."
+            )
+
+        # Check references in Section (via room_ref or room_number text)
+        section_refs = Section.objects.filter(
+            Q(room_ref=room) | Q(room_number__iexact=room.room_number)
+        )
+        if section_refs.exists():
+            raise BusinessConflictError(
+                f"Cannot delete room '{room.room_number}' because it is assigned as homeroom for {section_refs.count()} section(s). "
+                f"Please reassign the section homeroom or deactivate the room instead."
+            )
+
+        deleted_info = {
+            "room_number": room.room_number,
+            "name": room.name,
+            "room_type": room.room_type,
+            "capacity": room.capacity,
+        }
+        room.delete()
+
+        AuditService.log(
+            action=AuditAction.DELETE,
+            module="academics",
+            entity_type="Room",
+            entity_id=str(room_id),
+            actor=actor,
+            reason=reason or f"Deleted room {deleted_info['room_number']}",
+            changes={"deleted": deleted_info},
+            request=request,
+        )
+        return True
+
+    @classmethod
+    def list_rooms(cls, room_type=None, is_active=None, search=None):
+        qs = Room.objects.all().order_by('room_number')
+        if room_type:
+            qs = qs.filter(room_type=room_type)
+        if is_active is not None:
+            qs = qs.filter(is_active=is_active)
+        if search:
+            search_str = str(search).strip()
+            qs = qs.filter(
+                Q(room_number__icontains=search_str) |
+                Q(name__icontains=search_str) |
+                Q(floor__icontains=search_str) |
+                Q(description__icontains=search_str)
+            )
+        return qs
+
+    @classmethod
+    def get_room(cls, room_id):
+        try:
+            return Room.objects.get(pk=room_id)
+        except Room.DoesNotExist:
+            raise ResourceNotFoundError(f"Room with ID {room_id} not found.")

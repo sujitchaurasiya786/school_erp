@@ -1,11 +1,12 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from apps.academics.views import (
-    SchoolClassViewSet, SectionViewSet, SubjectViewSet,
+    RoomViewSet, SchoolClassViewSet, SectionViewSet, SubjectViewSet,
     ClassSubjectViewSet, TimetablePeriodViewSet, TimetableSlotViewSet
 )
 
 router = DefaultRouter()
+router.register(r'rooms', RoomViewSet, basename='room')
 router.register(r'classes', SchoolClassViewSet, basename='school-class')
 router.register(r'sections', SectionViewSet, basename='section')
 router.register(r'subjects', SubjectViewSet, basename='subject')

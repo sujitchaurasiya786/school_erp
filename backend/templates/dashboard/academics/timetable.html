@@ -22,6 +22,11 @@
             <a href="{% url 'academics-teacher-assignments-list' %}" class="btn btn-outline-secondary">
                 <i class="ti ti-user-pin me-1"></i> Teacher Assignments
             </a>
+            {% if can_manage_room %}
+            <button type="button" class="btn btn-outline-success" data-bs-toggle="modal" data-bs-target="#addRoomModal">
+                <i class="ti ti-door-enter me-1"></i> Add Room
+            </button>
+            {% endif %}
             {% if can_manage %}
             <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#addPeriodModal">
                 <i class="ti ti-clock-plus me-1"></i> Add Period
@@ -127,6 +132,12 @@
                     <a class="nav-link {% if active_tab == 'periods' %}active fw-bold text-primary border-primary border-bottom-2{% else %}text-muted{% endif %} pb-3"
                        href="{% url 'academics-timetable-list' %}?tab=periods">
                         <i class="ti ti-alarm me-1"></i> Bell Schedule & Periods ({{ total_periods_count }})
+                    </a>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <a class="nav-link {% if active_tab == 'rooms' %}active fw-bold text-primary border-primary border-bottom-2{% else %}text-muted{% endif %} pb-3"
+                       href="{% url 'academics-timetable-list' %}?tab=rooms">
+                        <i class="ti ti-door me-1"></i> Rooms & Facilities ({{ total_rooms_count }})
                     </a>
                 </li>
             </ul>
@@ -241,6 +252,7 @@
                                                        data-slot-id="{{ cell.slot.pk }}"
                                                        data-class-subject-id="{{ cell.slot.class_subject.pk }}"
                                                        data-room="{{ cell.slot.room }}"
+                                                       data-room-ref-id="{{ cell.slot.room_ref_id|default:'' }}"
                                                        data-day-name="{{ row.day_name }}"
                                                        data-period-name="{{ cell.period.name }} {{ cell.period.period_number }}">
                                                         <i class="ti ti-edit me-1 text-primary"></i> Edit Slot
@@ -513,6 +525,168 @@
                 </table>
             </div>
             {% endif %}
+
+            <!-- TAB 4: ROOM MASTER & PHYSICAL FACILITIES -->
+            {% if active_tab == 'rooms' %}
+            <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 mb-4 pb-3 border-bottom border-light">
+                <div>
+                    <h5 class="fw-bold mb-1">Room Master & Facilities</h5>
+                    <p class="text-muted small mb-0">Configure classrooms, specialized laboratories, auditorium, and instructional facilities with seating capacities and collision protection.</p>
+                </div>
+                {% if can_manage_room %}
+                <div>
+                    <button type="button" class="btn btn-primary btn-sm shadow-sm" data-bs-toggle="modal" data-bs-target="#addRoomModal">
+                        <i class="ti ti-plus me-1"></i> Add New Room
+                    </button>
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- Filter & Search Bar -->
+            <div class="card bg-light border-0 rounded-3 mb-4">
+                <div class="card-body p-3">
+                    <form method="GET" action="{% url 'academics-timetable-list' %}" class="row g-2 align-items-center">
+                        <input type="hidden" name="tab" value="rooms">
+                        <div class="col-md-4 col-sm-6">
+                            <label class="form-label small fw-semibold text-muted mb-1 text-uppercase">Room Type Filter</label>
+                            <select name="room_type" class="form-select form-select-sm shadow-none" onchange="this.form.submit()">
+                                <option value="">All Room Types</option>
+                                {% for code, label in room_types %}
+                                <option value="{{ code }}" {% if selected_room_type == code %}selected{% endif %}>{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-5 col-sm-6">
+                            <label class="form-label small fw-semibold text-muted mb-1 text-uppercase">Search Rooms</label>
+                            <div class="input-group input-group-sm">
+                                <span class="input-group-text bg-white border-end-0"><i class="ti ti-search text-muted"></i></span>
+                                <input type="text" name="q" class="form-control form-control-sm border-start-0 shadow-none" placeholder="Search by number, name, floor..." value="{{ room_search_query }}">
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-sm-12 d-flex align-items-end gap-2 mt-sm-auto pt-sm-4">
+                            <button type="submit" class="btn btn-sm btn-primary flex-grow-1">Filter</button>
+                            {% if selected_room_type or room_search_query %}
+                            <a href="{% url 'academics-timetable-list' %}?tab=rooms" class="btn btn-sm btn-outline-secondary">Reset</a>
+                            {% endif %}
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Rooms Table -->
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light text-uppercase small text-muted">
+                        <tr>
+                            <th class="ps-3">Room Code / Number</th>
+                            <th>Facility Name</th>
+                            <th>Type</th>
+                            <th>Capacity</th>
+                            <th>Floor / Wing</th>
+                            <th>Status</th>
+                            {% if can_manage_room %}
+                            <th class="text-end pe-3">Actions</th>
+                            {% endif %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for rm in all_rooms %}
+                        <tr>
+                            <td class="ps-3 fw-bold text-dark">
+                                <i class="ti ti-door text-primary me-2"></i>{{ rm.room_number }}
+                            </td>
+                            <td>
+                                {% if rm.name %}
+                                <span class="fw-semibold">{{ rm.name }}</span>
+                                {% else %}
+                                <span class="text-muted fst-italic">&mdash;</span>
+                                {% endif %}
+                                {% if rm.description %}
+                                <small class="text-muted d-block text-truncate" style="max-width: 250px;">{{ rm.description }}</small>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if rm.room_type == 'CLASSROOM' %}
+                                <span class="badge bg-light-primary text-primary px-2 py-1"><i class="ti ti-chalkboard me-1"></i>Classroom</span>
+                                {% elif rm.room_type == 'SCIENCE_LAB' %}
+                                <span class="badge bg-light-success text-success px-2 py-1"><i class="ti ti-flask me-1"></i>Science Lab</span>
+                                {% elif rm.room_type == 'COMPUTER_LAB' %}
+                                <span class="badge bg-light-info text-info px-2 py-1"><i class="ti ti-device-laptop me-1"></i>Computer Lab</span>
+                                {% elif rm.room_type == 'LIBRARY' %}
+                                <span class="badge bg-light-warning text-warning px-2 py-1"><i class="ti ti-books me-1"></i>Library</span>
+                                {% elif rm.room_type == 'AUDITORIUM' %}
+                                <span class="badge bg-light-danger text-danger px-2 py-1"><i class="ti ti-building me-1"></i>Auditorium</span>
+                                {% else %}
+                                <span class="badge bg-light-secondary text-secondary px-2 py-1"><i class="ti ti-building-community me-1"></i>{{ rm.get_room_type_display }}</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <span class="badge bg-light text-dark font-monospace px-2 py-1">
+                                    <i class="ti ti-users me-1 text-muted"></i>{{ rm.capacity }} Seats
+                                </span>
+                            </td>
+                            <td>
+                                {% if rm.floor %}
+                                <span class="text-secondary small"><i class="ti ti-map-pin me-1"></i>{{ rm.floor }}</span>
+                                {% else %}
+                                <span class="text-muted small">&mdash;</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if rm.is_active %}
+                                <span class="badge bg-light-success text-success px-2 py-1"><i class="ti ti-circle-check me-1"></i>Active</span>
+                                {% else %}
+                                <span class="badge bg-light-danger text-danger px-2 py-1"><i class="ti ti-circle-x me-1"></i>Inactive</span>
+                                {% endif %}
+                            </td>
+                            {% if can_manage_room %}
+                            <td class="text-end pe-3">
+                                <button type="button" class="btn btn-sm btn-outline-secondary btn-edit-room me-1"
+                                        data-bs-toggle="modal" data-bs-target="#editRoomModal"
+                                        data-room-id="{{ rm.pk }}"
+                                        data-room-number="{{ rm.room_number }}"
+                                        data-room-name="{{ rm.name }}"
+                                        data-room-type="{{ rm.room_type }}"
+                                        data-room-capacity="{{ rm.capacity }}"
+                                        data-room-floor="{{ rm.floor }}"
+                                        data-room-description="{{ rm.description }}"
+                                        data-room-active="{{ rm.is_active|yesno:'true,false' }}"
+                                        title="Edit Room Details">
+                                    <i class="ti ti-pencil"></i>
+                                </button>
+                                <form method="POST" action="{% url 'academics-timetable-list' %}" class="d-inline">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="action" value="toggle_room_status">
+                                    <input type="hidden" name="room_id" value="{{ rm.pk }}">
+                                    <input type="hidden" name="is_active" value="{{ rm.is_active|yesno:'false,true' }}">
+                                    <button type="submit" class="btn btn-sm {% if rm.is_active %}btn-outline-warning{% else %}btn-outline-success{% endif %} me-1"
+                                            title="{% if rm.is_active %}Deactivate Room{% else %}Activate Room{% endif %}">
+                                        <i class="ti {% if rm.is_active %}ti-eye-off{% else %}ti-eye{% endif %}"></i>
+                                    </button>
+                                </form>
+                                <button type="button" class="btn btn-sm btn-outline-danger btn-delete-room"
+                                        data-bs-toggle="modal" data-bs-target="#deleteRoomModal"
+                                        data-room-id="{{ rm.pk }}"
+                                        data-room-number="{{ rm.room_number }}"
+                                        title="Delete Room">
+                                    <i class="ti ti-trash"></i>
+                                </button>
+                            </td>
+                            {% endif %}
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="7" class="text-center py-5 text-muted">
+                                <i class="ti ti-door-off fs-1 mb-2 d-block"></i>
+                                <h6 class="fw-bold">No rooms found.</h6>
+                                <p class="small text-muted mb-0">Click "Add New Room" to register school classrooms and physical laboratories.</p>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
         </div>
     </div>
 </div>
@@ -577,9 +751,20 @@
                     </div>
 
                     <div class="mb-3">
-                        <label class="form-label fw-semibold small text-muted text-uppercase">Room Number / Location (Optional)</label>
-                        <input type="text" name="room" class="form-control shadow-none" value="{{ selected_section.room_number|default:'' }}" placeholder="e.g. Room 101, Science Lab">
-                        <small class="text-muted" style="font-size: 0.75rem;">Defaults to section room if left blank. Room clash protection is strictly enforced.</small>
+                        <label class="form-label fw-semibold small text-muted text-uppercase">Room Master / Facility Selection</label>
+                        {% if active_rooms.exists %}
+                        <select name="room_id" id="add_slot_room_id" class="form-select shadow-none mb-2" onchange="document.getElementById('add_slot_custom_room').value = this.options[this.selectedIndex].dataset.roomNumber || '';">
+                            <option value="">-- Use Section Default ({{ selected_section.room_number|default:"None" }}) or Select Managed Room --</option>
+                            {% for rm in active_rooms %}
+                            <option value="{{ rm.pk }}" data-room-number="{{ rm.room_number }}" {% if selected_section.room_number and selected_section.room_number|lower == rm.room_number|lower %}selected{% endif %}>
+                                {{ rm.room_number }} - {{ rm.name|default:rm.get_room_type_display }} (Cap: {{ rm.capacity }})
+                            </option>
+                            {% endfor %}
+                        </select>
+                        {% endif %}
+                        <label class="form-label fw-semibold small text-muted text-uppercase" style="font-size: 0.75rem;">Or Custom / Free-text Room (Optional)</label>
+                        <input type="text" name="room" id="add_slot_custom_room" class="form-control form-control-sm shadow-none" value="{{ selected_section.room_number|default:'' }}" placeholder="e.g. Room 101, Science Lab">
+                        <small class="text-muted" style="font-size: 0.72rem;">Selecting a managed room automatically enforces capacity and collision guards.</small>
                     </div>
                 </div>
                 <div class="modal-footer bg-light border-0">
@@ -626,8 +811,19 @@
                     </div>
 
                     <div class="mb-3">
-                        <label class="form-label fw-semibold small text-muted text-uppercase">Room Number / Location</label>
-                        <input type="text" name="room" id="edit_slot_room" class="form-control shadow-none" placeholder="e.g. Room 101, Science Lab">
+                        <label class="form-label fw-semibold small text-muted text-uppercase">Room Master / Facility</label>
+                        {% if active_rooms.exists %}
+                        <select name="room_id" id="edit_slot_room_id" class="form-select shadow-none mb-2" onchange="document.getElementById('edit_slot_room').value = this.options[this.selectedIndex].dataset.roomNumber || '';">
+                            <option value="">-- Select Managed Room (or use text below) --</option>
+                            {% for rm in active_rooms %}
+                            <option value="{{ rm.pk }}" data-room-number="{{ rm.room_number }}">
+                                {{ rm.room_number }} - {{ rm.name|default:rm.get_room_type_display }} (Cap: {{ rm.capacity }})
+                            </option>
+                            {% endfor %}
+                        </select>
+                        {% endif %}
+                        <label class="form-label fw-semibold small text-muted text-uppercase" style="font-size: 0.75rem;">Or Custom / Free-text Room</label>
+                        <input type="text" name="room" id="edit_slot_room" class="form-control form-control-sm shadow-none" placeholder="e.g. Room 101, Science Lab">
                     </div>
                 </div>
                 <div class="modal-footer bg-light border-0">
@@ -814,6 +1010,163 @@
         </div>
     </div>
 </div>
+
+<!-- 7. ADD ROOM MODAL -->
+<div class="modal fade" id="addRoomModal" tabindex="-1" aria-labelledby="addRoomModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <form method="POST" action="{% url 'academics-timetable-list' %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="create_room">
+                <div class="modal-header border-bottom">
+                    <h5 class="modal-title fw-bold" id="addRoomModalLabel">
+                        <i class="ti ti-door-enter text-success me-2"></i>Add New Room / Facility
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold small text-muted text-uppercase">Room Code / Number <span class="text-danger">*</span></label>
+                            <input type="text" name="room_number" class="form-control shadow-none" required placeholder="e.g. Room 101, PHY-LAB">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold small text-muted text-uppercase">Seating Capacity <span class="text-danger">*</span></label>
+                            <input type="number" name="capacity" class="form-control shadow-none" min="1" value="40" required>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label fw-semibold small text-muted text-uppercase">Descriptive Name (Optional)</label>
+                            <input type="text" name="name" class="form-control shadow-none" placeholder="e.g. Senior Physics Laboratory">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold small text-muted text-uppercase">Facility Type <span class="text-danger">*</span></label>
+                            <select name="room_type" class="form-select shadow-none" required>
+                                {% for code, label in room_types %}
+                                <option value="{{ code }}">{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold small text-muted text-uppercase">Floor / Wing</label>
+                            <input type="text" name="floor" class="form-control shadow-none" placeholder="e.g. Ground Floor, Block A">
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label fw-semibold small text-muted text-uppercase">Description / Equipment Details</label>
+                            <textarea name="description" class="form-control shadow-none" rows="2" placeholder="Optional notes on lab equipment or facilities"></textarea>
+                        </div>
+                        <div class="col-12">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input shadow-none" type="checkbox" name="is_active" id="addRoomActive" checked>
+                                <label class="form-check-label fw-semibold small text-dark" for="addRoomActive">Active for Timetable Scheduling</label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light border-0">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-success shadow-sm">
+                        <i class="ti ti-check me-1"></i> Save Room
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- 8. EDIT ROOM MODAL -->
+<div class="modal fade" id="editRoomModal" tabindex="-1" aria-labelledby="editRoomModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <form method="POST" action="{% url 'academics-timetable-list' %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="update_room">
+                <input type="hidden" name="room_id" id="edit_room_id">
+                <div class="modal-header border-bottom">
+                    <h5 class="modal-title fw-bold" id="editRoomModalLabel">
+                        <i class="ti ti-pencil text-primary me-2"></i>Edit Room / Facility
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold small text-muted text-uppercase">Room Code / Number <span class="text-danger">*</span></label>
+                            <input type="text" name="room_number" id="edit_room_number" class="form-control shadow-none" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold small text-muted text-uppercase">Seating Capacity <span class="text-danger">*</span></label>
+                            <input type="number" name="capacity" id="edit_room_capacity" class="form-control shadow-none" min="1" required>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label fw-semibold small text-muted text-uppercase">Descriptive Name (Optional)</label>
+                            <input type="text" name="name" id="edit_room_name" class="form-control shadow-none">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold small text-muted text-uppercase">Facility Type <span class="text-danger">*</span></label>
+                            <select name="room_type" id="edit_room_type" class="form-select shadow-none" required>
+                                {% for code, label in room_types %}
+                                <option value="{{ code }}">{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-semibold small text-muted text-uppercase">Floor / Wing</label>
+                            <input type="text" name="floor" id="edit_room_floor" class="form-control shadow-none">
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label fw-semibold small text-muted text-uppercase">Description / Equipment Details</label>
+                            <textarea name="description" id="edit_room_description" class="form-control shadow-none" rows="2"></textarea>
+                        </div>
+                        <div class="col-12">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input shadow-none" type="checkbox" name="is_active" id="edit_room_active">
+                                <label class="form-check-label fw-semibold small text-dark" for="edit_room_active">Active for Timetable Scheduling</label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light border-0">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary shadow-sm">
+                        <i class="ti ti-check me-1"></i> Update Room
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- 9. DELETE ROOM MODAL -->
+<div class="modal fade" id="deleteRoomModal" tabindex="-1" aria-labelledby="deleteRoomModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <form method="POST" action="{% url 'academics-timetable-list' %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="delete_room">
+                <input type="hidden" name="room_id" id="delete_room_id">
+                <div class="modal-header border-bottom">
+                    <h5 class="modal-title fw-bold text-danger" id="deleteRoomModalLabel">
+                        <i class="ti ti-trash me-2"></i>Delete Room
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4 text-center">
+                    <i class="ti ti-alert-triangle text-danger fs-1 mb-2 d-block"></i>
+                    <h6 class="fw-bold mb-2">Delete Room <span id="delete_room_num_label" class="text-danger"></span>?</h6>
+                    <p class="text-muted small mb-0">
+                        Rooms referenced by timetable schedule slots or section homeroom records cannot be deleted. If this room was previously used, please deactivate it instead.
+                    </p>
+                </div>
+                <div class="modal-footer bg-light border-0">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-danger shadow-sm">
+                        <i class="ti ti-trash me-1"></i> Delete Room
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
 {% endif %}
 
 <!-- Client-side modal pre-fill JavaScript -->
@@ -843,6 +1196,7 @@ document.addEventListener('DOMContentLoaded', function() {
             var slotId = button.getAttribute('data-slot-id');
             var csId = button.getAttribute('data-class-subject-id');
             var room = button.getAttribute('data-room');
+            var roomRefId = button.getAttribute('data-room-ref-id');
             var dayName = button.getAttribute('data-day-name');
             var periodName = button.getAttribute('data-period-name');
 
@@ -850,6 +1204,21 @@ document.addEventListener('DOMContentLoaded', function() {
             document.getElementById('edit_slot_class_subject').value = csId;
             document.getElementById('edit_slot_room').value = room || '';
             document.getElementById('edit_slot_info').textContent = dayName + ' \u2014 ' + periodName;
+
+            var editRoomSelect = document.getElementById('edit_slot_room_id');
+            if (editRoomSelect) {
+                editRoomSelect.value = '';
+                if (roomRefId) {
+                    editRoomSelect.value = roomRefId;
+                } else if (room) {
+                    for (var i = 0; i < editRoomSelect.options.length; i++) {
+                        if (editRoomSelect.options[i].dataset.roomNumber && editRoomSelect.options[i].dataset.roomNumber.toLowerCase() === room.toLowerCase()) {
+                            editRoomSelect.selectedIndex = i;
+                            break;
+                        }
+                    }
+                }
+            }
         });
     }
 
@@ -899,6 +1268,45 @@ document.addEventListener('DOMContentLoaded', function() {
 
             document.getElementById('delete_period_id').value = pId;
             document.getElementById('delete_period_desc').textContent = 'Permanently delete period "' + pName + '".';
+        });
+    }
+
+    // 6. Edit Room Modal trigger
+    var editRoomModal = document.getElementById('editRoomModal');
+    if (editRoomModal) {
+        editRoomModal.addEventListener('show.bs.modal', function(event) {
+            var button = event.relatedTarget;
+            var rId = button.getAttribute('data-room-id');
+            var rNum = button.getAttribute('data-room-number');
+            var rName = button.getAttribute('data-room-name');
+            var rType = button.getAttribute('data-room-type');
+            var rCap = button.getAttribute('data-room-capacity');
+            var rFloor = button.getAttribute('data-room-floor');
+            var rDesc = button.getAttribute('data-room-description');
+            var rActive = button.getAttribute('data-room-active') === 'true';
+
+            document.getElementById('edit_room_id').value = rId;
+            document.getElementById('edit_room_number').value = rNum;
+            document.getElementById('edit_room_name').value = rName || '';
+            document.getElementById('edit_room_type').value = rType;
+            document.getElementById('edit_room_capacity').value = rCap;
+            document.getElementById('edit_room_floor').value = rFloor || '';
+            document.getElementById('edit_room_description').value = rDesc || '';
+            document.getElementById('edit_room_active').checked = rActive;
+        });
+    }
+
+    // 7. Delete Room Modal trigger
+    var deleteRoomModal = document.getElementById('deleteRoomModal');
+    if (deleteRoomModal) {
+        deleteRoomModal.addEventListener('show.bs.modal', function(event) {
+            var button = event.relatedTarget;
+            var rId = button.getAttribute('data-room-id');
+            var rNum = button.getAttribute('data-room-number');
+
+            document.getElementById('delete_room_id').value = rId;
+            var label = document.getElementById('delete_room_num_label');
+            if (label) label.textContent = '"' + rNum + '"';
         });
     }
 });
