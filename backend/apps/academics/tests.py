@@ -11,13 +11,16 @@ from django.contrib.auth import get_user_model
 
 from apps.academics.models import AcademicStream, ClassSubject, SchoolClass, Section, Stream, Subject, SubjectType, TimetablePeriod, TimetableSlot
 from apps.academics.services import (
-    AcademicYearService, ClassSubjectService, SchoolClassService, SectionService, StreamService, SubjectService
+    AcademicYearService, ClassSubjectService, SchoolClassService, SectionService, StreamService, SubjectService,
+    TeacherAssignmentService
 )
 from apps.audit.models import AuditAction, AuditLog
 from apps.rbac.models import Permission
 from apps.rbac.registry import PERMISSION_REGISTRY
 from apps.school_config.models import AcademicYear, SchoolProfile
 from common.exceptions import BusinessConflictError, ResourceNotFoundError
+
+from apps.identity.models import UserType
 
 User = get_user_model()
 
@@ -1946,4 +1949,284 @@ class ClassSubjectWebViewsTests(TestCase):
         mappings = list(response.context['mappings'])
         self.assertNotIn(m1, mappings)
         self.assertIn(m2, mappings)
+
+
+# ==============================================================================
+# Phase 3: Teacher Assignment Tests (Class Teachers & Subject Teachers)
+# ==============================================================================
+
+class TeacherAssignmentServiceTests(TestCase):
+    """
+    Focused unit tests for TeacherAssignmentService (Class Teachers & Subject Teachers).
+    """
+
+    def setUp(self):
+        self.admin = User.objects.create_superuser(username='admin_ta_svc', email='admin_ta@example.com', password='Password123!')
+        self.teacher1 = User.objects.create_user(username='t_sharma', first_name='Rohan', last_name='Sharma', email='rohan@school.edu', is_staff=True, user_type=UserType.TEACHER)
+        self.teacher2 = User.objects.create_user(username='t_verma', first_name='Priya', last_name='Verma', email='priya@school.edu', is_staff=True, user_type=UserType.TEACHER)
+        self.student_user = User.objects.create_user(username='student_user', first_name='Arun', is_staff=False, user_type=UserType.STUDENT)
+
+        self.c10 = SchoolClassService.create_class(name='Class 10', code='CL-10', order=10, actor=self.admin)
+        self.sec10_a = SectionService.create_section(school_class_id=self.c10.pk, name='A', actor=self.admin)
+        self.sec10_b = SectionService.create_section(school_class_id=self.c10.pk, name='B', actor=self.admin)
+
+        self.sub_math = SubjectService.create_subject(name='Mathematics Standard', code='MATH-10', actor=self.admin)
+        self.sub_sci = SubjectService.create_subject(name='Science', code='SCI-10', actor=self.admin)
+
+        self.mapping_math_a = ClassSubjectService.create_mapping(section_id=self.sec10_a.pk, subject_id=self.sub_math.pk, actor=self.admin)
+        self.mapping_math_b = ClassSubjectService.create_mapping(section_id=self.sec10_b.pk, subject_id=self.sub_math.pk, actor=self.admin)
+        self.mapping_sci_a = ClassSubjectService.create_mapping(section_id=self.sec10_a.pk, subject_id=self.sub_sci.pk, actor=self.admin)
+
+    def test_assign_class_teacher_success_and_audit(self):
+        sec = TeacherAssignmentService.assign_class_teacher(
+            section_id=self.sec10_a.pk,
+            teacher_id=self.teacher1.pk,
+            actor=self.admin,
+            reason="Appointed as Class Teacher for 10-A"
+        )
+        self.assertEqual(sec.class_teacher, self.teacher1)
+
+        log = AuditLog.objects.filter(entity_type='Section', entity_id=str(sec.pk), action=AuditAction.UPDATE).first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.actor, self.admin)
+        self.assertIn('class_teacher', log.changes)
+
+    def test_assign_class_teacher_inactive_user_fails(self):
+        self.teacher1.is_active = False
+        self.teacher1.save()
+        with self.assertRaises(ValidationError) as ctx:
+            TeacherAssignmentService.assign_class_teacher(section_id=self.sec10_a.pk, teacher_id=self.teacher1.pk, actor=self.admin)
+        self.assertIn('teacher', ctx.exception.message_dict)
+
+    def test_assign_class_teacher_ineligible_user_fails(self):
+        with self.assertRaises(ValidationError) as ctx:
+            TeacherAssignmentService.assign_class_teacher(section_id=self.sec10_a.pk, teacher_id=self.student_user.pk, actor=self.admin)
+        self.assertIn('teacher', ctx.exception.message_dict)
+
+    def test_assign_scoped_non_staff_teacher_succeeds(self):
+        """
+        Verifies that a user created with user_type=TEACHER and is_staff=False
+        (e.g., scoped to OWN_ONLY or SECTION from dashboard) is eligible faculty,
+        appears in get_eligible_faculty_queryset(), can be assigned as Class Teacher
+        and Subject Teacher, and appears in the workload summary.
+        """
+        scoped_teacher = User.objects.create_user(
+            username='divya_test',
+            email='divya_test@example.com',
+            first_name='Divya',
+            last_name='Singh',
+            user_type=UserType.TEACHER,
+            is_staff=False,
+        )
+        self.assertTrue(TeacherAssignmentService.is_eligible_faculty(scoped_teacher))
+        faculty_qs = TeacherAssignmentService.get_eligible_faculty_queryset()
+        self.assertIn(scoped_teacher, faculty_qs)
+
+        # Assign as class teacher
+        sec = TeacherAssignmentService.assign_class_teacher(
+            section_id=self.sec10_a.pk,
+            teacher_id=scoped_teacher.pk,
+            actor=self.admin
+        )
+        self.assertEqual(sec.class_teacher, scoped_teacher)
+
+        # Assign as subject teacher
+        cs = TeacherAssignmentService.assign_subject_teacher(
+            class_subject_id=self.mapping_math_a.pk,
+            teacher_id=scoped_teacher.pk,
+            actor=self.admin
+        )
+        self.assertEqual(cs.teacher, scoped_teacher)
+
+        # Workload summary includes scoped_teacher
+        workload = TeacherAssignmentService.get_faculty_workload_summary()
+        teacher_workload = [w for w in workload if w['teacher'] == scoped_teacher]
+        self.assertEqual(len(teacher_workload), 1)
+        self.assertEqual(teacher_workload[0]['total_subjects'], 1)
+        self.assertEqual(len(teacher_workload[0]['class_teacher_sections']), 1)
+
+    def test_assign_class_teacher_collision_prevention(self):
+        # Teacher 1 assigned to 10-A
+        TeacherAssignmentService.assign_class_teacher(section_id=self.sec10_a.pk, teacher_id=self.teacher1.pk, actor=self.admin)
+
+        # Assigning Teacher 1 to 10-B fails without force
+        with self.assertRaises(ValidationError) as ctx:
+            TeacherAssignmentService.assign_class_teacher(section_id=self.sec10_b.pk, teacher_id=self.teacher1.pk, actor=self.admin)
+        self.assertIn('teacher', ctx.exception.message_dict)
+
+        # With force=True, it succeeds
+        sec_b = TeacherAssignmentService.assign_class_teacher(
+            section_id=self.sec10_b.pk,
+            teacher_id=self.teacher1.pk,
+            actor=self.admin,
+            force=True
+        )
+        self.assertEqual(sec_b.class_teacher, self.teacher1)
+
+    def test_remove_class_teacher(self):
+        TeacherAssignmentService.assign_class_teacher(section_id=self.sec10_a.pk, teacher_id=self.teacher1.pk, actor=self.admin)
+        sec = TeacherAssignmentService.remove_class_teacher(section_id=self.sec10_a.pk, actor=self.admin)
+        self.assertIsNone(sec.class_teacher)
+
+    def test_assign_subject_teacher_success_and_audit(self):
+        cs = TeacherAssignmentService.assign_subject_teacher(
+            class_subject_id=self.mapping_math_a.pk,
+            teacher_id=self.teacher1.pk,
+            actor=self.admin,
+            reason="Assigned Rohan Sharma to teach Math 10-A"
+        )
+        self.assertEqual(cs.teacher, self.teacher1)
+
+        log = AuditLog.objects.filter(entity_type='ClassSubject', entity_id=str(cs.pk), action=AuditAction.UPDATE).first()
+        self.assertIsNotNone(log)
+
+    def test_bulk_assign_subject_teacher(self):
+        # Assign teacher 2 to Math in both Section A and Section B
+        count = TeacherAssignmentService.bulk_assign_subject_teacher(
+            class_subject_ids=[self.mapping_math_a.pk, self.mapping_math_b.pk],
+            teacher_id=self.teacher2.pk,
+            actor=self.admin
+        )
+        self.assertEqual(count, 2)
+        self.mapping_math_a.refresh_from_db()
+        self.mapping_math_b.refresh_from_db()
+        self.assertEqual(self.mapping_math_a.teacher, self.teacher2)
+        self.assertEqual(self.mapping_math_b.teacher, self.teacher2)
+
+    def test_remove_subject_teacher(self):
+        TeacherAssignmentService.assign_subject_teacher(class_subject_id=self.mapping_math_a.pk, teacher_id=self.teacher1.pk, actor=self.admin)
+        cs = TeacherAssignmentService.remove_subject_teacher(class_subject_id=self.mapping_math_a.pk, actor=self.admin)
+        self.assertIsNone(cs.teacher)
+
+    def test_get_faculty_workload_summary(self):
+        # Assign teacher 1 as class teacher of 10-A and subject teacher of Math & Science
+        TeacherAssignmentService.assign_class_teacher(section_id=self.sec10_a.pk, teacher_id=self.teacher1.pk, actor=self.admin)
+        TeacherAssignmentService.assign_subject_teacher(class_subject_id=self.mapping_math_a.pk, teacher_id=self.teacher1.pk, actor=self.admin)
+        TeacherAssignmentService.assign_subject_teacher(class_subject_id=self.mapping_sci_a.pk, teacher_id=self.teacher1.pk, actor=self.admin)
+
+        summary = TeacherAssignmentService.get_faculty_workload_summary()
+        t1_summary = next((w for w in summary if w['teacher'].pk == self.teacher1.pk), None)
+        self.assertIsNotNone(t1_summary)
+        self.assertEqual(len(t1_summary['class_teacher_sections']), 1)
+        self.assertEqual(t1_summary['total_subjects'], 2)
+        self.assertIn('Class 10', t1_summary['distinct_classes'])
+
+
+class TeacherAssignmentWebViewsTests(TestCase):
+    """
+    Integration tests for Teacher Assignment dashboard web views.
+    """
+
+    def setUp(self):
+        call_command('sync_permissions', verbosity=0)
+        self.superuser = User.objects.create_superuser(
+            username='admin_ta_web',
+            email='admin_ta_web@example.com',
+            password='Password123!'
+        )
+        self.teacher = User.objects.create_user(username='t_gupta', first_name='Amit', last_name='Gupta', is_staff=True)
+
+        self.c10 = SchoolClassService.create_class(name='Class 10', code='CL-10', order=10, actor=self.superuser)
+        self.sec10_a = SectionService.create_section(school_class_id=self.c10.pk, name='A', actor=self.superuser)
+        self.sub = SubjectService.create_subject(name='Computer Science', code='CS-10', actor=self.superuser)
+        self.mapping = ClassSubjectService.create_mapping(section_id=self.sec10_a.pk, subject_id=self.sub.pk, actor=self.superuser)
+
+        self.client.force_login(self.superuser)
+
+    def test_anonymous_redirected_to_login(self):
+        self.client.logout()
+        response = self.client.get(reverse('academics-teacher-assignments-list'))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/login/', response.url)
+
+    def test_superuser_has_full_access(self):
+        response = self.client.get(reverse('academics-teacher-assignments-list'))
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'dashboard/academics/teacher_assignments.html')
+        self.assertTrue(response.context['can_manage'])
+
+    def test_assign_class_teacher_post(self):
+        post_data = {
+            'action': 'assign_class_teacher',
+            'section_id': self.sec10_a.pk,
+            'teacher_id': self.teacher.pk,
+            'reason': 'Assigned Amit Gupta to 10-A',
+        }
+        response = self.client.post(reverse('academics-teacher-assignments-list'), data=post_data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.sec10_a.refresh_from_db()
+        self.assertEqual(self.sec10_a.class_teacher, self.teacher)
+
+    def test_remove_class_teacher_post(self):
+        self.sec10_a.class_teacher = self.teacher
+        self.sec10_a.save()
+        post_data = {
+            'action': 'remove_class_teacher',
+            'section_id': self.sec10_a.pk,
+        }
+        response = self.client.post(reverse('academics-teacher-assignments-list'), data=post_data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.sec10_a.refresh_from_db()
+        self.assertIsNone(self.sec10_a.class_teacher)
+
+    def test_assign_subject_teacher_post(self):
+        post_data = {
+            'action': 'assign_subject_teacher',
+            'class_subject_id': self.mapping.pk,
+            'teacher_id': self.teacher.pk,
+        }
+        response = self.client.post(reverse('academics-teacher-assignments-list'), data=post_data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.mapping.refresh_from_db()
+        self.assertEqual(self.mapping.teacher, self.teacher)
+
+    def test_bulk_assign_subject_teacher_post(self):
+        post_data = {
+            'action': 'bulk_assign_subject_teacher',
+            'class_subject_ids': [self.mapping.pk],
+            'teacher_id': self.teacher.pk,
+        }
+        response = self.client.post(reverse('academics-teacher-assignments-list'), data=post_data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.mapping.refresh_from_db()
+        self.assertEqual(self.mapping.teacher, self.teacher)
+
+    def test_remove_subject_teacher_post(self):
+        self.mapping.teacher = self.teacher
+        self.mapping.save()
+        post_data = {
+            'action': 'remove_subject_teacher',
+            'class_subject_id': self.mapping.pk,
+        }
+        response = self.client.post(reverse('academics-teacher-assignments-list'), data=post_data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.mapping.refresh_from_db()
+        self.assertIsNone(self.mapping.teacher)
+
+    def test_tabs_rendering(self):
+        for tab_name in ('class_teachers', 'subject_teachers', 'workload'):
+            response = self.client.get(f"{reverse('academics-teacher-assignments-list')}?tab={tab_name}")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.context['active_tab'], tab_name)
+
+    def test_scoped_teacher_appears_in_web_view_context(self):
+        # Create non-staff teacher (e.g. scoped teacher created from dashboard)
+        scoped_teacher = User.objects.create_user(
+            username='divya_web',
+            email='divya_web@school.edu',
+            first_name='Divya',
+            last_name='Singh',
+            user_type=UserType.TEACHER,
+            is_staff=False,
+        )
+        response = self.client.get(reverse('academics-teacher-assignments-list'))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(scoped_teacher, response.context['all_teachers'])
+        # Also test workload tab includes scoped teacher
+        response_workload = self.client.get(f"{reverse('academics-teacher-assignments-list')}?tab=workload")
+        self.assertEqual(response_workload.status_code, 200)
+        workload_teachers = [w['teacher'] for w in response_workload.context['faculty_workload_list']]
+        self.assertIn(scoped_teacher, workload_teachers)
+
+
 

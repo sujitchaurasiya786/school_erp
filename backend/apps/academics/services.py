@@ -12,6 +12,7 @@ from apps.audit.services import AuditService
 from apps.school_config.models import AcademicYear
 from common.exceptions import BusinessConflictError, ResourceNotFoundError
 from common.validators import validate_academic_year_format
+from apps.identity.models import User, UserType
 
 
 class AcademicsService:
@@ -1347,7 +1348,7 @@ class ClassSubjectService:
 
         teacher = None
         if teacher_id:
-            from apps.identity.models import User
+            from apps.identity.models import User, UserType
             try:
                 teacher = User.objects.get(pk=teacher_id)
             except User.DoesNotExist:
@@ -1552,7 +1553,7 @@ class ClassSubjectService:
             t_id = kwargs['teacher_id']
             old_t = str(mapping.teacher) if mapping.teacher else None
             if t_id:
-                from apps.identity.models import User
+                from apps.identity.models import User, UserType
                 try:
                     new_t = User.objects.get(pk=t_id)
                     mapping.teacher = new_t
@@ -1763,4 +1764,466 @@ class ClassSubjectService:
                 Q(section__school_class__name__icontains=search)
             )
 
+        return qs
+
+
+class TeacherAssignmentService:
+    """
+    Teacher & Faculty Assignment Service for School ERP (Academics Module Phase 3).
+
+    Encapsulates all teacher allocation workflows:
+      - Class-Teacher Assignment (§4.7):
+        * Assigns an authorized teaching staff member as the primary Class Teacher for a section.
+        * Validates teacher active status and eligibility (TEACHER persona, dynamic role, or staff flag).
+        * Single-section primary check to prevent undetected multiple class teacher collisions.
+        * Unassigns class teacher cleanly.
+      - Subject-Teacher Assignment (§4.8):
+        * Assigns qualified faculty to specific ClassSubject curriculum mappings.
+        * Bulk assigns faculty across sections (e.g. Mathematics teacher for 10-A, 10-B, 10-C).
+        * Validates active subject mapping prerequisites.
+        * Unassigns subject teacher cleanly.
+      - Faculty Workload Analysis:
+        * Computes real-time workload for faculty: class teacher duties, subject teaching assignments, class breakdown.
+      - Comprehensive Audit Logging for all assignments and reassignments.
+    """
+
+    @classmethod
+    def get_eligible_faculty_queryset(cls):
+        """
+        Returns a distinct queryset of active users eligible for teaching assignments.
+        Eligible faculty members include:
+          - Active users with user_type in (TEACHER, STAFF, PRINCIPAL, ADMIN)
+          - Active users assigned any role containing 'teacher' or 'faculty'
+          - Active users with is_staff=True or is_superuser=True
+        Explicitly excludes Students and Parents.
+        Does NOT restrict by role scope (GLOBAL, CLASS, SECTION, OWN_ONLY), ensuring all
+        institutional teachers are eligible to be assigned as Class Teachers or Subject Teachers.
+        """
+        eligible_types = [
+            UserType.TEACHER,
+            UserType.STAFF,
+            UserType.PRINCIPAL,
+            UserType.ADMIN,
+        ]
+        return User.objects.filter(
+            is_active=True
+        ).filter(
+            Q(user_type__in=eligible_types)
+            | Q(role_assignments__role__code__icontains='teacher', role_assignments__is_active=True)
+            | Q(role_assignments__role__name__icontains='teacher', role_assignments__is_active=True)
+            | Q(role_assignments__role__code__icontains='faculty', role_assignments__is_active=True)
+            | Q(is_staff=True)
+            | Q(is_superuser=True)
+        ).exclude(
+            user_type__in=[UserType.STUDENT, UserType.PARENT]
+        ).distinct().order_by('first_name', 'last_name', 'username')
+
+    @classmethod
+    def is_eligible_faculty(cls, user):
+        """
+        Validates whether a specific user instance is eligible to be assigned as
+        a Class Teacher or Subject Teacher.
+        """
+        if not user or not user.is_active:
+            return False
+
+        if getattr(user, 'user_type', None) in [UserType.STUDENT, UserType.PARENT]:
+            return False
+
+        if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
+            return True
+
+        if getattr(user, 'user_type', None) in [
+            UserType.TEACHER,
+            UserType.STAFF,
+            UserType.PRINCIPAL,
+            UserType.ADMIN,
+        ]:
+            return True
+
+        # Check dynamic role assignments
+        if hasattr(user, 'role_assignments'):
+            return user.role_assignments.filter(
+                Q(role__code__icontains='teacher') |
+                Q(role__name__icontains='teacher') |
+                Q(role__code__icontains='faculty'),
+                is_active=True
+            ).exists()
+
+        return False
+
+    @classmethod
+    @transaction.atomic
+    def assign_class_teacher(
+        cls,
+        section_id,
+        teacher_id,
+        actor=None,
+        reason="",
+        request=None,
+        force=False
+    ):
+        """
+        Assigns an active staff user as the Class Teacher of a Section.
+        Validates active staff status and prevents accidental multiple section leadership.
+        """
+        try:
+            section = Section.objects.select_for_update().select_related('school_class', 'class_teacher').get(pk=section_id)
+        except Section.DoesNotExist:
+            raise ResourceNotFoundError(f"Section with ID {section_id} not found.")
+
+        try:
+            teacher = User.objects.get(pk=teacher_id)
+        except User.DoesNotExist:
+            raise ResourceNotFoundError(f"User with ID {teacher_id} not found.")
+
+        if not teacher.is_active:
+            raise ValidationError({'teacher': _(f"Cannot assign inactive user '{teacher.get_full_name() or teacher.username}' as class teacher.")})
+
+        if not cls.is_eligible_faculty(teacher):
+            raise ValidationError({'teacher': _(f"User '{teacher.get_full_name() or teacher.username}' is not eligible for teaching assignments (must be teacher or staff member).")})
+
+        # Check if already class teacher of another active section
+        existing_sections = Section.objects.filter(class_teacher=teacher, is_active=True).exclude(pk=section.pk)
+        if existing_sections.exists() and not force:
+            section_names = ", ".join(str(s) for s in existing_sections)
+            raise ValidationError({
+                'teacher': _(
+                    f"Teacher '{teacher.get_full_name() or teacher.username}' is already the class teacher of {section_names}. "
+                    "In CBSE schools, a teacher is typically class teacher of at most one section."
+                )
+            })
+
+        old_teacher = section.class_teacher
+        old_teacher_name = (old_teacher.get_full_name() or old_teacher.username) if old_teacher else "None"
+        new_teacher_name = teacher.get_full_name() or teacher.username
+
+        section.class_teacher = teacher
+        section.save()
+
+        AuditService.log(
+            action=AuditAction.UPDATE,
+            module="academics",
+            entity_type="Section",
+            entity_id=str(section.pk),
+            actor=actor,
+            reason=reason or f"Assigned class teacher {new_teacher_name} to {section}",
+            changes={
+                "class_teacher": {
+                    "old": old_teacher_name,
+                    "new": new_teacher_name
+                },
+                "section": str(section)
+            },
+            request=request,
+        )
+        return section
+
+    @classmethod
+    @transaction.atomic
+    def remove_class_teacher(
+        cls,
+        section_id,
+        actor=None,
+        reason="",
+        request=None
+    ):
+        """
+        Removes the designated Class Teacher from a Section.
+        """
+        try:
+            section = Section.objects.select_for_update().select_related('school_class', 'class_teacher').get(pk=section_id)
+        except Section.DoesNotExist:
+            raise ResourceNotFoundError(f"Section with ID {section_id} not found.")
+
+        if not section.class_teacher:
+            return section
+
+        old_teacher = section.class_teacher
+        old_teacher_name = old_teacher.get_full_name() or old_teacher.username
+
+        section.class_teacher = None
+        section.save()
+
+        AuditService.log(
+            action=AuditAction.UPDATE,
+            module="academics",
+            entity_type="Section",
+            entity_id=str(section.pk),
+            actor=actor,
+            reason=reason or f"Removed class teacher from {section}",
+            changes={
+                "class_teacher": {
+                    "old": old_teacher_name,
+                    "new": None
+                },
+                "section": str(section)
+            },
+            request=request,
+        )
+        return section
+
+    @classmethod
+    @transaction.atomic
+    def assign_subject_teacher(
+        cls,
+        class_subject_id,
+        teacher_id,
+        actor=None,
+        reason="",
+        request=None
+    ):
+        """
+        Assigns an active teaching staff member to a specific ClassSubject mapping.
+        """
+        try:
+            class_sub = ClassSubject.objects.select_for_update().select_related(
+                'section', 'section__school_class', 'subject', 'teacher'
+            ).get(pk=class_subject_id)
+        except ClassSubject.DoesNotExist:
+            raise ResourceNotFoundError(f"ClassSubject mapping with ID {class_subject_id} not found.")
+
+        try:
+            teacher = User.objects.get(pk=teacher_id)
+        except User.DoesNotExist:
+            raise ResourceNotFoundError(f"User with ID {teacher_id} not found.")
+
+        if not teacher.is_active:
+            raise ValidationError({'teacher': _(f"Cannot assign inactive user '{teacher.get_full_name() or teacher.username}' as subject teacher.")})
+
+        if not cls.is_eligible_faculty(teacher):
+            raise ValidationError({'teacher': _(f"User '{teacher.get_full_name() or teacher.username}' is not eligible for teaching assignments (must be teacher or staff member).")})
+
+        old_teacher = class_sub.teacher
+        old_teacher_name = (old_teacher.get_full_name() or old_teacher.username) if old_teacher else "None"
+        new_teacher_name = teacher.get_full_name() or teacher.username
+
+        class_sub.teacher = teacher
+        class_sub.save()
+
+        AuditService.log(
+            action=AuditAction.UPDATE,
+            module="academics",
+            entity_type="ClassSubject",
+            entity_id=str(class_sub.pk),
+            actor=actor,
+            reason=reason or f"Assigned {new_teacher_name} as teacher for {class_sub.subject.name} in {class_sub.section}",
+            changes={
+                "teacher": {
+                    "old": old_teacher_name,
+                    "new": new_teacher_name
+                },
+                "mapping": str(class_sub)
+            },
+            request=request,
+        )
+        return class_sub
+
+    @classmethod
+    @transaction.atomic
+    def bulk_assign_subject_teacher(
+        cls,
+        class_subject_ids,
+        teacher_id,
+        actor=None,
+        reason="",
+        request=None
+    ):
+        """
+        Bulk assigns a faculty member to multiple ClassSubject mappings simultaneously.
+        """
+        if not class_subject_ids:
+            raise ValidationError({'class_subjects': _("At least one subject mapping must be selected.")})
+
+        try:
+            teacher = User.objects.get(pk=teacher_id)
+        except User.DoesNotExist:
+            raise ResourceNotFoundError(f"User with ID {teacher_id} not found.")
+
+        if not teacher.is_active:
+            raise ValidationError({'teacher': _(f"Cannot assign inactive user '{teacher.get_full_name() or teacher.username}'.")})
+
+        if not cls.is_eligible_faculty(teacher):
+            raise ValidationError({'teacher': _(f"User '{teacher.get_full_name() or teacher.username}' is not eligible for teaching assignments.")})
+
+        mappings = list(ClassSubject.objects.select_for_update().filter(pk__in=class_subject_ids, is_active=True))
+        if not mappings:
+            raise ValidationError({'class_subjects': _("None of the selected subject mappings are active or valid.")})
+
+        new_teacher_name = teacher.get_full_name() or teacher.username
+
+        for m in mappings:
+            m.teacher = teacher
+            m.save()
+
+        AuditService.log(
+            action=AuditAction.UPDATE,
+            module="academics",
+            entity_type="ClassSubject",
+            entity_id=str(teacher.pk),
+            actor=actor,
+            reason=reason or f"Bulk assigned {new_teacher_name} to {len(mappings)} subject mapping(s)",
+            changes={
+                "teacher": new_teacher_name,
+                "mappings_count": len(mappings)
+            },
+            request=request,
+        )
+        return len(mappings)
+
+    @classmethod
+    @transaction.atomic
+    def remove_subject_teacher(
+        cls,
+        class_subject_id,
+        actor=None,
+        reason="",
+        request=None
+    ):
+        """
+        Clears the subject teacher from a ClassSubject mapping.
+        """
+        try:
+            class_sub = ClassSubject.objects.select_for_update().select_related(
+                'section', 'section__school_class', 'subject', 'teacher'
+            ).get(pk=class_subject_id)
+        except ClassSubject.DoesNotExist:
+            raise ResourceNotFoundError(f"ClassSubject mapping with ID {class_subject_id} not found.")
+
+        if not class_sub.teacher:
+            return class_sub
+
+        old_teacher = class_sub.teacher
+        old_teacher_name = old_teacher.get_full_name() or old_teacher.username
+
+        class_sub.teacher = None
+        class_sub.save()
+
+        AuditService.log(
+            action=AuditAction.UPDATE,
+            module="academics",
+            entity_type="ClassSubject",
+            entity_id=str(class_sub.pk),
+            actor=actor,
+            reason=reason or f"Unassigned teacher from {class_sub.subject.name} in {class_sub.section}",
+            changes={
+                "teacher": {
+                    "old": old_teacher_name,
+                    "new": None
+                },
+                "mapping": str(class_sub)
+            },
+            request=request,
+        )
+        return class_sub
+
+    @classmethod
+    def get_faculty_workload_summary(cls):
+        """
+        Generates a consolidated workload summary for all active teaching staff.
+        Includes Class Teacher responsibilities and all assigned teaching subjects.
+        """
+        teachers = cls.get_eligible_faculty_queryset()
+        workload = []
+
+        for t in teachers:
+            class_teacher_sections = list(t.class_teacher_sections.filter(is_active=True).select_related('school_class'))
+            subject_mappings = list(
+                t.teaching_subjects.filter(is_active=True).select_related('section', 'section__school_class', 'subject')
+            )
+
+            distinct_classes = sorted({m.section.school_class.name for m in subject_mappings})
+            total_subjects = len(subject_mappings)
+
+            # Intensity heuristic
+            if total_subjects >= 6:
+                intensity = 'Heavy'
+                badge_class = 'danger'
+            elif total_subjects >= 3:
+                intensity = 'Normal'
+                badge_class = 'primary'
+            elif total_subjects > 0 or class_teacher_sections:
+                intensity = 'Light'
+                badge_class = 'info'
+            else:
+                intensity = 'Available'
+                badge_class = 'secondary'
+
+            workload.append({
+                'teacher': t,
+                'class_teacher_sections': class_teacher_sections,
+                'subject_mappings': subject_mappings,
+                'total_subjects': total_subjects,
+                'distinct_classes': distinct_classes,
+                'intensity': intensity,
+                'badge_class': badge_class,
+            })
+
+        return workload
+
+    @classmethod
+    def list_sections_with_class_teachers(cls, school_class_id=None, stream=None, has_teacher=None, search=None):
+        """
+        Returns sections with class teacher details, ordered by class and section.
+        """
+        qs = Section.objects.select_related('school_class', 'class_teacher').filter(is_active=True).order_by(
+            'school_class__order', 'name'
+        )
+        if school_class_id:
+            qs = qs.filter(school_class_id=school_class_id)
+        if stream:
+            qs = qs.filter(stream=stream)
+        if has_teacher is True:
+            qs = qs.filter(class_teacher__isnull=False)
+        elif has_teacher is False:
+            qs = qs.filter(class_teacher__isnull=True)
+        if search:
+            search = search.strip()
+            qs = qs.filter(
+                Q(name__icontains=search) |
+                Q(school_class__name__icontains=search) |
+                Q(class_teacher__first_name__icontains=search) |
+                Q(class_teacher__last_name__icontains=search) |
+                Q(class_teacher__username__icontains=search)
+            )
+        return qs
+
+    @classmethod
+    def list_subject_assignments(
+        cls,
+        school_class_id=None,
+        section_id=None,
+        teacher_id=None,
+        subject_id=None,
+        unassigned_only=False,
+        search=None
+    ):
+        """
+        Returns ClassSubject mappings with teacher details.
+        """
+        qs = ClassSubject.objects.select_related(
+            'section', 'section__school_class', 'subject', 'teacher', 'academic_year'
+        ).filter(is_active=True).order_by('section__school_class__order', 'section__name', 'subject__name')
+
+        if school_class_id:
+            qs = qs.filter(section__school_class_id=school_class_id)
+        if section_id:
+            qs = qs.filter(section_id=section_id)
+        if teacher_id:
+            qs = qs.filter(teacher_id=teacher_id)
+        if subject_id:
+            qs = qs.filter(subject_id=subject_id)
+        if unassigned_only:
+            qs = qs.filter(teacher__isnull=True)
+        if search:
+            search = search.strip()
+            qs = qs.filter(
+                Q(subject__name__icontains=search) |
+                Q(subject__code__icontains=search) |
+                Q(section__name__icontains=search) |
+                Q(section__school_class__name__icontains=search) |
+                Q(teacher__first_name__icontains=search) |
+                Q(teacher__last_name__icontains=search) |
+                Q(teacher__username__icontains=search)
+            )
         return qs

@@ -11,7 +11,8 @@ from django.views.decorators.http import require_POST
 
 from apps.academics.models import AcademicStream, ClassSubject, SchoolClass, Section, Stream, Subject, SubjectType
 from apps.academics.services import (
-    AcademicYearService, ClassSubjectService, SchoolClassService, SectionService, StreamService, SubjectService
+    AcademicYearService, ClassSubjectService, SchoolClassService, SectionService, StreamService, SubjectService,
+    TeacherAssignmentService
 )
 from apps.rbac.services import RBACService
 from apps.school_config.models import AcademicYear, SchoolProfile
@@ -823,8 +824,7 @@ def class_subjects_list_view(request):
     all_sections = Section.objects.filter(is_active=True).select_related('school_class').order_by('school_class__order', 'name')
     all_subjects = Subject.objects.filter(is_active=True).order_by('name', 'code')
 
-    from apps.identity.models import User
-    all_teachers = User.objects.filter(is_active=True).order_by('first_name', 'last_name', 'username')
+    all_teachers = TeacherAssignmentService.get_eligible_faculty_queryset()
     academic_years = AcademicYear.objects.all().order_by('-start_date')
     current_year = AcademicYearService.get_current_year()
 
@@ -857,3 +857,210 @@ def class_subjects_list_view(request):
         'can_manage': can_manage,
     }
     return render(request, 'dashboard/academics/class_subjects_list.html', context)
+
+
+# ==============================================================================
+# 7. Teacher Assignments Management (Phase 3)
+# ==============================================================================
+@login_required(login_url='login')
+def teacher_assignments_view(request):
+    """
+    Consolidated Teacher Assignments Dashboard:
+      - Tab 1: Class Teachers Directory & Assignment
+      - Tab 2: Subject Teachers Directory & Single/Bulk Assignment
+      - Tab 3: Faculty Workload Overview & Distribution
+    """
+    can_view = _check_academics_permission(request, 'academics.assignment.view') or \
+               _check_academics_permission(request, 'academics.timetable.view') or \
+               _check_academics_permission(request, 'academics.class.view')
+    if not can_view:
+        messages.error(request, "You do not have permission to view teacher assignments.")
+        return redirect('home-dashboard')
+
+    can_manage = _check_academics_permission(request, 'academics.assignment.manage') or \
+                 _check_academics_permission(request, 'academics.timetable.manage')
+
+    active_tab = request.GET.get('tab', 'class_teachers').strip()
+    if active_tab not in ('class_teachers', 'subject_teachers', 'workload'):
+        active_tab = 'class_teachers'
+
+    if request.method == 'POST':
+        if not can_manage:
+            messages.error(request, "You do not have permission to manage teacher assignments.")
+            return redirect('academics-teacher-assignments-list')
+
+        action = request.POST.get('action')
+
+        if action == 'assign_class_teacher':
+            section_id = request.POST.get('section_id')
+            teacher_id = request.POST.get('teacher_id')
+            reason = request.POST.get('reason', '').strip()
+            force = request.POST.get('force') == '1'
+
+            try:
+                sec = TeacherAssignmentService.assign_class_teacher(
+                    section_id=section_id,
+                    teacher_id=teacher_id,
+                    actor=request.user,
+                    reason=reason,
+                    request=request,
+                    force=force
+                )
+                messages.success(request, f"Class Teacher '{sec.class_teacher.get_full_name() or sec.class_teacher.username}' assigned to {sec} successfully.")
+            except (ValidationError, ResourceNotFoundError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to assign class teacher: {msg}")
+            except Exception as err:
+                messages.error(request, f"An unexpected error occurred: {err}")
+
+            return redirect(f"{request.path}?tab=class_teachers")
+
+        elif action == 'remove_class_teacher':
+            section_id = request.POST.get('section_id')
+            reason = request.POST.get('reason', '').strip()
+
+            try:
+                TeacherAssignmentService.remove_class_teacher(
+                    section_id=section_id,
+                    actor=request.user,
+                    reason=reason,
+                    request=request
+                )
+                messages.success(request, "Class Teacher unassigned successfully.")
+            except (ValidationError, ResourceNotFoundError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to unassign class teacher: {msg}")
+            except Exception as err:
+                messages.error(request, f"An unexpected error occurred: {err}")
+
+            return redirect(f"{request.path}?tab=class_teachers")
+
+        elif action == 'assign_subject_teacher':
+            class_subject_id = request.POST.get('class_subject_id')
+            teacher_id = request.POST.get('teacher_id')
+            reason = request.POST.get('reason', '').strip()
+
+            try:
+                cs = TeacherAssignmentService.assign_subject_teacher(
+                    class_subject_id=class_subject_id,
+                    teacher_id=teacher_id,
+                    actor=request.user,
+                    reason=reason,
+                    request=request
+                )
+                messages.success(request, f"Assigned '{cs.teacher.get_full_name() or cs.teacher.username}' to {cs.subject.name} in {cs.section}.")
+            except (ValidationError, ResourceNotFoundError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to assign subject teacher: {msg}")
+            except Exception as err:
+                messages.error(request, f"An unexpected error occurred: {err}")
+
+            return redirect(f"{request.path}?tab=subject_teachers")
+
+        elif action == 'bulk_assign_subject_teacher':
+            class_subject_ids = request.POST.getlist('class_subject_ids')
+            teacher_id = request.POST.get('teacher_id')
+            reason = request.POST.get('reason', '').strip()
+
+            try:
+                count = TeacherAssignmentService.bulk_assign_subject_teacher(
+                    class_subject_ids=class_subject_ids,
+                    teacher_id=teacher_id,
+                    actor=request.user,
+                    reason=reason,
+                    request=request
+                )
+                messages.success(request, f"Successfully assigned teacher to {count} subject mapping(s).")
+            except (ValidationError, ResourceNotFoundError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Bulk assignment failed: {msg}")
+            except Exception as err:
+                messages.error(request, f"An unexpected error occurred: {err}")
+
+            return redirect(f"{request.path}?tab=subject_teachers")
+
+        elif action == 'remove_subject_teacher':
+            class_subject_id = request.POST.get('class_subject_id')
+            reason = request.POST.get('reason', '').strip()
+
+            try:
+                TeacherAssignmentService.remove_subject_teacher(
+                    class_subject_id=class_subject_id,
+                    actor=request.user,
+                    reason=reason,
+                    request=request
+                )
+                messages.success(request, "Subject Teacher unassigned successfully.")
+            except (ValidationError, ResourceNotFoundError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to unassign subject teacher: {msg}")
+            except Exception as err:
+                messages.error(request, f"An unexpected error occurred: {err}")
+
+            return redirect(f"{request.path}?tab=subject_teachers")
+
+    # Filters & Query Params
+    selected_class_id = request.GET.get('class_id', '').strip()
+    selected_stream = request.GET.get('stream', '').strip()
+    selected_teacher_id = request.GET.get('teacher_id', '').strip()
+    unassigned_only = request.GET.get('unassigned_only') == '1'
+    search_query = request.GET.get('q', '').strip()
+
+    # Data collections
+    class_id_filter = int(selected_class_id) if selected_class_id.isdigit() else None
+    teacher_id_filter = int(selected_teacher_id) if selected_teacher_id.isdigit() else None
+    stream_filter = selected_stream if selected_stream in dict(Stream.choices) else None
+
+    sections_list = TeacherAssignmentService.list_sections_with_class_teachers(
+        school_class_id=class_id_filter,
+        stream=stream_filter,
+        has_teacher=False if unassigned_only else None,
+        search=search_query or None
+    )
+
+    subject_assignments_list = TeacherAssignmentService.list_subject_assignments(
+        school_class_id=class_id_filter,
+        teacher_id=teacher_id_filter,
+        unassigned_only=unassigned_only,
+        search=search_query or None
+    )
+
+    faculty_workload_list = TeacherAssignmentService.get_faculty_workload_summary()
+
+    all_classes = SchoolClass.objects.filter(is_active=True).order_by('order', 'name')
+    all_teachers = TeacherAssignmentService.get_eligible_faculty_queryset()
+
+    # Metrics
+    total_sections = Section.objects.filter(is_active=True).count()
+    assigned_class_teachers_count = Section.objects.filter(is_active=True, class_teacher__isnull=False).count()
+    unassigned_class_teachers_count = total_sections - assigned_class_teachers_count
+
+    total_subject_mappings = ClassSubject.objects.filter(is_active=True).count()
+    assigned_subject_teachers_count = ClassSubject.objects.filter(is_active=True, teacher__isnull=False).count()
+    unassigned_subject_teachers_count = total_subject_mappings - assigned_subject_teachers_count
+
+    total_faculty_count = all_teachers.count()
+
+    context = {
+        'active_tab': active_tab,
+        'sections_list': sections_list,
+        'subject_assignments_list': subject_assignments_list,
+        'faculty_workload_list': faculty_workload_list,
+        'all_classes': all_classes,
+        'all_teachers': all_teachers,
+        'streams': Stream.choices,
+        'selected_class_id': class_id_filter,
+        'selected_stream': stream_filter,
+        'selected_teacher_id': teacher_id_filter,
+        'unassigned_only': unassigned_only,
+        'search_query': search_query,
+        'total_sections': total_sections,
+        'assigned_class_teachers_count': assigned_class_teachers_count,
+        'unassigned_class_teachers_count': unassigned_class_teachers_count,
+        'total_subject_mappings': total_subject_mappings,
+        'assigned_subject_teachers_count': assigned_subject_teachers_count,
+        'unassigned_subject_teachers_count': unassigned_subject_teachers_count,
+        'total_faculty_count': total_faculty_count,
+        'can_manage': can_manage,
+    }
+    return render(request, 'dashboard/academics/teacher_assignments.html', context)

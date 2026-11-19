@@ -283,6 +283,20 @@ PERMISSION_REGISTRY = [
         "name": "Manage Class-Subject Mappings",
         "description": "Map subjects to classes, streams, and sections, and set compulsory/elective types.",
     },
+    {
+        "codename": "academics.assignment.view",
+        "module": "academics",
+        "action": "view",
+        "name": "View Teacher Assignments",
+        "description": "View class teacher and subject teacher assignments and faculty workloads.",
+    },
+    {
+        "codename": "academics.assignment.manage",
+        "module": "academics",
+        "action": "change",
+        "name": "Manage Teacher Assignments",
+        "description": "Assign, reassign, or remove class teachers and subject teachers.",
+    },
     # ── Attendance ────────────────────────────────────────────────────────
     {
         "codename": "attendance.record.view",

@@ -1,0 +1,929 @@
+{% extends "dashboard/base.html" %}
+{% load static %}
+
+{% block title %}Teacher Assignments | School ERP{% endblock %}
+
+{% block admin %}
+<div class="container-fluid px-0">
+    <!-- Breadcrumb & Header -->
+    <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-4">
+        <div>
+            <nav aria-label="breadcrumb">
+                <ol class="breadcrumb mb-1">
+                    <li class="breadcrumb-item"><a href="{% url 'home-dashboard' %}">Dashboard</a></li>
+                    <li class="breadcrumb-item">Academics</li>
+                    <li class="breadcrumb-item active" aria-current="page">Teacher Assignments</li>
+                </ol>
+            </nav>
+            <h2 class="h4 fw-bold text-dark mb-0">Teacher & Faculty Assignments</h2>
+            <p class="text-muted small mb-0">Designate Class Teachers to sections, assign faculty to curriculum subjects, and monitor teaching workloads.</p>
+        </div>
+        <div class="mt-3 mt-md-0 d-flex flex-wrap gap-2">
+            <a href="{% url 'academics-class-subjects-list' %}" class="btn btn-outline-secondary">
+                <i class="ti ti-link me-1"></i> Class–Subject Mappings
+            </a>
+            {% if can_manage %}
+            <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#bulkAssignSubjectTeacherModal">
+                <i class="ti ti-users me-1"></i> Bulk Assign Faculty
+            </button>
+            <button type="button" class="btn btn-primary shadow-sm" data-bs-toggle="modal" data-bs-target="#assignClassTeacherModal">
+                <i class="ti ti-user-plus me-1"></i> Assign Class Teacher
+            </button>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Django Messages Alerts -->
+    {% if messages %}
+    <div class="mb-3">
+        {% for message in messages %}
+        <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show shadow-sm" role="alert">
+            <i class="ti ti-info-circle me-1"></i> {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Metrics Cards -->
+    <div class="row g-3 mb-4">
+        <div class="col-sm-6 col-xl-3">
+            <div class="card border-0 shadow-sm rounded-3">
+                <div class="card-body d-flex align-items-center">
+                    <div class="avatar avatar-md bg-light-primary text-primary rounded-3 me-3 p-3 d-flex align-items-center justify-content-center">
+                        <i class="ti ti-user-check fs-3"></i>
+                    </div>
+                    <div>
+                        <span class="text-muted small text-uppercase fw-semibold d-block">Class Teachers Assigned</span>
+                        <h4 class="fw-bold mb-0 text-primary">{{ assigned_class_teachers_count }} / {{ total_sections }}</h4>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-6 col-xl-3">
+            <div class="card border-0 shadow-sm rounded-3">
+                <div class="card-body d-flex align-items-center">
+                    <div class="avatar avatar-md {% if unassigned_class_teachers_count > 0 %}bg-light-warning text-warning{% else %}bg-light-success text-success{% endif %} rounded-3 me-3 p-3 d-flex align-items-center justify-content-center">
+                        <i class="ti ti-alert-circle fs-3"></i>
+                    </div>
+                    <div>
+                        <span class="text-muted small text-uppercase fw-semibold d-block">Unassigned Sections</span>
+                        <h4 class="fw-bold mb-0 {% if unassigned_class_teachers_count > 0 %}text-warning{% else %}text-success{% endif %}">
+                            {{ unassigned_class_teachers_count }}
+                        </h4>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-6 col-xl-3">
+            <div class="card border-0 shadow-sm rounded-3">
+                <div class="card-body d-flex align-items-center">
+                    <div class="avatar avatar-md bg-light-info text-info rounded-3 me-3 p-3 d-flex align-items-center justify-content-center">
+                        <i class="ti ti-books fs-3"></i>
+                    </div>
+                    <div>
+                        <span class="text-muted small text-uppercase fw-semibold d-block">Subject Teachers Assigned</span>
+                        <h4 class="fw-bold text-info mb-0">{{ assigned_subject_teachers_count }} / {{ total_subject_mappings }}</h4>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-6 col-xl-3">
+            <div class="card border-0 shadow-sm rounded-3">
+                <div class="card-body d-flex align-items-center">
+                    <div class="avatar avatar-md bg-light-success text-success rounded-3 me-3 p-3 d-flex align-items-center justify-content-center">
+                        <i class="ti ti-school fs-3"></i>
+                    </div>
+                    <div>
+                        <span class="text-muted small text-uppercase fw-semibold d-block">Active Teaching Faculty</span>
+                        <h4 class="fw-bold text-success mb-0">{{ total_faculty_count }}</h4>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab Navigation -->
+    <ul class="nav nav-pills mb-4 bg-white p-2 rounded-3 shadow-sm border" role="tablist">
+        <li class="nav-item" role="presentation">
+            <a class="nav-link {% if active_tab == 'class_teachers' %}active fw-bold{% endif %}" href="?tab=class_teachers">
+                <i class="ti ti-user-star me-2"></i> Class Teachers ({{ assigned_class_teachers_count }}/{{ total_sections }})
+            </a>
+        </li>
+        <li class="nav-item" role="presentation">
+            <a class="nav-link {% if active_tab == 'subject_teachers' %}active fw-bold{% endif %}" href="?tab=subject_teachers">
+                <i class="ti ti-book-2 me-2"></i> Subject Teachers ({{ assigned_subject_teachers_count }}/{{ total_subject_mappings }})
+            </a>
+        </li>
+        <li class="nav-item" role="presentation">
+            <a class="nav-link {% if active_tab == 'workload' %}active fw-bold{% endif %}" href="?tab=workload">
+                <i class="ti ti-chart-bar me-2"></i> Faculty Workload Overview ({{ total_faculty_count }})
+            </a>
+        </li>
+    </ul>
+
+    <!-- =================================================================== -->
+    <!-- Tab 1: Class Teachers Directory                                     -->
+    <!-- =================================================================== -->
+    {% if active_tab == 'class_teachers' %}
+    <div class="card border-0 shadow-sm rounded-3 mb-4">
+        <div class="card-body p-3">
+            <form method="get" class="row g-2 align-items-center">
+                <input type="hidden" name="tab" value="class_teachers">
+                <!-- Class filter -->
+                <div class="col-12 col-sm-6 col-lg-3">
+                    <select name="class_id" class="form-select form-select-sm" onchange="this.form.submit()">
+                        <option value="">All Classes</option>
+                        {% for c in all_classes %}
+                        <option value="{{ c.id }}" {% if selected_class_id == c.id %}selected{% endif %}>
+                            {{ c.name }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- Stream filter -->
+                <div class="col-12 col-sm-6 col-lg-3">
+                    <select name="stream" class="form-select form-select-sm" onchange="this.form.submit()">
+                        <option value="">All Streams</option>
+                        {% for s_val, s_label in streams %}
+                        <option value="{{ s_val }}" {% if selected_stream == s_val %}selected{% endif %}>
+                            {{ s_label }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- Unassigned Only Checkbox -->
+                <div class="col-12 col-sm-6 col-lg-2">
+                    <div class="form-check form-switch pt-1">
+                        <input class="form-check-input" type="checkbox" name="unassigned_only" value="1" id="filterUnassignedCT" {% if unassigned_only %}checked{% endif %} onchange="this.form.submit()">
+                        <label class="form-check-label small fw-semibold" for="filterUnassignedCT">Unassigned Only</label>
+                    </div>
+                </div>
+
+                <!-- Search Input -->
+                <div class="col-12 col-sm-6 col-lg-3">
+                    <div class="input-group input-group-sm">
+                        <span class="input-group-text bg-light border-end-0"><i class="ti ti-search text-muted"></i></span>
+                        <input type="text" name="q" class="form-control border-start-0 ps-0" placeholder="Search section or teacher..." value="{{ search_query }}">
+                    </div>
+                </div>
+
+                <!-- Action -->
+                <div class="col-12 col-lg-1 d-flex gap-1">
+                    <button type="submit" class="btn btn-sm btn-primary w-100">Filter</button>
+                    {% if selected_class_id or selected_stream or unassigned_only or search_query %}
+                    <a href="?tab=class_teachers" class="btn btn-sm btn-outline-secondary" title="Clear Filters"><i class="ti ti-x"></i></a>
+                    {% endif %}
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm rounded-3">
+        <div class="card-header bg-white border-0 py-3 d-flex justify-content-between align-items-center">
+            <h5 class="card-title fw-bold text-dark mb-0">Class Teacher Allocation by Section</h5>
+            <span class="badge bg-light-primary text-primary px-3 py-2 rounded-pill font-monospace">
+                {{ sections_list|length }} Section{{ sections_list|length|pluralize }}
+            </span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th class="ps-4">Class & Section</th>
+                        <th>Stream</th>
+                        <th>Designated Class Teacher</th>
+                        <th>Email / Contact</th>
+                        <th>Room Number</th>
+                        <th>Student Capacity</th>
+                        <th class="text-end pe-4">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for sec in sections_list %}
+                    <tr>
+                        <td class="ps-4">
+                            <div class="fw-semibold text-dark">{{ sec.school_class.name }}</div>
+                            <span class="badge bg-light text-secondary border">Section {{ sec.name }}</span>
+                        </td>
+                        <td>
+                            {% if sec.school_class.is_senior_secondary %}
+                                {% if sec.stream == 'SCIENCE' %}
+                                <span class="badge bg-light-primary text-primary"><i class="ti ti-atom me-1"></i>Science</span>
+                                {% elif sec.stream == 'COMMERCE' %}
+                                <span class="badge bg-light-success text-success"><i class="ti ti-chart-line me-1"></i>Commerce</span>
+                                {% elif sec.stream == 'ARTS' %}
+                                <span class="badge bg-light-warning text-warning"><i class="ti ti-palette me-1"></i>Arts</span>
+                                {% else %}
+                                <span class="badge bg-light-secondary text-secondary">{{ sec.get_stream_display }}</span>
+                                {% endif %}
+                            {% else %}
+                            <span class="text-muted small">General (N–10)</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if sec.class_teacher %}
+                            <div class="d-flex align-items-center">
+                                <div class="avatar avatar-sm bg-light-primary text-primary rounded-circle me-2 d-flex align-items-center justify-content-center fw-bold">
+                                    {{ sec.class_teacher.first_name|first|default:sec.class_teacher.username|first|upper }}
+                                </div>
+                                <div>
+                                    <span class="fw-semibold text-dark d-block">{{ sec.class_teacher.get_full_name|default:sec.class_teacher.username }}</span>
+                                    <span class="badge bg-light text-muted border">Class Teacher</span>
+                                </div>
+                            </div>
+                            {% else %}
+                            <span class="badge bg-light-warning text-warning border border-warning px-2 py-1">
+                                <i class="ti ti-alert-circle me-1"></i> Unassigned
+                            </span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if sec.class_teacher %}
+                            <span class="text-muted small"><i class="ti ti-mail me-1"></i>{{ sec.class_teacher.email|default:"No email registered" }}</span>
+                            {% else %}
+                            <span class="text-muted small">—</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if sec.room_number %}
+                            <span class="badge bg-light text-dark border"><i class="ti ti-door me-1"></i>{{ sec.room_number }}</span>
+                            {% else %}
+                            <span class="text-muted small">Not assigned</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <span class="text-dark fw-semibold">{{ sec.capacity }}</span> <span class="text-muted small">students</span>
+                        </td>
+                        <td class="text-end pe-4">
+                            {% if can_manage %}
+                            <div class="btn-group btn-group-sm">
+                                <button type="button" class="btn btn-outline-primary btn-assign-ct"
+                                        data-section-id="{{ sec.id }}"
+                                        data-section-name="{{ sec }}"
+                                        data-current-teacher-id="{{ sec.class_teacher_id|default:'' }}">
+                                    <i class="ti ti-user-edit me-1"></i> {% if sec.class_teacher %}Reassign{% else %}Assign{% endif %}
+                                </button>
+                                {% if sec.class_teacher %}
+                                <button type="button" class="btn btn-outline-danger btn-remove-ct"
+                                        data-section-id="{{ sec.id }}"
+                                        data-section-name="{{ sec }}"
+                                        data-teacher-name="{{ sec.class_teacher.get_full_name|default:sec.class_teacher.username }}"
+                                        title="Remove Class Teacher">
+                                    <i class="ti ti-user-x"></i>
+                                </button>
+                                {% endif %}
+                            </div>
+                            {% else %}
+                            <span class="text-muted small"><i class="ti ti-lock"></i></span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="7" class="text-center py-5">
+                            <div class="text-muted mb-2"><i class="ti ti-user-off fs-1"></i></div>
+                            <h6 class="fw-bold text-dark mb-1">No Sections Found</h6>
+                            <p class="text-muted small mb-0">No sections match the specified filter criteria.</p>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- =================================================================== -->
+    <!-- Tab 2: Subject Teachers Directory                                   -->
+    <!-- =================================================================== -->
+    {% if active_tab == 'subject_teachers' %}
+    <div class="card border-0 shadow-sm rounded-3 mb-4">
+        <div class="card-body p-3">
+            <form method="get" class="row g-2 align-items-center">
+                <input type="hidden" name="tab" value="subject_teachers">
+                <!-- Class filter -->
+                <div class="col-12 col-sm-6 col-lg-3">
+                    <select name="class_id" class="form-select form-select-sm" onchange="this.form.submit()">
+                        <option value="">All Classes</option>
+                        {% for c in all_classes %}
+                        <option value="{{ c.id }}" {% if selected_class_id == c.id %}selected{% endif %}>
+                            {{ c.name }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- Teacher filter -->
+                <div class="col-12 col-sm-6 col-lg-3">
+                    <select name="teacher_id" class="form-select form-select-sm" onchange="this.form.submit()">
+                        <option value="">All Faculty</option>
+                        {% for t in all_teachers %}
+                        <option value="{{ t.id }}" {% if selected_teacher_id == t.id %}selected{% endif %}>
+                            {{ t.get_full_name|default:t.username }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- Unassigned Only Checkbox -->
+                <div class="col-12 col-sm-6 col-lg-2">
+                    <div class="form-check form-switch pt-1">
+                        <input class="form-check-input" type="checkbox" name="unassigned_only" value="1" id="filterUnassignedST" {% if unassigned_only %}checked{% endif %} onchange="this.form.submit()">
+                        <label class="form-check-label small fw-semibold" for="filterUnassignedST">Unassigned Only</label>
+                    </div>
+                </div>
+
+                <!-- Search Input -->
+                <div class="col-12 col-sm-6 col-lg-3">
+                    <div class="input-group input-group-sm">
+                        <span class="input-group-text bg-light border-end-0"><i class="ti ti-search text-muted"></i></span>
+                        <input type="text" name="q" class="form-control border-start-0 ps-0" placeholder="Search subject or teacher..." value="{{ search_query }}">
+                    </div>
+                </div>
+
+                <!-- Action -->
+                <div class="col-12 col-lg-1 d-flex gap-1">
+                    <button type="submit" class="btn btn-sm btn-primary w-100">Filter</button>
+                    {% if selected_class_id or selected_teacher_id or unassigned_only or search_query %}
+                    <a href="?tab=subject_teachers" class="btn btn-sm btn-outline-secondary" title="Clear Filters"><i class="ti ti-x"></i></a>
+                    {% endif %}
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm rounded-3">
+        <div class="card-header bg-white border-0 py-3 d-flex justify-content-between align-items-center">
+            <h5 class="card-title fw-bold text-dark mb-0">Curriculum Subject Teacher Allocations</h5>
+            <span class="badge bg-light-info text-info px-3 py-2 rounded-pill font-monospace">
+                {{ subject_assignments_list|length }} Subject Mapping{{ subject_assignments_list|length|pluralize }}
+            </span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th class="ps-4">Class & Section</th>
+                        <th>Subject</th>
+                        <th>Code</th>
+                        <th>Type</th>
+                        <th>Components</th>
+                        <th>Assigned Subject Teacher</th>
+                        <th class="text-end pe-4">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for cs in subject_assignments_list %}
+                    <tr>
+                        <td class="ps-4">
+                            <div class="fw-semibold text-dark">{{ cs.section.school_class.name }}</div>
+                            <span class="badge bg-light text-secondary border">Section {{ cs.section.name }}</span>
+                            {% if cs.section.stream != 'NONE' %}
+                            <span class="badge bg-light-primary text-primary ms-1">{{ cs.section.get_stream_display }}</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="fw-semibold text-dark">{{ cs.subject.name }}</div>
+                        </td>
+                        <td>
+                            <span class="badge bg-light-dark text-dark font-monospace">{{ cs.subject.code }}</span>
+                        </td>
+                        <td>
+                            {% if cs.subject_type == 'COMPULSORY' %}
+                            <span class="badge bg-light-primary text-primary">Compulsory</span>
+                            {% elif cs.subject_type == 'ELECTIVE' %}
+                            <span class="badge bg-light-info text-info">Elective</span>
+                            {% else %}
+                            <span class="badge bg-light-warning text-warning">Optional</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if cs.subject.is_theory %}
+                            <span class="badge bg-light-primary text-primary" title="Written Exam"><i class="ti ti-file-text me-1"></i>Theory</span>
+                            {% endif %}
+                            {% if cs.subject.is_practical %}
+                            <span class="badge bg-light-info text-info" title="Practical Exam"><i class="ti ti-flask me-1"></i>Practical</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if cs.teacher %}
+                            <div class="d-flex align-items-center">
+                                <div class="avatar avatar-sm bg-light-success text-success rounded-circle me-2 d-flex align-items-center justify-content-center fw-bold">
+                                    {{ cs.teacher.first_name|first|default:cs.teacher.username|first|upper }}
+                                </div>
+                                <div>
+                                    <span class="fw-semibold text-dark d-block">{{ cs.teacher.get_full_name|default:cs.teacher.username }}</span>
+                                    <span class="text-muted small"><i class="ti ti-mail me-1"></i>{{ cs.teacher.email|default:"No email" }}</span>
+                                </div>
+                            </div>
+                            {% else %}
+                            <span class="badge bg-light-danger text-danger border border-danger px-2 py-1">
+                                <i class="ti ti-alert-triangle me-1"></i> Unassigned
+                            </span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end pe-4">
+                            {% if can_manage %}
+                            <div class="btn-group btn-group-sm">
+                                <button type="button" class="btn btn-outline-primary btn-assign-st"
+                                        data-class-subject-id="{{ cs.id }}"
+                                        data-section="{{ cs.section }}"
+                                        data-subject="{{ cs.subject.name }} ({{ cs.subject.code }})"
+                                        data-current-teacher-id="{{ cs.teacher_id|default:'' }}">
+                                    <i class="ti ti-user-plus me-1"></i> {% if cs.teacher %}Change{% else %}Assign{% endif %}
+                                </button>
+                                {% if cs.teacher %}
+                                <button type="button" class="btn btn-outline-danger btn-remove-st"
+                                        data-class-subject-id="{{ cs.id }}"
+                                        data-section="{{ cs.section }}"
+                                        data-subject="{{ cs.subject.name }}"
+                                        data-teacher-name="{{ cs.teacher.get_full_name|default:cs.teacher.username }}"
+                                        title="Remove Teacher">
+                                    <i class="ti ti-trash"></i>
+                                </button>
+                                {% endif %}
+                            </div>
+                            {% else %}
+                            <span class="text-muted small"><i class="ti ti-lock"></i></span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="7" class="text-center py-5">
+                            <div class="text-muted mb-2"><i class="ti ti-books fs-1"></i></div>
+                            <h6 class="fw-bold text-dark mb-1">No Subject Mappings Found</h6>
+                            <p class="text-muted small mb-0">No mapped subjects match your search filters.</p>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- =================================================================== -->
+    <!-- Tab 3: Faculty Workload Overview                                    -->
+    <!-- =================================================================== -->
+    {% if active_tab == 'workload' %}
+    <div class="card border-0 shadow-sm rounded-3">
+        <div class="card-header bg-white border-0 py-3 d-flex justify-content-between align-items-center">
+            <div>
+                <h5 class="card-title fw-bold text-dark mb-0">Faculty Workload & Responsibility Matrix</h5>
+                <p class="text-muted small mb-0">Overview of all active teaching staff, designated section leadership, and assigned subjects.</p>
+            </div>
+            <span class="badge bg-light-success text-success px-3 py-2 rounded-pill font-monospace">
+                {{ faculty_workload_list|length }} Faculty Members
+            </span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th class="ps-4">Faculty Member</th>
+                        <th>Class Teacher Section</th>
+                        <th>Classes Taught</th>
+                        <th>Assigned Subjects</th>
+                        <th>Total Subjects</th>
+                        <th>Workload Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for w in faculty_workload_list %}
+                    <tr>
+                        <td class="ps-4">
+                            <div class="d-flex align-items-center">
+                                <div class="avatar avatar-sm bg-light-primary text-primary rounded-circle me-2 d-flex align-items-center justify-content-center fw-bold">
+                                    {{ w.teacher.first_name|first|default:w.teacher.username|first|upper }}
+                                </div>
+                                <div>
+                                    <span class="fw-semibold text-dark d-block">{{ w.teacher.get_full_name|default:w.teacher.username }}</span>
+                                    <span class="text-muted small"><i class="ti ti-mail me-1"></i>{{ w.teacher.email|default:"No email" }}</span>
+                                </div>
+                            </div>
+                        </td>
+                        <td>
+                            {% if w.class_teacher_sections %}
+                                {% for sec in w.class_teacher_sections %}
+                                <span class="badge bg-light-primary text-primary border me-1">
+                                    <i class="ti ti-star me-1"></i>{{ sec }}
+                                </span>
+                                {% endfor %}
+                            {% else %}
+                            <span class="text-muted small fst-italic">No Section Assigned</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if w.distinct_classes %}
+                                {% for c_name in w.distinct_classes %}
+                                <span class="badge bg-light-dark text-dark me-1">{{ c_name }}</span>
+                                {% endfor %}
+                            {% else %}
+                            <span class="text-muted small">—</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if w.subject_mappings %}
+                                <div class="d-flex flex-wrap gap-1" style="max-width: 420px;">
+                                    {% for m in w.subject_mappings %}
+                                    <span class="badge bg-light text-secondary border small">
+                                        {{ m.section.name }}: {{ m.subject.code }}
+                                    </span>
+                                    {% endfor %}
+                                </div>
+                            {% else %}
+                            <span class="text-muted small fst-italic">No subjects assigned</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <span class="fw-bold fs-6 text-dark">{{ w.total_subjects }}</span>
+                        </td>
+                        <td>
+                            <span class="badge bg-light-{{ w.badge_class }} text-{{ w.badge_class }} px-2 py-1 fw-semibold">
+                                {{ w.intensity }}
+                            </span>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="6" class="text-center py-5">
+                            <div class="text-muted mb-2"><i class="ti ti-users-off fs-1"></i></div>
+                            <h6 class="fw-bold text-dark mb-1">No Teaching Staff Found</h6>
+                            <p class="text-muted small mb-0">No active staff members are registered in the system.</p>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- ======================================================================= -->
+<!-- Modal 1: Assign / Reassign Class Teacher                                -->
+<!-- ======================================================================= -->
+{% if can_manage %}
+<div class="modal fade" id="assignClassTeacherModal" tabindex="-1" aria-labelledby="assignClassTeacherModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <form method="post" action="{% url 'academics-teacher-assignments-list' %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="assign_class_teacher">
+                <div class="modal-header bg-light">
+                    <h5 class="modal-title fw-bold text-dark" id="assignClassTeacherModalLabel">
+                        <i class="ti ti-user-star me-2 text-primary"></i> Assign Class Teacher
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <!-- Section Select -->
+                    <div class="mb-3">
+                        <label for="ctSectionSelect" class="form-label fw-semibold">Select Section <span class="text-danger">*</span></label>
+                        <select class="form-select" id="ctSectionSelect" name="section_id" required>
+                            <option value="" disabled selected>-- Choose Section --</option>
+                            {% for s in sections_list %}
+                            <option value="{{ s.id }}">
+                                {{ s }} {% if s.class_teacher %}(Current: {{ s.class_teacher.get_full_name|default:s.class_teacher.username }}){% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <!-- Teacher Select -->
+                    <div class="mb-3">
+                        <label for="ctTeacherSelect" class="form-label fw-semibold">Designated Class Teacher <span class="text-danger">*</span></label>
+                        <select class="form-select" id="ctTeacherSelect" name="teacher_id" required>
+                            <option value="" disabled selected>-- Choose Faculty Member --</option>
+                            {% for t in all_teachers %}
+                            <option value="{{ t.id }}">
+                                {{ t.get_full_name|default:t.username }} ({{ t.email|default:"No email" }})
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text small">In CBSE schools, a teacher is typically assigned to lead only one section.</div>
+                    </div>
+
+                    <!-- Force Reassign Checkbox -->
+                    <div class="form-check form-switch mb-3">
+                        <input class="form-check-input" type="checkbox" id="ctForceCheck" name="force" value="1">
+                        <label class="form-check-label small" for="ctForceCheck">Allow assignment even if teacher is already class teacher of another section</label>
+                    </div>
+
+                    <!-- Audit Reason -->
+                    <div class="mb-0">
+                        <label for="ctReason" class="form-label fw-semibold">Audit Reason</label>
+                        <input type="text" class="form-control" id="ctReason" name="reason" placeholder="e.g. Session 2026-27 Class Teacher appointment">
+                    </div>
+                </div>
+                <div class="modal-footer bg-light">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="ti ti-check me-1"></i> Save Assignment
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================================= -->
+<!-- Modal 2: Remove Class Teacher Confirmation                             -->
+<!-- ======================================================================= -->
+<div class="modal fade" id="removeClassTeacherModal" tabindex="-1" aria-labelledby="removeClassTeacherModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <form method="post" action="{% url 'academics-teacher-assignments-list' %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="remove_class_teacher">
+                <input type="hidden" name="section_id" id="rmCtSectionId">
+                <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title fw-bold" id="removeClassTeacherModalLabel">
+                        <i class="ti ti-user-x me-2"></i> Remove Class Teacher
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <p class="mb-2">Are you sure you want to remove <strong id="rmCtTeacherName"></strong> as Class Teacher of <strong id="rmCtSectionName"></strong>?</p>
+                    <p class="text-muted small mb-3">The section will be left without a designated class teacher until a new one is assigned.</p>
+                    <div class="mb-0">
+                        <label for="rmCtReason" class="form-label fw-semibold">Reason for Removal</label>
+                        <input type="text" class="form-control" id="rmCtReason" name="reason" placeholder="e.g. Teacher reassignment or leave" required>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-danger">
+                        <i class="ti ti-user-x me-1"></i> Confirm Removal
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================================= -->
+<!-- Modal 3: Assign Subject Teacher (Single)                                -->
+<!-- ======================================================================= -->
+<div class="modal fade" id="assignSubjectTeacherModal" tabindex="-1" aria-labelledby="assignSubjectTeacherModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <form method="post" action="{% url 'academics-teacher-assignments-list' %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="assign_subject_teacher">
+                <input type="hidden" name="class_subject_id" id="stClassSubjectId">
+                <div class="modal-header bg-light">
+                    <h5 class="modal-title fw-bold text-dark" id="assignSubjectTeacherModalLabel">
+                        <i class="ti ti-user-plus me-2 text-primary"></i> Assign Subject Faculty
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="alert alert-light border mb-3">
+                        <div class="d-flex justify-content-between">
+                            <span class="text-muted small">Target Section:</span>
+                            <span class="fw-bold" id="stSectionDisplay"></span>
+                        </div>
+                        <div class="d-flex justify-content-between mt-1">
+                            <span class="text-muted small">Subject:</span>
+                            <span class="fw-bold text-primary" id="stSubjectDisplay"></span>
+                        </div>
+                    </div>
+
+                    <!-- Teacher Select -->
+                    <div class="mb-3">
+                        <label for="stTeacherSelect" class="form-label fw-semibold">Assigned Faculty Member <span class="text-danger">*</span></label>
+                        <select class="form-select" id="stTeacherSelect" name="teacher_id" required>
+                            <option value="" disabled selected>-- Select Faculty Member --</option>
+                            {% for t in all_teachers %}
+                            <option value="{{ t.id }}">
+                                {{ t.get_full_name|default:t.username }} ({{ t.email|default:"No email" }})
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <!-- Reason -->
+                    <div class="mb-0">
+                        <label for="stReason" class="form-label fw-semibold">Audit Reason</label>
+                        <input type="text" class="form-control" id="stReason" name="reason" placeholder="e.g. Faculty assignment for academic session">
+                    </div>
+                </div>
+                <div class="modal-footer bg-light">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="ti ti-check me-1"></i> Save Assignment
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================================= -->
+<!-- Modal 4: Bulk Assign Subject Faculty Across Sections                   -->
+<!-- ======================================================================= -->
+<div class="modal fade" id="bulkAssignSubjectTeacherModal" tabindex="-1" aria-labelledby="bulkAssignSubjectTeacherModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <form method="post" action="{% url 'academics-teacher-assignments-list' %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="bulk_assign_subject_teacher">
+                <div class="modal-header bg-light">
+                    <h5 class="modal-title fw-bold text-dark" id="bulkAssignSubjectTeacherModalLabel">
+                        <i class="ti ti-users me-2 text-primary"></i> Bulk Assign Subject Faculty
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <p class="text-muted small mb-3">
+                        Assign one faculty member to multiple section-subject mappings simultaneously (e.g. assigning a teacher to Mathematics across 10-A, 10-B, and 10-C).
+                    </p>
+
+                    <!-- Faculty Select -->
+                    <div class="mb-3">
+                        <label for="bulkStTeacherSelect" class="form-label fw-semibold">Target Faculty Member <span class="text-danger">*</span></label>
+                        <select class="form-select" id="bulkStTeacherSelect" name="teacher_id" required>
+                            <option value="" disabled selected>-- Select Faculty Member --</option>
+                            {% for t in all_teachers %}
+                            <option value="{{ t.id }}">{{ t.get_full_name|default:t.username }} ({{ t.email|default:"No email" }})</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <!-- Subject Mappings Checklist -->
+                    <div class="mb-3">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <label class="form-label fw-semibold mb-0">Select Target Subject Mappings <span class="text-danger">*</span></label>
+                            <div class="btn-group btn-group-sm">
+                                <button type="button" class="btn btn-outline-secondary" id="bulkStSelectAll">Select All</button>
+                                <button type="button" class="btn btn-outline-secondary" id="bulkStDeselectAll">Clear All</button>
+                            </div>
+                        </div>
+                        <div class="border rounded p-3 bg-light" style="max-height: 240px; overflow-y: auto;">
+                            <div class="row g-2">
+                                {% for cs in subject_assignments_list %}
+                                <div class="col-md-6">
+                                    <div class="form-check">
+                                        <input class="form-check-input bulk-st-checkbox" type="checkbox" name="class_subject_ids" value="{{ cs.id }}" id="bulkCsCheck_{{ cs.id }}">
+                                        <label class="form-check-label d-block text-truncate" for="bulkCsCheck_{{ cs.id }}" title="{{ cs.section }} - {{ cs.subject.name }}">
+                                            <span class="badge bg-secondary font-monospace me-1">{{ cs.section.name }}</span>
+                                            <span class="fw-semibold text-dark">{{ cs.section.school_class.name }}:</span> {{ cs.subject.name }}
+                                            {% if cs.teacher %}
+                                            <span class="text-muted small fst-italic">({{ cs.teacher.get_full_name|default:cs.teacher.username }})</span>
+                                            {% else %}
+                                            <span class="badge bg-danger text-white ms-1">Unassigned</span>
+                                            {% endif %}
+                                        </label>
+                                    </div>
+                                </div>
+                                {% empty %}
+                                <div class="col-12 text-muted small">No active curriculum subject mappings available.</div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Audit Reason -->
+                    <div class="mb-0">
+                        <label for="bulkStReason" class="form-label fw-semibold">Audit Reason</label>
+                        <input type="text" class="form-control" id="bulkStReason" name="reason" placeholder="e.g. Session 2026-27 Mathematics faculty workload allocation">
+                    </div>
+                </div>
+                <div class="modal-footer bg-light">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="ti ti-check me-1"></i> Apply Bulk Assignment
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================================= -->
+<!-- Modal 5: Remove Subject Teacher Confirmation                           -->
+<!-- ======================================================================= -->
+<div class="modal fade" id="removeSubjectTeacherModal" tabindex="-1" aria-labelledby="removeSubjectTeacherModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <form method="post" action="{% url 'academics-teacher-assignments-list' %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="remove_subject_teacher">
+                <input type="hidden" name="class_subject_id" id="rmStClassSubjectId">
+                <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title fw-bold" id="removeSubjectTeacherModalLabel">
+                        <i class="ti ti-trash me-2"></i> Unassign Subject Teacher
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <p class="mb-2">Are you sure you want to unassign <strong id="rmStTeacherName"></strong> from <strong id="rmStSubjectName"></strong> in <strong id="rmStSectionName"></strong>?</p>
+                    <p class="text-muted small mb-3">The subject mapping will remain active but marked as unassigned until a new teacher is allocated.</p>
+                    <div class="mb-0">
+                        <label for="rmStReason" class="form-label fw-semibold">Reason for Unassignment</label>
+                        <input type="text" class="form-control" id="rmStReason" name="reason" placeholder="e.g. Schedule adjustment" required>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-danger">
+                        <i class="ti ti-trash me-1"></i> Confirm Unassign
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Client-side modal bindings -->
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // 1. Assign Class Teacher button binding
+    const assignCtModal = document.getElementById('assignClassTeacherModal');
+    if (assignCtModal) {
+        document.querySelectorAll('.btn-assign-ct').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const sectionId = this.getAttribute('data-section-id');
+                const currentTeacherId = this.getAttribute('data-current-teacher-id');
+                const sectionSelect = document.getElementById('ctSectionSelect');
+                const teacherSelect = document.getElementById('ctTeacherSelect');
+
+                if (sectionSelect) sectionSelect.value = sectionId;
+                if (teacherSelect && currentTeacherId) teacherSelect.value = currentTeacherId;
+
+                new bootstrap.Modal(assignCtModal).show();
+            });
+        });
+    }
+
+    // 2. Remove Class Teacher button binding
+    const rmCtModal = document.getElementById('removeClassTeacherModal');
+    if (rmCtModal) {
+        document.querySelectorAll('.btn-remove-ct').forEach(btn => {
+            btn.addEventListener('click', function() {
+                document.getElementById('rmCtSectionId').value = this.getAttribute('data-section-id');
+                document.getElementById('rmCtSectionName').textContent = this.getAttribute('data-section-name');
+                document.getElementById('rmCtTeacherName').textContent = this.getAttribute('data-teacher-name');
+
+                new bootstrap.Modal(rmCtModal).show();
+            });
+        });
+    }
+
+    // 3. Assign Subject Teacher button binding
+    const assignStModal = document.getElementById('assignSubjectTeacherModal');
+    if (assignStModal) {
+        document.querySelectorAll('.btn-assign-st').forEach(btn => {
+            btn.addEventListener('click', function() {
+                document.getElementById('stClassSubjectId').value = this.getAttribute('data-class-subject-id');
+                document.getElementById('stSectionDisplay').textContent = this.getAttribute('data-section');
+                document.getElementById('stSubjectDisplay').textContent = this.getAttribute('data-subject');
+
+                const currentTeacherId = this.getAttribute('data-current-teacher-id');
+                const teacherSelect = document.getElementById('stTeacherSelect');
+                if (teacherSelect) teacherSelect.value = currentTeacherId || '';
+
+                new bootstrap.Modal(assignStModal).show();
+            });
+        });
+    }
+
+    // 4. Remove Subject Teacher button binding
+    const rmStModal = document.getElementById('removeSubjectTeacherModal');
+    if (rmStModal) {
+        document.querySelectorAll('.btn-remove-st').forEach(btn => {
+            btn.addEventListener('click', function() {
+                document.getElementById('rmStClassSubjectId').value = this.getAttribute('data-class-subject-id');
+                document.getElementById('rmStSectionName').textContent = this.getAttribute('data-section');
+                document.getElementById('rmStSubjectName').textContent = this.getAttribute('data-subject');
+                document.getElementById('rmStTeacherName').textContent = this.getAttribute('data-teacher-name');
+
+                new bootstrap.Modal(rmStModal).show();
+            });
+        });
+    }
+
+    // 5. Bulk Subject Teacher Select / Clear all buttons
+    const bulkStSelectAll = document.getElementById('bulkStSelectAll');
+    const bulkStDeselectAll = document.getElementById('bulkStDeselectAll');
+    const bulkStCheckboxes = document.querySelectorAll('.bulk-st-checkbox');
+
+    if (bulkStSelectAll) {
+        bulkStSelectAll.addEventListener('click', function() {
+            bulkStCheckboxes.forEach(cb => cb.checked = true);
+        });
+    }
+    if (bulkStDeselectAll) {
+        bulkStDeselectAll.addEventListener('click', function() {
+            bulkStCheckboxes.forEach(cb => cb.checked = false);
+        });
+    }
+});
+</script>
+{% endblock %}
