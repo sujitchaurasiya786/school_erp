@@ -1,18 +1,20 @@
 """
 RBAC Service — Central authorization engine for School ERP.
 
-Design principles (per SRS §4):
-  - Deny by default: returns False whenever authorization cannot be confirmed.
-  - No trust in role names, request parameters, or UI state.
-  - Superuser / Django `is_superuser` does NOT automatically bypass RBAC checks.
-    Per SRS §3.7, System Administrators are NOT granted payroll, finance, or
-    confidential grievance permissions automatically. Every access must flow
-    through explicit role assignments.
+Design principles (per updated SRS §6.4):
+  - Dual-tier authorization model:
+      1. Permanent System Administrator (is_superuser=True):
+         Holds complete, unrestricted access across the entire ERP (all modules,
+         APIs, user management, dynamic roles, payroll, finance, grievances, audit logs,
+         and school settings) without requiring dynamic role assignments or individual
+         permission assignments. Receives all active ERP system permissions automatically.
+      2. Dynamic RBAC for all normal users:
+         Strictly deny by default. Normal users are governed dynamically through
+         roles and permissions configured and assigned by Admin/Principal from the dashboard.
+  - Check user.is_authenticated before authorization; anonymous users are strictly denied.
   - Inactive users (is_active=False) are rejected immediately.
-  - Only ACTIVE role assignments (UserRoleAssignment.is_active=True) count.
-  - Only permissions attached to ACTIVE roles (Role.is_active=True) count.
-  - Only ACTIVE permissions (Permission.is_active=True) count.
-  - Scope-aware: class/section scope is respected when scope_id is provided.
+  - `is_staff=True` alone NEVER grants complete ERP access or bypasses permission checks.
+  - Scope-aware: class/section scope is respected for normal users when scope_id is provided.
 """
 from django.db.models import Q
 
@@ -26,8 +28,9 @@ class RBACService:
     @staticmethod
     def get_user_permissions(user, scope_type=None, scope_id=None):
         """
-        Returns a set of active permission codenames for the user,
-        filtered through active role assignments and active roles.
+        Returns a set of active permission codenames for the user.
+        For superusers (is_superuser=True), returns all active system permissions per SRS §6.4.
+        For normal users, filtered through active role assignments and active roles.
 
         Args:
             user:        The user instance to evaluate.
@@ -37,8 +40,7 @@ class RBACService:
         Returns:
             set[str]: Set of codenames the user currently holds. Empty if denied.
         """
-        # Import here to avoid circular imports at module load time
-        from apps.rbac.models import Permission, UserRoleAssignment
+        from apps.rbac.models import Permission
 
         if not user or not getattr(user, "is_authenticated", False):
             return set()
@@ -46,7 +48,16 @@ class RBACService:
         if not getattr(user, "is_active", False):
             return set()
 
-        # Build the base assignment filter
+        # System Administrator permanent complete access (SRS §6.4)
+        if getattr(user, "is_superuser", False):
+            from apps.rbac.registry import PERMISSION_REGISTRY
+            db_perms = set(
+                Permission.objects.filter(is_active=True).values_list("codename", flat=True)
+            )
+            registry_perms = {p["codename"] for p in PERMISSION_REGISTRY}
+            return db_perms | registry_perms
+
+        # Base assignment filter for normal users
         assignment_filter = Q(
             roles__user_assignments__user=user,
             roles__user_assignments__is_active=True,
@@ -83,7 +94,7 @@ class RBACService:
             scope_id:   Optional scope identifier.
 
         Returns:
-            bool: True only if the user has an active assignment granting this permission.
+            bool: True if authorized (all system permissions for superuser, or granted by active role for normal user).
         """
         if not user or not getattr(user, "is_authenticated", False):
             return False
@@ -100,7 +111,7 @@ class RBACService:
         Checks:
           1. Direct codename matches: 'module.action', 'module:action', 'module_action'
           2. Three-part codenames: 'module.*.action' (e.g. 'students.profile.view')
-          3. DB Permission records: module=module, action=action within active user permissions
+          3. Model-level module & action fields
         """
         if not user or not getattr(user, "is_authenticated", False):
             return False
@@ -142,7 +153,6 @@ class RBACService:
         from apps.rbac.models import Role
 
         if not user or not getattr(user, "is_authenticated", False):
-            from apps.rbac.models import Role
             return Role.objects.none()
 
         return Role.objects.filter(
@@ -159,6 +169,9 @@ class RBACService:
         """
         if not user or not getattr(user, "is_authenticated", False):
             return False
+        if not getattr(user, "is_active", False):
+            return False
+
         user_perms = cls.get_user_permissions(user)
         return bool(user_perms & set(codenames))
 
@@ -170,5 +183,8 @@ class RBACService:
         """
         if not user or not getattr(user, "is_authenticated", False):
             return False
+        if not getattr(user, "is_active", False):
+            return False
+
         user_perms = cls.get_user_permissions(user)
         return set(codenames).issubset(user_perms)

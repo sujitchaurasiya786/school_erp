@@ -1,0 +1,361 @@
+{% extends "dashboard/base.html" %}
+{% load static %}
+
+{% block title %}Senior Secondary Streams (Classes 11–12) | School ERP{% endblock %}
+
+{% block admin %}
+<div class="container-fluid px-0">
+    <!-- Breadcrumb & Header -->
+    <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-4">
+        <div>
+            <nav aria-label="breadcrumb">
+                <ol class="breadcrumb mb-1">
+                    <li class="breadcrumb-item"><a href="{% url 'home-dashboard' %}">Dashboard</a></li>
+                    <li class="breadcrumb-item">Academics</li>
+                    <li class="breadcrumb-item active" aria-current="page">Streams (11–12)</li>
+                </ol>
+            </nav>
+            <h2 class="h4 fw-bold text-dark mb-0">Senior Secondary Streams (Classes 11–12)</h2>
+            <p class="text-muted small mb-0">Configure academic streams (Science, Commerce, Humanities / Arts) strictly for senior secondary classes.</p>
+        </div>
+        <div class="mt-3 mt-md-0 d-flex gap-2">
+            <a href="{% url 'academics-classes-list' %}" class="btn btn-outline-secondary">
+                <i class="ti ti-layout-grid me-1"></i> Classes Directory
+            </a>
+            {% if can_manage and senior_classes %}
+            <button type="button" class="btn btn-primary shadow-sm" data-bs-toggle="modal" data-bs-target="#createStreamModal">
+                <i class="ti ti-plus me-1"></i> Configure Stream
+            </button>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Django Messages Alerts -->
+    {% if messages %}
+    <div class="mb-3">
+        {% for message in messages %}
+        <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show shadow-sm" role="alert">
+            <i class="ti ti-info-circle me-1"></i> {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Notice if no Class 11 or 12 exists -->
+    {% if not senior_classes %}
+    <div class="alert alert-warning border-0 shadow-sm rounded-3 p-4 mb-4">
+        <div class="d-flex align-items-start">
+            <div class="avatar avatar-md bg-warning text-white rounded-circle me-3 p-3 d-flex align-items-center justify-content-center">
+                <i class="ti ti-alert-triangle fs-3"></i>
+            </div>
+            <div>
+                <h5 class="fw-bold text-dark mb-1">No Senior Secondary Classes Detected</h5>
+                <p class="text-muted mb-3">CBSE academic streams apply strictly to Classes 11 and 12. Create Class 11 and Class 12 in the Class Master directory first to configure stream offerings.</p>
+                <a href="{% url 'academics-classes-list' %}" class="btn btn-sm btn-warning fw-semibold">
+                    <i class="ti ti-plus me-1"></i> Add Class 11 / Class 12
+                </a>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Metrics Cards -->
+    <div class="row g-3 mb-4">
+        <div class="col-sm-6 col-xl-4">
+            <div class="card border-0 shadow-sm rounded-3">
+                <div class="card-body d-flex align-items-center">
+                    <div class="avatar avatar-md bg-light-primary text-primary rounded-3 me-3 p-3 d-flex align-items-center justify-content-center">
+                        <i class="ti ti-git-branch fs-3"></i>
+                    </div>
+                    <div>
+                        <span class="text-muted small text-uppercase fw-semibold d-block">Configured Streams</span>
+                        <h4 class="fw-bold mb-0">{{ total_streams }}</h4>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-6 col-xl-4">
+            <div class="card border-0 shadow-sm rounded-3">
+                <div class="card-body d-flex align-items-center">
+                    <div class="avatar avatar-md bg-light-success text-success rounded-3 me-3 p-3 d-flex align-items-center justify-content-center">
+                        <i class="ti ti-circle-check fs-3"></i>
+                    </div>
+                    <div>
+                        <span class="text-muted small text-uppercase fw-semibold d-block">Active Offerings</span>
+                        <h4 class="fw-bold text-success mb-0">{{ active_streams_count }}</h4>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-6 col-xl-4">
+            <div class="card border-0 shadow-sm rounded-3">
+                <div class="card-body d-flex align-items-center">
+                    <div class="avatar avatar-md bg-light-info text-info rounded-3 me-3 p-3 d-flex align-items-center justify-content-center">
+                        <i class="ti ti-school fs-3"></i>
+                    </div>
+                    <div>
+                        <span class="text-muted small text-uppercase fw-semibold d-block">Senior Classes Covered</span>
+                        <h4 class="fw-bold text-info mb-0">{{ senior_classes_covered }} <small class="text-muted fs-6 fw-normal">/ {{ senior_classes|length }}</small></h4>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Filter Bar -->
+    {% if senior_classes %}
+    <div class="card border-0 shadow-sm rounded-3 mb-4">
+        <div class="card-body py-3">
+            <form method="GET" action="{% url 'academics-streams-list' %}" class="row g-3 align-items-center">
+                <div class="col-md-4 col-lg-3">
+                    <label class="form-label small fw-semibold text-muted mb-1">Filter by Senior Class</label>
+                    <select name="class_id" class="form-select form-select-sm" onchange="this.form.submit()">
+                        <option value="">All Senior Classes (11 &amp; 12)</option>
+                        {% for sc in senior_classes %}
+                        <option value="{{ sc.id }}" {% if selected_class_id == sc.id %}selected{% endif %}>
+                            {{ sc.name }} ({{ sc.code }})
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                {% if selected_class_id %}
+                <div class="col-auto mt-auto mb-1">
+                    <a href="{% url 'academics-streams-list' %}" class="btn btn-sm btn-outline-secondary">
+                        <i class="ti ti-x me-1"></i> Clear Filter
+                    </a>
+                </div>
+                {% endif %}
+            </form>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Streams Table Card -->
+    <div class="card border-0 shadow-sm rounded-3">
+        <div class="card-header bg-white border-bottom py-3 d-flex justify-content-between align-items-center">
+            <h5 class="card-title fw-bold mb-0">Senior Secondary Streams Directory</h5>
+            <span class="badge bg-light text-muted border">{{ streams.count }} records found</span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th scope="col" class="ps-4">Senior Class</th>
+                        <th scope="col">Stream Name</th>
+                        <th scope="col">Stream Code</th>
+                        <th scope="col">Description</th>
+                        <th scope="col">Status</th>
+                        <th scope="col" class="text-end pe-4">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for st in streams %}
+                    <tr>
+                        <td class="ps-4">
+                            <span class="fw-bold text-dark d-block">{{ st.school_class.name }}</span>
+                            <small class="badge bg-light text-secondary border font-monospace">{{ st.school_class.code }}</small>
+                        </td>
+                        <td>
+                            <div class="d-flex align-items-center">
+                                <div class="avatar avatar-sm bg-light-primary text-primary rounded-circle me-3 p-2 d-flex align-items-center justify-content-center">
+                                    <i class="ti ti-git-branch"></i>
+                                </div>
+                                <span class="fw-semibold text-dark">{{ st.name }}</span>
+                            </div>
+                        </td>
+                        <td>
+                            <span class="badge bg-light-info text-info border border-info px-2 py-1 font-monospace fw-bold">{{ st.code }}</span>
+                        </td>
+                        <td>
+                            <span class="text-muted small">{{ st.description|default:"—" }}</span>
+                        </td>
+                        <td>
+                            {% if st.is_active %}
+                                <span class="badge bg-success bg-opacity-10 text-success px-2 py-1">Active</span>
+                            {% else %}
+                                <span class="badge bg-secondary bg-opacity-10 text-secondary px-2 py-1">Inactive</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end pe-4">
+                            {% if can_manage %}
+                            <div class="d-inline-flex gap-1">
+                                <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#editStreamModal{{ st.id }}" title="Edit Stream">
+                                    <i class="ti ti-edit"></i>
+                                </button>
+                                <button type="button" class="btn btn-sm btn-outline-danger" data-bs-toggle="modal" data-bs-target="#deleteStreamModal{{ st.id }}" title="Delete Stream">
+                                    <i class="ti ti-trash"></i>
+                                </button>
+                            </div>
+
+                            <!-- Edit Stream Modal -->
+                            <div class="modal fade" id="editStreamModal{{ st.id }}" tabindex="-1" aria-hidden="true">
+                                <div class="modal-dialog modal-dialog-centered">
+                                    <div class="modal-content text-start">
+                                        <div class="modal-header">
+                                            <h5 class="modal-title fw-bold">Edit Stream — {{ st.school_class.name }} {{ st.name }}</h5>
+                                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                                        </div>
+                                        <form method="POST" action="{% url 'academics-streams-list' %}">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="action" value="update">
+                                            <input type="hidden" name="stream_id" value="{{ st.id }}">
+                                            <div class="modal-body">
+                                                <div class="mb-3">
+                                                    <label class="form-label fw-semibold">Senior Class</label>
+                                                    <select name="school_class_id" class="form-select" required>
+                                                        {% for sc in senior_classes %}
+                                                        <option value="{{ sc.id }}" {% if st.school_class_id == sc.id %}selected{% endif %}>
+                                                            {{ sc.name }} ({{ sc.code }})
+                                                        </option>
+                                                        {% endfor %}
+                                                    </select>
+                                                </div>
+                                                <div class="row g-2 mb-3">
+                                                    <div class="col-8">
+                                                        <label class="form-label fw-semibold">Stream Name</label>
+                                                        <input type="text" name="name" class="form-control" value="{{ st.name }}" required maxlength="50">
+                                                    </div>
+                                                    <div class="col-4">
+                                                        <label class="form-label fw-semibold">Code</label>
+                                                        <input type="text" name="code" class="form-control text-uppercase" value="{{ st.code }}" required maxlength="20">
+                                                    </div>
+                                                </div>
+                                                <div class="mb-3">
+                                                    <label class="form-label fw-semibold">Description</label>
+                                                    <textarea name="description" class="form-control" rows="2" placeholder="e.g. Physics, Chemistry, Mathematics / Biology">{{ st.description }}</textarea>
+                                                </div>
+                                                <div class="mb-3 form-check form-switch">
+                                                    <input class="form-check-input" type="checkbox" name="is_active" id="editActiveSwitch{{ st.id }}" {% if st.is_active %}checked{% endif %}>
+                                                    <label class="form-check-label fw-semibold" for="editActiveSwitch{{ st.id }}">Active Offering</label>
+                                                </div>
+                                                <div class="mb-0">
+                                                    <label class="form-label fw-semibold">Reason for Change</label>
+                                                    <input type="text" name="reason" class="form-control" placeholder="Audit log note">
+                                                </div>
+                                            </div>
+                                            <div class="modal-footer">
+                                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                                <button type="submit" class="btn btn-primary">Save Changes</button>
+                                            </div>
+                                        </form>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Delete Stream Modal -->
+                            <div class="modal fade" id="deleteStreamModal{{ st.id }}" tabindex="-1" aria-hidden="true">
+                                <div class="modal-dialog modal-dialog-centered">
+                                    <div class="modal-content text-start">
+                                        <div class="modal-header bg-light-danger text-danger">
+                                            <h5 class="modal-title fw-bold">Delete Stream</h5>
+                                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                                        </div>
+                                        <form method="POST" action="{% url 'academics-streams-list' %}">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="action" value="delete">
+                                            <input type="hidden" name="stream_id" value="{{ st.id }}">
+                                            <div class="modal-body">
+                                                <p class="mb-2">Are you sure you want to delete stream <strong>{{ st }}</strong>?</p>
+                                                <div class="alert alert-warning small mb-3">
+                                                    <i class="ti ti-alert-triangle me-1"></i>
+                                                    Streams assigned to sections or subject mappings cannot be deleted. Deactivate instead if historical records exist.
+                                                </div>
+                                                <div class="mb-0">
+                                                    <label class="form-label fw-semibold">Reason for Deletion</label>
+                                                    <input type="text" name="reason" class="form-control" placeholder="Required for audit logging" required>
+                                                </div>
+                                            </div>
+                                            <div class="modal-footer">
+                                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                                <button type="submit" class="btn btn-danger">Confirm Delete</button>
+                                            </div>
+                                        </form>
+                                    </div>
+                                </div>
+                            </div>
+                            {% else %}
+                            <span class="text-muted small">View Only</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="6" class="text-center py-5">
+                            <div class="d-flex flex-column align-items-center">
+                                <i class="ti ti-git-branch text-muted" style="font-size: 3rem;"></i>
+                                <h6 class="fw-bold mt-3 mb-1">No Academic Streams Configured</h6>
+                                <p class="text-muted small mb-3">Configure streams (e.g. Science, Commerce, Arts) for Classes 11 and 12.</p>
+                                {% if can_manage and senior_classes %}
+                                <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#createStreamModal">
+                                    <i class="ti ti-plus me-1"></i> Configure First Stream
+                                </button>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Create Stream Modal -->
+{% if can_manage and senior_classes %}
+<div class="modal fade" id="createStreamModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title fw-bold">Configure Senior Secondary Stream</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form method="POST" action="{% url 'academics-streams-list' %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="create">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Senior Class <span class="text-danger">*</span></label>
+                        <select name="school_class_id" class="form-select" required>
+                            <option value="">Select Senior Class (11 or 12)...</option>
+                            {% for sc in senior_classes %}
+                            <option value="{{ sc.id }}" {% if selected_class_id == sc.id %}selected{% endif %}>
+                                {{ sc.name }} ({{ sc.code }})
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text">Per CBSE curriculum rules, streams are applicable strictly to Classes 11 and 12.</div>
+                    </div>
+                    <div class="row g-2 mb-3">
+                        <div class="col-8">
+                            <label class="form-label fw-semibold">Stream Name <span class="text-danger">*</span></label>
+                            <input type="text" name="name" class="form-control" placeholder="e.g. Science, Commerce, Arts" required maxlength="50">
+                        </div>
+                        <div class="col-4">
+                            <label class="form-label fw-semibold">Code <span class="text-danger">*</span></label>
+                            <input type="text" name="code" class="form-control text-uppercase" placeholder="e.g. SCI" required maxlength="20">
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Description</label>
+                        <textarea name="description" class="form-control" rows="2" placeholder="e.g. Medical / Non-Medical with Physics, Chemistry, Maths/Biology"></textarea>
+                    </div>
+                    <div class="mb-3 form-check form-switch">
+                        <input class="form-check-input" type="checkbox" name="is_active" id="newStreamActiveSwitch" checked>
+                        <label class="form-check-label fw-semibold" for="newStreamActiveSwitch">Active Offering</label>
+                    </div>
+                    <div class="mb-0">
+                        <label class="form-label fw-semibold">Reason</label>
+                        <input type="text" name="reason" class="form-control" placeholder="Audit log note">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Configure Stream</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

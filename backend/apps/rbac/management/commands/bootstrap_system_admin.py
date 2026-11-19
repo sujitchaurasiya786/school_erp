@@ -94,15 +94,12 @@ class Command(BaseCommand):
                 "code": "system_admin",
                 "name": "System Administrator",
                 "description": (
-                    "Super administrative role with access to identity, RBAC, school configuration, "
-                    "audit logs, and general setup. Note: Per SRS §3.7, payroll and confidential grievances "
-                    "are NOT granted to this role."
+                    "Administrative baseline role for system administration. Note: Per SRS §6.4, "
+                    "Django superusers (is_superuser=True) automatically possess full ERP access across "
+                    "all modules without requiring dynamic role assignments."
                 ),
-                # System Administrator gets almost all system permissions EXCEPT payroll & confidential grievances
-                "perm_filter": lambda codename, p: (
-                    not codename.startswith("hrms.payroll.")
-                    and codename != "helpdesk.grievance.view"
-                ),
+                # Baseline system role grants full administrative permissions
+                "perm_filter": lambda codename, p: True,
             },
             {
                 "code": "principal",

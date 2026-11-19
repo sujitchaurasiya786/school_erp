@@ -68,6 +68,15 @@ class UserViewSet(viewsets.ModelViewSet):
             request.user, data=request.data, partial=True
         )
         serializer.is_valid(raise_exception=True)
+        new_password = request.data.get("new_password") or request.data.get("password")
+        if new_password:
+            from apps.identity.services import IdentityService
+            IdentityService.change_password(
+                user=request.user,
+                new_password=new_password,
+                actor=request.user,
+                request=request,
+            )
         serializer.save()
         return Response(serializer.data)
 
@@ -209,26 +218,14 @@ class PasswordChangeView(APIView):
         )
         serializer.is_valid(raise_exception=True)
         user = request.user
-        user.set_password(serializer.validated_data["new_password"])
-        user.must_change_password = False
-        user.save(update_fields=["password", "must_change_password", "updated_at"])
+        new_password = serializer.validated_data["new_password"]
 
-        # Re-authenticate to keep session alive after password change
-        updated_user = authenticate(
-            request,
-            username=user.username,
-            password=serializer.validated_data["new_password"],
-        )
-        if updated_user:
-            login(request, updated_user)
-
-        AuditService.log(
-            action=AuditAction.UPDATE,
-            module="identity",
-            entity_type="User",
-            entity_id=str(user.pk),
+        from apps.identity.services import IdentityService
+        IdentityService.change_password(
+            user=user,
+            new_password=new_password,
             actor=user,
-            reason="Password changed by user.",
+            request=request,
         )
 
         return Response(

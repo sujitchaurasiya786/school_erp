@@ -22,7 +22,7 @@ Single CBSE School (Nursery to Class 12) • Local Development First • 12 Acti
 | Active modules | 12 (listed in section 2.2) |
 | Deferred modules | Hostel & Mess, Alumni, LMS, Communications & Notifications, AI Assistant, Campus Operations & Security |
 | Not applicable to a school | Training & Placement, counselling/merit/seat allocation, semesters/credits/curricula versions, accreditation-style compliance |
-| Role management | Fully dynamic: roles are created and edited by Admin/Principal from the dashboard |
+| Role management & Access Control | Dual-tier access model: (1) Permanent System Administrator via Django `is_superuser=True` with complete ERP access without requiring role assignments. (2) Fully dynamic RBAC for all normal users, where roles and permissions are created, configured, scoped, and assigned by Admin/Principal from the dashboard. |
 
 ## 1. Executive summary
 
@@ -30,7 +30,9 @@ The School ERP System manages the main academic and administrative workflows of 
 
 The system is a modular monolith: one Django project, one database, shared authentication/authorization and a separate Django app for each business domain. This is easier to build and debug locally than microservices and can be deployed later without redesign.
 
-A key design requirement is that **roles are dynamic**. Admin or Principal can create a new role from the dashboard, choose its permissions, scope it and assign it to users without any code change.
+A key design requirement is that **roles are dynamic for all normal school users**. Admin or Principal can create a new role from the dashboard, choose its permissions, scope it and assign it to users without any code change.
+
+The **System Administrator** identity is anchored via Django `is_superuser=True`. The System Administrator possesses permanent, unrestricted, complete access across the entire ERP—including all modules, features, APIs, user management, dynamic roles, payroll, finance, confidential grievances, and settings—without needing dynamic role assignments or individual permission assignments.
 
 ## 2. Goals and scope
 
@@ -40,7 +42,8 @@ A key design requirement is that **roles are dynamic**. Admin or Principal can c
 - Connect admission, classes, attendance, fees and exams through shared identifiers and workflows.
 - Provide role-specific screens for admin, principal, teachers, accountants, parents and students.
 - Protect sensitive student, finance, exam and payroll data with server-side permissions and audit trails.
-- Make roles and permissions manageable from the dashboard, not hardcoded.
+- Make roles and permissions manageable from the dashboard for normal users, not hardcoded.
+- Provide complete ERP oversight and control to the permanent System Administrator (`is_superuser=True`).
 - Keep deferred modules separable so they can be added later without rewriting the core.
 - Build and test locally before planning production deployment.
 
@@ -97,7 +100,7 @@ Deferred means planned but not built. Do not create empty screens or placeholder
 - Class history: one enrollment per student per academic year (class, section, roll number).
 - Year-end promotion: promote a whole class or selected students to the next class, with detain/exception handling.
 - Issue Transfer Certificate and bonafide certificate.
-- Restrict personal data to authorized roles; a student or verified parent sees only their own data.
+- Restrict personal data to authorized roles and the System Administrator; normal students or verified parents see only their own data.
 
 ### 3.3 Academics
 
@@ -142,7 +145,7 @@ Deferred means planned but not built. Do not create empty screens or placeholder
 - Staff profiles, designation, department/section, employment status; teaching and non-teaching flags.
 - Leave types, leave requests and approvals; staff attendance.
 - Payroll runs and payslips with configurable salary components.
-- Salary data visible only to authorized roles; System Administrator has no automatic access.
+- Salary and payroll data are accessible to authorized HR/Finance roles and the System Administrator (`is_superuser=True`). Normal staff without explicit authorization cannot view payroll records.
 
 ### 3.8 Library
 
@@ -170,7 +173,7 @@ Deferred means planned but not built. Do not create empty screens or placeholder
 - Tickets with category, priority, status and responsible team or person.
 - Parents, students and staff raise tickets and see only their own.
 - Comments, assignment history, deadlines, escalation and resolution tracking.
-- Confidential grievances visible only to authorized users.
+- Confidential grievances are visible to authorized grievance handlers and the System Administrator (`is_superuser=True`).
 
 ### 3.12 Reports & Analytics
 
@@ -181,9 +184,9 @@ Deferred means planned but not built. Do not create empty screens or placeholder
 ## 4. Non-functional requirements
 
 - **Maintainable:** each domain is its own Django app with clear service boundaries; business rules live in services, not in views or templates.
-- **Secure:** permissions enforced on the backend for every request; input validated; secrets kept in an ignored .env; uploaded documents stored privately and served only through permission-checked views.
+- **Secure:** permissions enforced on the backend for every request; input validated; secrets kept in an ignored .env; uploaded documents stored privately and served only through permission-checked views. System Administrator (`is_superuser=True`) holds full system oversight, while `is_staff=True` alone never grants complete ERP access or bypasses permission checks.
 - **Reliable:** database transactions for admission conversion, promotion, payment allocation, result publication and stock movements.
-- **Auditable:** sensitive changes to students, finance, marks, roles/permissions and payroll are logged.
+- **Auditable:** sensitive changes to students, finance, marks, roles/permissions and payroll are logged, including actions performed by the System Administrator.
 - **Usable:** responsive layout for desktop and mobile; clear validation messages, empty states and loading states.
 - **Testable:** model, service, API, permission and workflow tests.
 - **Portable:** environment-based configuration so local setup can move to a server later.
@@ -192,6 +195,29 @@ Deferred means planned but not built. Do not create empty screens or placeholder
 ## 5. Technical architecture
 
 ### 5.1 Request flow
-Browser (Django Templates + Bootstrap/CSS + JavaScript) → Django views and Django REST Framework API (/api/v1/) → authentication and dynamic permission checks → module services and validation → audit logging → MySQL. Uploaded files go to private local media storage during development.
+Browser (Django Templates + Bootstrap/CSS + JavaScript) → Django views and Django REST Framework API (/api/v1/) → authentication and authorization checks (System Administrator superuser bypass or dynamic RBAC validation) → module services and validation → audit logging → MySQL. Uploaded files go to private local media storage during development.
 
-Straightforward screens use normal Django form submissions. JavaScript calls the API only where it clearly helps (live search, inline actions, dynamic dropdowns)
+Straightforward screens use normal Django form submissions. JavaScript calls the API only where it clearly helps (live search, inline actions, dynamic dropdowns).
+
+## 6. Access control and authorization architecture
+
+### 6.1 Authentication
+- Django session authentication (same-origin) for web templates and REST API endpoints.
+- User accounts are managed in the `identity` app with active flags and password policies.
+
+### 6.2 Dynamic RBAC for normal users
+- **Role and Permission Definition**: Permissions represent granular domain actions (`<module>.<action>`). Roles are collections of permissions.
+- **Dynamic Configuration**: Admin and Principal create, edit, and configure roles dynamically from the dashboard. No hardcoded role names exist in the authorization logic.
+- **Scoped Assignments**: User role assignments (`UserRoleAssignment`) link users to roles with a defined scope (`GLOBAL`, `CLASS`, or `SECTION`).
+- **Enforcement Boundary**: Permissions are strictly validated on both Django template views and DRF API endpoints (`/api/v1/`).
+- **Least Privilege**: Normal users are restricted strictly to the permissions and scopes granted by their active roles.
+
+### 6.3 Separation of Staff Flag
+- `is_staff=True` is an administrative flag indicating access to backend administrative interfaces.
+- `is_staff=True` alone must **never** grant complete ERP access or bypass module permission checks. Normal staff users still require explicit dynamic role assignments.
+
+### 6.4 System Administrator access policy
+- **Permanent Identity**: Django `is_superuser=True` represents the permanent System Administrator identity.
+- **Complete ERP Access**: The System Administrator has full, unrestricted access across the entire ERP system. This includes all 12 modules, features, APIs, user management, dynamic roles and permissions, finance, payroll, confidential grievances, audit logs, and school settings.
+- **No Dynamic Assignment Required**: The System Administrator does not require a dynamic role assignment (`UserRoleAssignment`) or individual permission assignment to access any endpoint or feature.
+- **Workflow Integrity & Auditability**: System Administrator access does not bypass structural data constraints, transactional workflows (such as marks calculation/approval/publication steps, payment allocation, or refund approvals), or audit logging. All sensitive operations remain fully logged.

@@ -77,6 +77,7 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'apps.audit.middleware.AuditMiddleware',
+    'apps.identity.middleware.MandatoryPasswordChangeMiddleware',
 ]
 
 ROOT_URLCONF = 'config.urls'
@@ -92,6 +93,7 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'apps.rbac.context_processors.rbac_context',
             ],
         },
     },
@@ -119,7 +121,7 @@ else:
             'PORT': os.getenv('DB_PORT', '3306'),
             'OPTIONS': {
                 'charset': 'utf8mb4',
-                'init_command': "SET sql_mode='STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION'",
+                'init_command': "SET default_storage_engine=INNODB, sql_mode='STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION'",
             },
         }
     }

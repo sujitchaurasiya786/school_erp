@@ -1,13 +1,17 @@
 """
 Web authentication views for School ERP.
-Handles session-based login, logout, and password change screens.
+Handles session-based login, logout, and mandatory password change screens.
 """
 from django.shortcuts import render, redirect
 from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth.decorators import login_required
 from django.contrib import messages
+from django.core.exceptions import ValidationError
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.csrf import ensure_csrf_cookie
+
 from apps.identity.models import User
+from apps.identity.services import IdentityService
 from apps.school_config.models import SchoolProfile, AcademicYear
 from apps.audit.models import AuditAction
 from apps.audit.services import AuditService
@@ -19,8 +23,10 @@ def login_view(request):
     Renders the web login page and processes session-based authentication.
     Supports login via username or email.
     """
-    # If already logged in, redirect to home dashboard
+    # If already logged in, redirect to password-change or home dashboard
     if request.user.is_authenticated:
+        if getattr(request.user, 'must_change_password', False):
+            return redirect('password-change')
         return redirect('home-dashboard')
 
     next_url = request.GET.get('next') or request.POST.get('next') or 'home-dashboard'
@@ -108,6 +114,14 @@ def login_view(request):
             reason='Successful web session login'
         )
 
+        # Check mandatory first login password change requirement
+        if getattr(user, 'must_change_password', False):
+            messages.info(
+                request,
+                f"Welcome, {user.full_name}! For security, you must set a new password before accessing the system."
+            )
+            return redirect('password-change')
+
         messages.success(request, f'Welcome back, {user.full_name}!')
 
         # Validate redirect target to prevent open redirect vulnerabilities
@@ -119,6 +133,70 @@ def login_view(request):
         'school_profile': school_profile,
         'current_year': current_year,
         'next': next_url,
+    })
+
+
+@login_required(login_url='login')
+def password_change_view(request):
+    """
+    Mandatory password change view on first login.
+    User must provide and confirm a new valid password before accessing any ERP module.
+    """
+    # If the user does not need to change password, redirect to home dashboard
+    if not getattr(request.user, 'must_change_password', False):
+        return redirect('home-dashboard')
+
+    school_profile = SchoolProfile.objects.first()
+    current_year = AcademicYear.objects.filter(is_current=True).first()
+
+    if request.method == 'POST':
+        new_password = request.POST.get('new_password', '')
+        confirm_password = request.POST.get('confirm_password', '')
+
+        if not new_password or not confirm_password:
+            messages.error(request, 'Both New Password and Confirm Password fields are mandatory.')
+            return render(request, 'auth/password_change.html', {
+                'school_profile': school_profile,
+                'current_year': current_year,
+            })
+
+        if new_password != confirm_password:
+            messages.error(request, 'New password and confirmation password do not match.')
+            return render(request, 'auth/password_change.html', {
+                'school_profile': school_profile,
+                'current_year': current_year,
+            })
+
+        try:
+            IdentityService.change_password(
+                user=request.user,
+                new_password=new_password,
+                confirm_password=confirm_password,
+                actor=request.user,
+                request=request,
+            )
+        except ValidationError as err:
+            if hasattr(err, 'message_dict'):
+                for field_errors in err.message_dict.values():
+                    for err_msg in field_errors:
+                        messages.error(request, err_msg)
+            elif hasattr(err, 'messages'):
+                for err_msg in err.messages:
+                    messages.error(request, err_msg)
+            else:
+                messages.error(request, str(err))
+
+            return render(request, 'auth/password_change.html', {
+                'school_profile': school_profile,
+                'current_year': current_year,
+            })
+
+        messages.success(request, 'Password changed successfully! You now have full access to your ERP dashboard.')
+        return redirect('home-dashboard')
+
+    return render(request, 'auth/password_change.html', {
+        'school_profile': school_profile,
+        'current_year': current_year,
     })
 
 
@@ -143,4 +221,3 @@ def logout_view(request):
 
     messages.info(request, 'You have been logged out successfully.')
     return redirect('login')
-
