@@ -29,6 +29,13 @@ class AcademicsService:
 
         day_name = dict(TimetableSlot.DAYS_OF_WEEK).get(day_of_week, f"Day {day_of_week}")
 
+        # Calendar active day check
+        if academic_year:
+            from apps.attendance.services import CalendarService
+            active_days = CalendarService.get_active_timetable_days(academic_year)
+            if day_of_week not in active_days:
+                raise ValidationError({'day_of_week': _(f"Cannot schedule timetable slots on {day_name}. It is not configured as an active working day for Academic Year '{academic_year}'.")})
+
         # 1. Section conflict check (Section cannot have two subjects at the same period)
         if class_subject and hasattr(class_subject, 'section'):
             section_conflict = TimetableSlot.objects.filter(
@@ -2828,7 +2835,7 @@ class TimetableService:
     def get_section_timetable_matrix(cls, section_id, academic_year_id=None):
         """
         Constructs the full weekly schedule matrix for a class section.
-        Rows: Days of Week (Monday to Saturday)
+        Rows: Active Days of Week for the academic year
         Columns: Timetable Periods
         Cells: TimetableSlot details or None (or break marker)
         """
@@ -2838,7 +2845,13 @@ class TimetableService:
             ay = AcademicYear.objects.filter(pk=academic_year_id).first()
 
         periods = list(TimetablePeriod.objects.all().order_by('period_number'))
-        days = list(TimetableSlot.DAYS_OF_WEEK)
+        
+        from apps.attendance.services import CalendarService
+        if ay:
+            active_day_codes = set(CalendarService.get_active_timetable_days(ay))
+            days = [(code, name) for code, name in TimetableSlot.DAYS_OF_WEEK if code in active_day_codes]
+        else:
+            days = list(TimetableSlot.DAYS_OF_WEEK)
 
         slots = TimetableSlot.objects.filter(
             class_subject__section_id=section_id
@@ -2893,7 +2906,13 @@ class TimetableService:
             ay = AcademicYear.objects.filter(pk=academic_year_id).first()
 
         periods = list(TimetablePeriod.objects.all().order_by('period_number'))
-        days = list(TimetableSlot.DAYS_OF_WEEK)
+        
+        from apps.attendance.services import CalendarService
+        if ay:
+            active_day_codes = set(CalendarService.get_active_timetable_days(ay))
+            days = [(code, name) for code, name in TimetableSlot.DAYS_OF_WEEK if code in active_day_codes]
+        else:
+            days = list(TimetableSlot.DAYS_OF_WEEK)
 
         slots = TimetableSlot.objects.filter(
             class_subject__teacher_id=teacher_id
@@ -2935,6 +2954,59 @@ class TimetableService:
             'grid': grid,
             'total_scheduled': total_scheduled,
             'sections_covered': sorted(sections_covered),
+        }
+
+    @classmethod
+    def get_special_date_timetable(cls, target_date, academic_year_id=None, section_id=None, teacher_id=None):
+        """
+        Retrieves the effective timetable slots to execute on a specific calendar date.
+        Reuses regular weekday timetable schedule according to CalendarService resolution.
+        """
+        from apps.attendance.services import CalendarService
+        if academic_year_id:
+            ay = AcademicYear.objects.filter(pk=academic_year_id).first()
+        else:
+            ay = AcademicYearService.get_current_year()
+
+        if not ay:
+            raise ValidationError({'academic_year': _("No active academic year found.")})
+
+        day_status = CalendarService.get_day_status(ay, target_date)
+        if not day_status.get('is_working', False):
+            return {
+                'date': str(target_date),
+                'is_working': False,
+                'reason': day_status.get('reason'),
+                'timetable_weekday': None,
+                'timetable_weekday_display': None,
+                'slots': []
+            }
+
+        timetable_weekday = day_status.get('timetable_weekday')
+        weekday_dict = dict(TimetableSlot.DAYS_OF_WEEK)
+        weekday_display = weekday_dict.get(timetable_weekday)
+
+        qs = TimetableSlot.objects.filter(
+            academic_year=ay,
+            day_of_week=timetable_weekday
+        ).select_related(
+            'period', 'class_subject', 'class_subject__section',
+            'class_subject__section__school_class', 'class_subject__subject', 'class_subject__teacher'
+        ).order_by('period__period_number')
+
+        if section_id:
+            qs = qs.filter(class_subject__section_id=section_id)
+        if teacher_id:
+            qs = qs.filter(class_subject__teacher_id=teacher_id)
+
+        return {
+            'date': str(target_date),
+            'is_working': True,
+            'reason': day_status.get('reason'),
+            'type': day_status.get('type'),
+            'timetable_weekday': timetable_weekday,
+            'timetable_weekday_display': weekday_display,
+            'slots': list(qs)
         }
 
 

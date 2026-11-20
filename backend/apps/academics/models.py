@@ -436,7 +436,8 @@ class TimetableSlot(TimeStampedModel):
     """
     DAYS_OF_WEEK = [
         (1, 'Monday'), (2, 'Tuesday'), (3, 'Wednesday'),
-        (4, 'Thursday'), (5, 'Friday'), (6, 'Saturday')
+        (4, 'Thursday'), (5, 'Friday'), (6, 'Saturday'),
+        (7, 'Sunday')
     ]
     academic_year = models.ForeignKey('school_config.AcademicYear', on_delete=models.CASCADE)
     day_of_week = models.PositiveSmallIntegerField(choices=DAYS_OF_WEEK)

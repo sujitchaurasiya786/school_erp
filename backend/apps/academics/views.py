@@ -1,4 +1,4 @@
-from rest_framework import viewsets
+from rest_framework import serializers, status, viewsets
 from rest_framework.permissions import IsAuthenticated
 from apps.academics.models import (
     Room, RoomType, SchoolClass, Section, Subject, ClassSubject, TimetablePeriod, TimetableSlot
@@ -9,7 +9,6 @@ from apps.academics.serializers import (
 )
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework import status
 from django.core.exceptions import ValidationError
 from apps.academics.services import (
     AcademicsService, ClassSubjectService, RoomService, TeacherAssignmentService,
@@ -240,38 +239,60 @@ class RoomViewSet(viewsets.ModelViewSet):
     serializer_class = RoomSerializer
     permission_classes = [IsAuthenticated, HasDynamicPermission]
     module_name = 'academics'
+    action_permission_map = {
+        'list': 'academics.room.view',
+        'retrieve': 'academics.room.view',
+        'create': 'academics.room.manage',
+        'update': 'academics.room.manage',
+        'partial_update': 'academics.room.manage',
+        'destroy': 'academics.room.manage',
+        'toggle_status': 'academics.room.manage',
+    }
     filterset_fields = ['room_type', 'is_active']
     search_fields = ['room_number', 'name', 'floor']
 
     def perform_create(self, serializer):
         data = serializer.validated_data
-        RoomService.create_room(
-            room_number=data.get('room_number'),
-            room_type=data.get('room_type', RoomType.CLASSROOM),
-            capacity=data.get('capacity', 40),
-            name=data.get('name', ''),
-            floor=data.get('floor', ''),
-            description=data.get('description', ''),
-            is_active=data.get('is_active', True),
-            actor=self.request.user,
-            request=self.request,
-        )
+        try:
+            room = RoomService.create_room(
+                room_number=data.get('room_number'),
+                room_type=data.get('room_type', RoomType.CLASSROOM),
+                capacity=data.get('capacity', 40),
+                name=data.get('name', ''),
+                floor=data.get('floor', ''),
+                description=data.get('description', ''),
+                is_active=data.get('is_active', True),
+                actor=self.request.user,
+                request=self.request,
+            )
+            serializer.instance = room
+        except ValidationError as err:
+            raise serializers.ValidationError(err.message_dict if hasattr(err, 'message_dict') else err.messages)
 
     def perform_update(self, serializer):
         data = serializer.validated_data
-        RoomService.update_room(
-            room_id=serializer.instance.pk,
-            actor=self.request.user,
-            request=self.request,
-            **data
-        )
+        try:
+            room = RoomService.update_room(
+                room_id=serializer.instance.pk,
+                actor=self.request.user,
+                request=self.request,
+                **data
+            )
+            serializer.instance = room
+            if hasattr(serializer, '_data'):
+                del serializer._data
+        except ValidationError as err:
+            raise serializers.ValidationError(err.message_dict if hasattr(err, 'message_dict') else err.messages)
 
     def perform_destroy(self, instance):
-        RoomService.delete_room(
-            room_id=instance.pk,
-            actor=self.request.user,
-            request=self.request,
-        )
+        try:
+            RoomService.delete_room(
+                room_id=instance.pk,
+                actor=self.request.user,
+                request=self.request,
+            )
+        except ValidationError as err:
+            raise serializers.ValidationError(err.message_dict if hasattr(err, 'message_dict') else err.messages)
 
     @action(detail=True, methods=['post'], url_path='toggle-status')
     def toggle_status(self, request, pk=None):
@@ -283,13 +304,17 @@ class RoomViewSet(viewsets.ModelViewSet):
                 new_status = val.strip().lower() in ('true', '1', 't', 'yes', 'on')
             else:
                 new_status = bool(val)
-        room = RoomService.toggle_room_status(
-            room_id=room.pk,
-            is_active=new_status,
-            actor=request.user,
-            request=request,
-        )
-        return Response(self.get_serializer(room).data, status=status.HTTP_200_OK)
+        try:
+            room = RoomService.toggle_room_status(
+                room_id=room.pk,
+                is_active=new_status,
+                actor=request.user,
+                request=request,
+            )
+            return Response(self.get_serializer(room).data, status=status.HTTP_200_OK)
+        except ValidationError as err:
+            msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+            return Response({'error': msg}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class TimetableSlotViewSet(viewsets.ModelViewSet):

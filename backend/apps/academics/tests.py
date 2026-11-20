@@ -18,7 +18,7 @@ from apps.academics.services import (
     TeacherAssignmentService, TimetablePeriodService, TimetableService
 )
 from apps.audit.models import AuditAction, AuditLog
-from apps.rbac.models import Permission
+from apps.rbac.models import Permission, Role, ScopeType, UserRoleAssignment
 from apps.rbac.registry import PERMISSION_REGISTRY
 from apps.school_config.models import AcademicYear, SchoolProfile
 from common.exceptions import BusinessConflictError, ResourceNotFoundError
@@ -2936,7 +2936,7 @@ class RoomAPITests(TestCase):
         self.client = APIClient()
         self.client.force_authenticate(user=self.superuser)
 
-    def test_list_and_create_room_api(self):
+    def test_create_room_response_structure_and_values(self):
         url = "/api/v1/academics/rooms/"
         post_data = {
             "room_number": "Auditorium-1",
@@ -2944,23 +2944,488 @@ class RoomAPITests(TestCase):
             "room_type": "AUDITORIUM",
             "capacity": 250,
             "floor": "Floor 1",
-            "is_active": True
+            "description": "Main campus auditorium with AV facilities.",
+            "is_active": True,
         }
         res_create = self.client.post(url, post_data)
         self.assertEqual(res_create.status_code, 201)
 
-        res_list = self.client.get(url)
-        self.assertEqual(res_list.status_code, 200)
-        items = res_list.data.get('data') if isinstance(res_list.data, dict) and 'data' in res_list.data else res_list.data
-        self.assertTrue(any(item['room_number'] == 'Auditorium-1' for item in items))
+        # Verify response contains all required fields
+        self.assertIn('id', res_create.data)
+        self.assertIsNotNone(res_create.data['id'])
+        self.assertEqual(res_create.data['room_number'], "Auditorium-1")
+        self.assertEqual(res_create.data['name'], "Main Auditorium")
+        self.assertEqual(res_create.data['room_type'], "AUDITORIUM")
+        self.assertEqual(res_create.data['room_type_display'], "Auditorium / Hall")
+        self.assertEqual(res_create.data['capacity'], 250)
+        self.assertEqual(res_create.data['floor'], "Floor 1")
+        self.assertEqual(res_create.data['description'], "Main campus auditorium with AV facilities.")
+        self.assertTrue(res_create.data['is_active'])
+        self.assertIn('created_at', res_create.data)
+        self.assertIn('updated_at', res_create.data)
+        self.assertIsNotNone(res_create.data['created_at'])
+        self.assertIsNotNone(res_create.data['updated_at'])
+
+        # Verify DB values match API response
+        db_room = Room.objects.get(pk=res_create.data['id'])
+        self.assertEqual(db_room.room_number, "Auditorium-1")
+        self.assertEqual(db_room.capacity, 250)
+        self.assertEqual(db_room.room_type, "AUDITORIUM")
+        self.assertTrue(db_room.is_active)
+
+    def test_update_room_put_response(self):
+        room = RoomService.create_room(
+            room_number="Room 101",
+            room_type=RoomType.CLASSROOM,
+            capacity=40,
+            name="General Class 101",
+            floor="Ground Floor",
+            actor=self.superuser
+        )
+        url = f"/api/v1/academics/rooms/{room.pk}/"
+        put_data = {
+            "room_number": "Room 101-Renovated",
+            "name": "Upgraded Class 101",
+            "room_type": "SCIENCE_LAB",
+            "capacity": 55,
+            "floor": "Ground Floor West",
+            "description": "Now converted to Science Lab",
+            "is_active": True,
+        }
+        res_update = self.client.put(url, put_data)
+        self.assertEqual(res_update.status_code, 200)
+
+        # Verify response has updated values
+        self.assertEqual(res_update.data['id'], room.pk)
+        self.assertEqual(res_update.data['room_number'], "Room 101-Renovated")
+        self.assertEqual(res_update.data['name'], "Upgraded Class 101")
+        self.assertEqual(res_update.data['room_type'], "SCIENCE_LAB")
+        self.assertEqual(res_update.data['room_type_display'], "Science Laboratory")
+        self.assertEqual(res_update.data['capacity'], 55)
+        self.assertEqual(res_update.data['floor'], "Ground Floor West")
+        self.assertEqual(res_update.data['description'], "Now converted to Science Lab")
+        self.assertIn('updated_at', res_update.data)
+
+        # Verify database matches
+        room.refresh_from_db()
+        self.assertEqual(room.room_number, "Room 101-Renovated")
+        self.assertEqual(room.name, "Upgraded Class 101")
+        self.assertEqual(room.room_type, "SCIENCE_LAB")
+        self.assertEqual(room.capacity, 55)
+
+    def test_partial_update_room_patch_response(self):
+        room = RoomService.create_room(
+            room_number="Room 202",
+            room_type=RoomType.CLASSROOM,
+            capacity=35,
+            name="Junior Section Room",
+            actor=self.superuser
+        )
+        url = f"/api/v1/academics/rooms/{room.pk}/"
+        patch_data = {"capacity": 48}
+        res_patch = self.client.patch(url, patch_data)
+        self.assertEqual(res_patch.status_code, 200)
+
+        self.assertEqual(res_patch.data['id'], room.pk)
+        self.assertEqual(res_patch.data['capacity'], 48)
+        self.assertEqual(res_patch.data['room_number'], "Room 202")
+        self.assertEqual(res_patch.data['name'], "Junior Section Room")
+
+        room.refresh_from_db()
+        self.assertEqual(room.capacity, 48)
+        self.assertEqual(room.room_number, "Room 202")
 
     def test_toggle_room_status_api(self):
         room = RoomService.create_room(room_number="Room 102", is_active=True, actor=self.superuser)
         url = f"/api/v1/academics/rooms/{room.pk}/toggle-status/"
-        res = self.client.post(url, {"is_active": False}, format='json')
-        self.assertEqual(res.status_code, 200)
+
+        # Deactivate
+        res_deact = self.client.post(url, {"is_active": False}, format='json')
+        self.assertEqual(res_deact.status_code, 200)
+        self.assertFalse(res_deact.data['is_active'])
         room.refresh_from_db()
         self.assertFalse(room.is_active)
+
+        # Reactivate
+        res_act = self.client.post(url, {"is_active": True}, format='json')
+        self.assertEqual(res_act.status_code, 200)
+        self.assertTrue(res_act.data['is_active'])
+        room.refresh_from_db()
+        self.assertTrue(room.is_active)
+
+
+class RoomRBACAPITests(TestCase):
+    def setUp(self):
+        call_command('sync_permissions')
+
+        # Create roles
+        perm_view = Permission.objects.get(codename='academics.room.view')
+        perm_manage = Permission.objects.get(codename='academics.room.manage')
+        perm_class_view = Permission.objects.get(codename='academics.class.view')
+        perm_class_manage = Permission.objects.get(codename='academics.class.manage')
+
+        view_role = Role.objects.create(name='Room Viewer Role', code='ROLE_ROOM_VIEWER')
+        view_role.permissions.add(perm_view)
+
+        manage_role = Role.objects.create(name='Room Manager Role', code='ROLE_ROOM_MANAGER')
+        manage_role.permissions.add(perm_manage)
+
+        full_role = Role.objects.create(name='Room Full Role', code='ROLE_ROOM_FULL')
+        full_role.permissions.add(perm_view, perm_manage)
+
+        unrelated_role = Role.objects.create(name='Class Manager Role', code='ROLE_CLASS_MANAGER')
+        unrelated_role.permissions.add(perm_class_view, perm_class_manage)
+
+        # Users
+        self.view_user = User.objects.create_user(
+            username='room_view_only',
+            email='view_only@school.edu',
+            password='Password123!',
+            user_type=UserType.STAFF
+        )
+        UserRoleAssignment.objects.create(
+            user=self.view_user, role=view_role, scope_type=ScopeType.GLOBAL, is_active=True
+        )
+
+        self.manage_user = User.objects.create_user(
+            username='room_manage_only',
+            email='manage_only@school.edu',
+            password='Password123!',
+            user_type=UserType.STAFF
+        )
+        UserRoleAssignment.objects.create(
+            user=self.manage_user, role=manage_role, scope_type=ScopeType.GLOBAL, is_active=True
+        )
+
+        self.full_user = User.objects.create_user(
+            username='room_full_access',
+            email='full_access@school.edu',
+            password='Password123!',
+            user_type=UserType.STAFF
+        )
+        UserRoleAssignment.objects.create(
+            user=self.full_user, role=full_role, scope_type=ScopeType.GLOBAL, is_active=True
+        )
+
+        self.unrelated_user = User.objects.create_user(
+            username='room_unrelated_perm',
+            email='unrelated@school.edu',
+            password='Password123!',
+            user_type=UserType.STAFF
+        )
+        UserRoleAssignment.objects.create(
+            user=self.unrelated_user, role=unrelated_role, scope_type=ScopeType.GLOBAL, is_active=True
+        )
+
+        self.no_perm_user = User.objects.create_user(
+            username='room_no_perm',
+            email='no_perm@school.edu',
+            password='Password123!',
+            user_type=UserType.STAFF
+        )
+
+        self.inactive_user = User.objects.create_user(
+            username='room_inactive_user',
+            email='inactive@school.edu',
+            password='Password123!',
+            user_type=UserType.STAFF,
+            is_active=False
+        )
+        UserRoleAssignment.objects.create(
+            user=self.inactive_user, role=full_role, scope_type=ScopeType.GLOBAL, is_active=True
+        )
+
+        self.superuser = User.objects.create_superuser(
+            username='room_superuser',
+            email='superuser@school.edu',
+            password='Password123!',
+            user_type=UserType.ADMIN
+        )
+
+        self.client = APIClient()
+        self.room = RoomService.create_room(
+            room_number="Room 301",
+            room_type=RoomType.CLASSROOM,
+            capacity=40,
+            actor=self.superuser
+        )
+
+    def test_view_only_user_can_list_and_retrieve_rooms(self):
+        self.client.force_authenticate(user=self.view_user)
+        res_list = self.client.get("/api/v1/academics/rooms/")
+        self.assertEqual(res_list.status_code, 200)
+
+        res_detail = self.client.get(f"/api/v1/academics/rooms/{self.room.pk}/")
+        self.assertEqual(res_detail.status_code, 200)
+        self.assertEqual(res_detail.data['id'], self.room.pk)
+
+    def test_view_only_user_cannot_mutate_rooms(self):
+        self.client.force_authenticate(user=self.view_user)
+
+        # Create
+        res_create = self.client.post("/api/v1/academics/rooms/", {
+            "room_number": "Room 999", "room_type": "CLASSROOM", "capacity": 30
+        })
+        self.assertEqual(res_create.status_code, 403)
+
+        # Update
+        res_update = self.client.put(f"/api/v1/academics/rooms/{self.room.pk}/", {
+            "room_number": "Room 301-Mutated", "room_type": "CLASSROOM", "capacity": 50
+        })
+        self.assertEqual(res_update.status_code, 403)
+
+        # Partial update
+        res_patch = self.client.patch(f"/api/v1/academics/rooms/{self.room.pk}/", {"capacity": 55})
+        self.assertEqual(res_patch.status_code, 403)
+
+        # Toggle status
+        res_toggle = self.client.post(f"/api/v1/academics/rooms/{self.room.pk}/toggle-status/", {"is_active": False})
+        self.assertEqual(res_toggle.status_code, 403)
+
+        # Delete
+        res_delete = self.client.delete(f"/api/v1/academics/rooms/{self.room.pk}/")
+        self.assertEqual(res_delete.status_code, 403)
+
+        # Verify DB unmutated
+        self.room.refresh_from_db()
+        self.assertEqual(self.room.capacity, 40)
+        self.assertTrue(self.room.is_active)
+
+    def test_manage_only_user_cannot_read_rooms(self):
+        self.client.force_authenticate(user=self.manage_user)
+
+        res_list = self.client.get("/api/v1/academics/rooms/")
+        self.assertEqual(res_list.status_code, 403)
+
+        res_detail = self.client.get(f"/api/v1/academics/rooms/{self.room.pk}/")
+        self.assertEqual(res_detail.status_code, 403)
+
+    def test_manage_only_user_can_create_update_toggle_delete_rooms(self):
+        self.client.force_authenticate(user=self.manage_user)
+
+        # Create
+        res_create = self.client.post("/api/v1/academics/rooms/", {
+            "room_number": "Room 302-Manage",
+            "room_type": "CLASSROOM",
+            "capacity": 32,
+            "is_active": True
+        })
+        self.assertEqual(res_create.status_code, 201)
+        created_id = res_create.data['id']
+
+        # Update
+        res_update = self.client.put(f"/api/v1/academics/rooms/{created_id}/", {
+            "room_number": "Room 302-Managed-Updated",
+            "room_type": "CLASSROOM",
+            "capacity": 42,
+            "is_active": True
+        })
+        self.assertEqual(res_update.status_code, 200)
+
+        # Partial update
+        res_patch = self.client.patch(f"/api/v1/academics/rooms/{created_id}/", {"capacity": 45})
+        self.assertEqual(res_patch.status_code, 200)
+
+        # Toggle status
+        res_toggle = self.client.post(f"/api/v1/academics/rooms/{created_id}/toggle-status/", {"is_active": False})
+        self.assertEqual(res_toggle.status_code, 200)
+
+        # Delete
+        res_delete = self.client.delete(f"/api/v1/academics/rooms/{created_id}/")
+        self.assertEqual(res_delete.status_code, 204)
+        self.assertFalse(Room.objects.filter(pk=created_id).exists())
+
+    def test_full_access_user_can_perform_all_operations(self):
+        self.client.force_authenticate(user=self.full_user)
+
+        # List
+        res_list = self.client.get("/api/v1/academics/rooms/")
+        self.assertEqual(res_list.status_code, 200)
+
+        # Create
+        res_create = self.client.post("/api/v1/academics/rooms/", {
+            "room_number": "Room 401-Full",
+            "room_type": "COMPUTER_LAB",
+            "capacity": 30
+        })
+        self.assertEqual(res_create.status_code, 201)
+        created_id = res_create.data['id']
+
+        # Retrieve
+        res_get = self.client.get(f"/api/v1/academics/rooms/{created_id}/")
+        self.assertEqual(res_get.status_code, 200)
+
+        # Update
+        res_update = self.client.put(f"/api/v1/academics/rooms/{created_id}/", {
+            "room_number": "Room 401-Updated",
+            "room_type": "COMPUTER_LAB",
+            "capacity": 35
+        })
+        self.assertEqual(res_update.status_code, 200)
+
+        # Partial update
+        res_patch = self.client.patch(f"/api/v1/academics/rooms/{created_id}/", {"capacity": 38})
+        self.assertEqual(res_patch.status_code, 200)
+
+        # Toggle status
+        res_toggle = self.client.post(f"/api/v1/academics/rooms/{created_id}/toggle-status/", {"is_active": False})
+        self.assertEqual(res_toggle.status_code, 200)
+
+        # Delete
+        res_delete = self.client.delete(f"/api/v1/academics/rooms/{created_id}/")
+        self.assertEqual(res_delete.status_code, 204)
+
+    def test_unrelated_academics_permission_user_denied(self):
+        self.client.force_authenticate(user=self.unrelated_user)
+
+        self.assertEqual(self.client.get("/api/v1/academics/rooms/").status_code, 403)
+        self.assertEqual(self.client.get(f"/api/v1/academics/rooms/{self.room.pk}/").status_code, 403)
+        self.assertEqual(self.client.post("/api/v1/academics/rooms/", {"room_number": "R-1"}).status_code, 403)
+        self.assertEqual(self.client.put(f"/api/v1/academics/rooms/{self.room.pk}/", {"room_number": "R-1"}).status_code, 403)
+        self.assertEqual(self.client.patch(f"/api/v1/academics/rooms/{self.room.pk}/", {"capacity": 50}).status_code, 403)
+        self.assertEqual(self.client.post(f"/api/v1/academics/rooms/{self.room.pk}/toggle-status/").status_code, 403)
+        self.assertEqual(self.client.delete(f"/api/v1/academics/rooms/{self.room.pk}/").status_code, 403)
+
+    def test_unauthenticated_user_denied(self):
+        anon_client = APIClient()
+
+        self.assertIn(anon_client.get("/api/v1/academics/rooms/").status_code, (401, 403))
+        self.assertIn(anon_client.get(f"/api/v1/academics/rooms/{self.room.pk}/").status_code, (401, 403))
+        self.assertIn(anon_client.post("/api/v1/academics/rooms/", {"room_number": "R-Anon"}).status_code, (401, 403))
+        self.assertIn(anon_client.put(f"/api/v1/academics/rooms/{self.room.pk}/", {"room_number": "R-Anon"}).status_code, (401, 403))
+        self.assertIn(anon_client.patch(f"/api/v1/academics/rooms/{self.room.pk}/", {"capacity": 50}).status_code, (401, 403))
+        self.assertIn(anon_client.post(f"/api/v1/academics/rooms/{self.room.pk}/toggle-status/").status_code, (401, 403))
+        self.assertIn(anon_client.delete(f"/api/v1/academics/rooms/{self.room.pk}/").status_code, (401, 403))
+
+    def test_inactive_user_denied(self):
+        self.client.force_authenticate(user=self.inactive_user)
+
+        self.assertEqual(self.client.get("/api/v1/academics/rooms/").status_code, 403)
+        self.assertEqual(self.client.get(f"/api/v1/academics/rooms/{self.room.pk}/").status_code, 403)
+        self.assertEqual(self.client.post("/api/v1/academics/rooms/", {"room_number": "R-Inact"}).status_code, 403)
+        self.assertEqual(self.client.put(f"/api/v1/academics/rooms/{self.room.pk}/", {"room_number": "R-Inact"}).status_code, 403)
+        self.assertEqual(self.client.patch(f"/api/v1/academics/rooms/{self.room.pk}/", {"capacity": 50}).status_code, 403)
+        self.assertEqual(self.client.post(f"/api/v1/academics/rooms/{self.room.pk}/toggle-status/").status_code, 403)
+        self.assertEqual(self.client.delete(f"/api/v1/academics/rooms/{self.room.pk}/").status_code, 403)
+
+    def test_superuser_permanent_full_access(self):
+        self.client.force_authenticate(user=self.superuser)
+
+        self.assertEqual(self.client.get("/api/v1/academics/rooms/").status_code, 200)
+        self.assertEqual(self.client.get(f"/api/v1/academics/rooms/{self.room.pk}/").status_code, 200)
+
+        res_create = self.client.post("/api/v1/academics/rooms/", {
+            "room_number": "Room Super", "room_type": "CLASSROOM", "capacity": 30
+        })
+        self.assertEqual(res_create.status_code, 201)
+        s_id = res_create.data['id']
+
+        self.assertEqual(self.client.put(f"/api/v1/academics/rooms/{s_id}/", {
+            "room_number": "Room Super-U", "room_type": "CLASSROOM", "capacity": 35
+        }).status_code, 200)
+        self.assertEqual(self.client.patch(f"/api/v1/academics/rooms/{s_id}/", {"capacity": 40}).status_code, 200)
+        self.assertEqual(self.client.post(f"/api/v1/academics/rooms/{s_id}/toggle-status/").status_code, 200)
+        self.assertEqual(self.client.delete(f"/api/v1/academics/rooms/{s_id}/").status_code, 204)
+
+
+class RoomRegressionAPITests(TestCase):
+    def setUp(self):
+        call_command('sync_permissions')
+        self.superuser = User.objects.create_superuser(
+            username='room_reg_super',
+            email='room_reg@school.edu',
+            password='Password123!',
+            user_type=UserType.ADMIN
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.superuser)
+        self.room = RoomService.create_room(
+            room_number="Room 501",
+            room_type=RoomType.CLASSROOM,
+            capacity=40,
+            actor=self.superuser
+        )
+
+    def test_service_validation_errors_handled_cleanly(self):
+        # Capacity <= 0
+        res_cap = self.client.post("/api/v1/academics/rooms/", {
+            "room_number": "Room BadCap", "room_type": "CLASSROOM", "capacity": 0
+        })
+        self.assertEqual(res_cap.status_code, 400)
+
+        # Invalid room type
+        res_type = self.client.post("/api/v1/academics/rooms/", {
+            "room_number": "Room BadType", "room_type": "INVALID_TYPE", "capacity": 30
+        })
+        self.assertEqual(res_type.status_code, 400)
+
+        # Duplicate room number
+        res_dup = self.client.post("/api/v1/academics/rooms/", {
+            "room_number": "Room 501", "room_type": "CLASSROOM", "capacity": 30
+        })
+        self.assertIn(res_dup.status_code, (400, 409))
+
+    def test_audit_logging_generated_for_room_operations(self):
+        res = self.client.post("/api/v1/academics/rooms/", {
+            "room_number": "Room Audit-Test", "room_type": "CLASSROOM", "capacity": 30
+        })
+        self.assertEqual(res.status_code, 201)
+        created_id = str(res.data['id'])
+        self.assertTrue(
+            AuditLog.objects.filter(entity_type='Room', action=AuditAction.CREATE, entity_id=created_id).exists()
+        )
+
+        res_patch = self.client.patch(f"/api/v1/academics/rooms/{created_id}/", {"capacity": 35})
+        self.assertEqual(res_patch.status_code, 200)
+        self.assertTrue(
+            AuditLog.objects.filter(entity_type='Room', action=AuditAction.UPDATE, entity_id=created_id).exists()
+        )
+
+    def test_delete_room_protection_when_referenced_in_section(self):
+        school_class = SchoolClass.objects.create(name="Class 10-Reg", code="10-REG", order=10)
+        section = Section.objects.create(
+            school_class=school_class,
+            name="A",
+            capacity=40,
+            room_ref=self.room,
+            room_number=self.room.room_number
+        )
+        res_del = self.client.delete(f"/api/v1/academics/rooms/{self.room.pk}/")
+        self.assertEqual(res_del.status_code, 409)
+        self.assertTrue(Room.objects.filter(pk=self.room.pk).exists())
+
+    def test_delete_room_protection_when_referenced_in_timetable(self):
+        from datetime import date
+        academic_year = AcademicYear.objects.create(
+            name="2027-2028",
+            start_date=date(2027, 4, 1),
+            end_date=date(2028, 3, 31)
+        )
+        school_class = SchoolClass.objects.create(name="Class 9-Reg", code="9-REG", order=9)
+        section = Section.objects.create(school_class=school_class, name="B", capacity=30)
+        subject = Subject.objects.create(name="Physics-Reg", code="PHY-REG")
+        class_subject = ClassSubject.objects.create(
+            section=section,
+            subject=subject,
+            academic_year=academic_year
+        )
+        period = TimetablePeriod.objects.create(
+            period_number=1,
+            name="Period 1-Reg",
+            start_time="08:00:00",
+            end_time="08:45:00"
+        )
+        slot = TimetableSlot.objects.create(
+            academic_year=academic_year,
+            day_of_week=1,
+            period=period,
+            class_subject=class_subject,
+            room_ref=self.room,
+            room=self.room.room_number
+        )
+        res_del = self.client.delete(f"/api/v1/academics/rooms/{self.room.pk}/")
+        self.assertEqual(res_del.status_code, 409)
+        self.assertTrue(Room.objects.filter(pk=self.room.pk).exists())
 
 
 class RoomWebViewsTests(TestCase):

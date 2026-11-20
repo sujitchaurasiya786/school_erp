@@ -340,6 +340,34 @@ PERMISSION_REGISTRY = [
         "name": "Export Attendance Reports",
         "description": "Download attendance shortage and summary reports.",
     },
+    {
+        "codename": "attendance.holiday.view",
+        "module": "attendance",
+        "action": "view",
+        "name": "View School Holidays",
+        "description": "View school holiday calendar, gazetted holidays, and vacations.",
+    },
+    {
+        "codename": "attendance.holiday.manage",
+        "module": "attendance",
+        "action": "change",
+        "name": "Manage School Holidays",
+        "description": "Create, edit, and delete holidays and multi-day vacation breaks.",
+    },
+    {
+        "codename": "attendance.calendar.view",
+        "module": "attendance",
+        "action": "view",
+        "name": "View Calendar & Working Days",
+        "description": "View weekly working-day configurations and special day overrides.",
+    },
+    {
+        "codename": "attendance.calendar.manage",
+        "module": "attendance",
+        "action": "change",
+        "name": "Manage Calendar & Working Days",
+        "description": "Configure weekly working days, Saturday rules, and special day overrides.",
+    },
     # ── Finance ───────────────────────────────────────────────────────────
     {
         "codename": "finance.fee_structure.view",

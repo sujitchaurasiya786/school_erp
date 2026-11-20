@@ -137,14 +137,28 @@
              3. Attendance (SRS §3.4)
              Active Module: Attendance
              =============================================================== -->
-        {% if request.user.is_superuser or request.user|has_any_perm:'attendance.record.view,attendance.record.mark,attendance.report.export' %}
-        <li class="pc-item pc-hasmenu" role="none">
+        {% if request.user.is_superuser or request.user|has_any_perm:'attendance.record.view,attendance.record.mark,attendance.report.export,attendance.calendar.view,attendance.holiday.view' %}
+        <li class="pc-item pc-hasmenu {% nav_group_active 'attendance-calendar,attendance-holidays' '/dashboard/attendance/' %}" role="none">
           <a href="#!" class="pc-link" role="menuitem" aria-expanded="false">
             <span class="pc-micon"><i class="ti ti-calendar-check" aria-hidden="true"></i></span>
             <span class="pc-mtext">Attendance</span>
             <span class="pc-arrow"><i class="ti ti-chevron-right" aria-hidden="true"></i></span>
           </a>
           <ul class="pc-submenu" role="menu">
+            {% if request.user.is_superuser or request.user|has_perm:'attendance.calendar.view' %}
+            <li class="pc-item {% nav_active 'attendance-calendar' %}" role="none">
+              <a class="pc-link" href="{% url 'attendance-calendar' %}" role="menuitem">
+                <i class="ti ti-calendar me-2" aria-hidden="true"></i> Working Days & Calendar
+              </a>
+            </li>
+            {% endif %}
+            {% if request.user.is_superuser or request.user|has_perm:'attendance.holiday.view' %}
+            <li class="pc-item {% nav_active 'attendance-holidays' %}" role="none">
+              <a class="pc-link" href="{% url 'attendance-holidays' %}" role="menuitem">
+                <i class="ti ti-calendar-off me-2" aria-hidden="true"></i> Holidays & Breaks
+              </a>
+            </li>
+            {% endif %}
             <li class="pc-item" role="none">
               <a class="pc-link" href="#!" role="menuitem">
                 <i class="ti ti-checklist me-2" aria-hidden="true"></i> Student Attendance
