@@ -1,3 +1,4 @@
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 from common.models import TimeStampedModel
@@ -9,6 +10,7 @@ class ApplicationStatus(models.TextChoices):
     UNDER_REVIEW = 'UNDER_REVIEW', _('Under Review')
     DOCUMENTS_VERIFIED = 'DOCUMENTS_VERIFIED', _('Documents Verified')
     TEST_SCHEDULED = 'TEST_SCHEDULED', _('Test/Interview Scheduled')
+    WAITLIST = 'WAITLIST', _('Waitlisted')
     APPROVED = 'APPROVED', _('Approved')
     REJECTED = 'REJECTED', _('Rejected')
     ADMITTED = 'ADMITTED', _('Converted to Student')
@@ -79,6 +81,22 @@ class AdmissionApplication(TimeStampedModel):
 
     def __str__(self):
         return f"{self.application_number} - {self.first_name} {self.last_name} ({self.applying_class})"
+
+    def clean(self):
+        super().clean()
+        errors = {}
+        if not str(self.first_name or '').strip():
+            errors['first_name'] = _("First name is required.")
+        if not str(self.last_name or '').strip():
+            errors['last_name'] = _("Last name is required.")
+        if not str(self.father_name or '').strip() and not str(self.mother_name or '').strip():
+            errors['father_name'] = _("At least one parent name (father or mother) is required.")
+        if not str(self.guardian_phone or '').strip():
+            errors['guardian_phone'] = _("Guardian contact number is required.")
+        if not str(self.applying_class or '').strip():
+            errors['applying_class'] = _("Applying class is required.")
+        if errors:
+            raise ValidationError(errors)
 
 
 class ApplicationDocument(TimeStampedModel):

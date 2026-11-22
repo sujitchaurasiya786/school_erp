@@ -36,18 +36,25 @@
              Active Modules: Admissions, Students
              =============================================================== -->
         {% if request.user.is_superuser or request.user|has_any_perm:'admissions.application.view,students.profile.view,students.promotion.approve,students.tc.issue' %}
-        <li class="pc-item pc-hasmenu" role="none">
+        <li class="pc-item pc-hasmenu {% nav_group_active 'admissions-applications-list,admissions-application-detail,admissions-quotas-list' '/dashboard/admissions/' %}" role="none">
           <a href="#!" class="pc-link" role="menuitem" aria-expanded="false">
             <span class="pc-micon"><i class="ti ti-school" aria-hidden="true"></i></span>
             <span class="pc-mtext">Student Management</span>
             <span class="pc-arrow"><i class="ti ti-chevron-right" aria-hidden="true"></i></span>
           </a>
           <ul class="pc-submenu" role="menu">
-            <li class="pc-item" role="none">
-              <a class="pc-link" href="#!" role="menuitem">
-                <i class="ti ti-user-plus me-2" aria-hidden="true"></i> Admission
+            {% if request.user.is_superuser or request.user|has_perm:'admissions.application.view' %}
+            <li class="pc-item {% nav_active 'admissions-applications-list' %}" role="none">
+              <a class="pc-link" href="{% url 'admissions-applications-list' %}" role="menuitem">
+                <i class="ti ti-user-plus me-2" aria-hidden="true"></i> Admissions & Applications
               </a>
             </li>
+            <li class="pc-item {% nav_active 'admissions-quotas-list' %}" role="none">
+              <a class="pc-link" href="{% url 'admissions-quotas-list' %}" role="menuitem">
+                <i class="ti ti-chart-pie me-2" aria-hidden="true"></i> Seat Quotas & Waitlist
+              </a>
+            </li>
+            {% endif %}
             <li class="pc-item" role="none">
               <a class="pc-link" href="#!" role="menuitem">
                 <i class="ti ti-users me-2" aria-hidden="true"></i> Student Directory
