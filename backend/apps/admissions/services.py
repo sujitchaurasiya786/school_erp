@@ -76,6 +76,7 @@ class AdmissionService:
             religion=str(kwargs.get('religion', '')).strip(),
             mother_tongue=str(kwargs.get('mother_tongue', '')).strip(),
             student_photo=kwargs.get('student_photo'),
+            student_email=str(kwargs.get('student_email', '')).strip(),
             guardian_relation=str(kwargs.get('guardian_relation', 'Father')).strip() or 'Father',
             alternate_phone=str(kwargs.get('alternate_phone', '')).strip(),
             father_occupation=str(kwargs.get('father_occupation', '')).strip(),
@@ -332,12 +333,22 @@ class AdmissionService:
             roll_number=roll_number
         )
 
-        # 6. Update application status
+        # 6. Auto-provision Identity User account for student login and directory visibility
+        from apps.students.services import StudentService
+        StudentService.provision_student_user_account(
+            student=student,
+            actor=user,
+            request=request,
+            preferred_email=app.student_email or app.guardian_email,
+            phone_number=app.guardian_phone
+        )
+
+        # 7. Update application status
         app.status = ApplicationStatus.ADMITTED
         app.converted_student_id = student.admission_number
         app.save()
 
-        # 7. Audit log
+        # 8. Audit log
         AuditService.log(
             action=AuditAction.CREATE,
             module='admissions',

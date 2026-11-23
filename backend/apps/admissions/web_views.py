@@ -48,6 +48,7 @@ def _extract_and_create_application(request, selected_year):
     blood_group = request.POST.get('blood_group', '').strip()
     religion = request.POST.get('religion', '').strip()
     mother_tongue = request.POST.get('mother_tongue', '').strip()
+    student_email = request.POST.get('student_email', '').strip()
     student_photo = request.FILES.get('student_photo')
 
     # Step 2 Parents / Guardian
@@ -116,6 +117,7 @@ def _extract_and_create_application(request, selected_year):
         blood_group=blood_group,
         religion=religion,
         mother_tongue=mother_tongue,
+        student_email=student_email,
         student_photo=student_photo,
         guardian_relation=guardian_relation,
         alternate_phone=alternate_phone,

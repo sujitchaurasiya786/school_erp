@@ -46,7 +46,8 @@ class StudentService:
                                gender, primary_guardian, address, admission_date=None,
                                blood_group="", city="", state="", pincode="", previous_school="",
                                secondary_guardian=None, academic_year=None, class_name=None,
-                               section_name=None, roll_number=None, user=None, request=None):
+                               section_name=None, roll_number=None, user=None, request=None,
+                               student_email="", **kwargs):
         """
         Creates a new student profile and optional initial enrollment.
         """
@@ -93,6 +94,15 @@ class StudentService:
                 roll_number=roll_number
             )
 
+        # Auto-provision Identity User account for student login and directory visibility
+        cls.provision_student_user_account(
+            student=student,
+            actor=user,
+            request=request,
+            preferred_email=student_email or kwargs.get('preferred_email'),
+            phone_number=primary_guardian.phone if primary_guardian else None
+        )
+
         AuditService.log(
             action=AuditAction.CREATE,
             module='students',
@@ -103,6 +113,88 @@ class StudentService:
             request=request
         )
         return student
+
+    @classmethod
+    @transaction.atomic
+    def provision_student_user_account(cls, student, actor=None, request=None, preferred_email=None, phone_number=None):
+        """
+        Creates or links an Identity User account for a student.
+        Username: student.admission_number
+        UserType: STUDENT
+        Default Password: 12345678 (with must_change_password=True)
+        Assigns the 'student' RBAC role.
+        """
+        from apps.identity.models import User, UserType
+        from apps.rbac.models import Role, ScopeType, UserRoleAssignment
+
+        if student.user_account:
+            return student.user_account
+
+        username = student.admission_number.strip().upper()
+        existing_user = User.objects.filter(username__iexact=username).first()
+        if existing_user:
+            student.user_account = existing_user
+            student.save(update_fields=['user_account'])
+            return existing_user
+
+        # Unique email resolution
+        clean_email = (preferred_email or "").strip().lower()
+        if clean_email and not User.objects.filter(email__iexact=clean_email).exists():
+            student_email = clean_email
+        else:
+            sanitized_adm = student.admission_number.strip().lower().replace('/', '-').replace(' ', '')
+            student_email = f"{sanitized_adm}@student.school.local"
+            counter = 1
+            while User.objects.filter(email__iexact=student_email).exists():
+                student_email = f"{sanitized_adm}_{counter}@student.school.local"
+                counter += 1
+
+        phone = phone_number or (student.primary_guardian.phone if student.primary_guardian else None)
+
+        student_user = User(
+            username=username,
+            email=student_email,
+            first_name=student.first_name,
+            last_name=student.last_name,
+            user_type=UserType.STUDENT,
+            phone_number=phone,
+            is_active=True,
+            must_change_password=True
+        )
+        student_user.set_password("12345678")
+        student_user.save()
+
+        # Link student role
+        student_role = Role.objects.filter(code='student').first()
+        if not student_role:
+            student_role = Role.objects.filter(name__icontains='Student').first()
+        if student_role:
+            UserRoleAssignment.objects.get_or_create(
+                user=student_user,
+                role=student_role,
+                scope_type=ScopeType.GLOBAL,
+                defaults={'is_active': True}
+            )
+
+        student.user_account = student_user
+        student.save(update_fields=['user_account'])
+
+        AuditService.log(
+            action=AuditAction.CREATE,
+            module="identity",
+            entity_type="User",
+            entity_id=str(student_user.pk),
+            actor=actor,
+            reason=f"Auto-provisioned student user account for {student.admission_number}",
+            changes={
+                "username": student_user.username,
+                "email": student_user.email,
+                "user_type": student_user.user_type,
+                "admission_number": student.admission_number
+            },
+            request=request
+        )
+        return student_user
 
     @classmethod
     @transaction.atomic

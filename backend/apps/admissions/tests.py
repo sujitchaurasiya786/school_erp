@@ -283,6 +283,34 @@ class AdmissionsServiceTests(TestCase):
         self.assertEqual(app.status, ApplicationStatus.ADMITTED)
         self.assertEqual(app.converted_student_id, new_student.admission_number)
 
+        # User account check
+        self.assertIsNotNone(new_student.user_account)
+        self.assertEqual(new_student.user_account.username, new_student.admission_number)
+        self.assertEqual(new_student.user_account.user_type, 'STUDENT')
+
+    def test_admission_student_email_provisioning(self):
+        app = AdmissionService.create_application(
+            academic_year=self.year,
+            applying_class='Class 1',
+            first_name='Kavya',
+            last_name='Nair',
+            date_of_birth=date(2020, 6, 12),
+            gender='F',
+            father_name='Suresh Nair',
+            mother_name='Deepa Nair',
+            guardian_phone='9811223344',
+            guardian_email='guardian.nair@test.com',
+            student_email='kavya.nair@student.test',
+            address='45 Lake View',
+            actor=self.admin
+        )
+        self.assertEqual(app.student_email, 'kavya.nair@student.test')
+
+        AdmissionService.approve_application(app, user=self.admin)
+        student = AdmissionService.convert_to_student(app.pk, section_name='A', roll_number=20, user=self.admin)
+        self.assertIsNotNone(student.user_account)
+        self.assertEqual(student.user_account.email, 'kavya.nair@student.test')
+
 
 class AdmissionsAPIRBACTests(TestCase):
     def setUp(self):

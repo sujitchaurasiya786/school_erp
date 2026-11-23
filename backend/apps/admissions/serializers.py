@@ -37,7 +37,7 @@ class AdmissionApplicationSerializer(serializers.ModelSerializer):
             'same_as_current_address', 'permanent_address', 'permanent_city',
             'permanent_district', 'permanent_state', 'permanent_pincode',
             'previous_school', 'previous_class', 'previous_percentage',
-            'aadhaar_number', 'blood_group', 'religion', 'mother_tongue', 'student_photo',
+            'aadhaar_number', 'blood_group', 'religion', 'mother_tongue', 'student_email', 'student_photo',
             'category', 'category_display', 'declaration_accepted',
             'needs_transport', 'needs_hostel', 'has_sibling_in_school', 'sibling_details',
             'medical_conditions', 'status', 'status_display',

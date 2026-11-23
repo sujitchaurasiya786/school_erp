@@ -119,22 +119,25 @@ class LoginView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        user = authenticate(request, username=username, password=password)
+        from apps.identity.services import IdentityService
+        candidate = IdentityService.resolve_user_by_identifier(username, password=password)
+        auth_username = candidate.username if candidate else username
+        user = authenticate(request, username=auth_username, password=password)
+
+        if user is None and candidate:
+            if candidate.check_password(password):
+                user = candidate
 
         if user is None:
             # Check if user exists with correct password but has been deactivated
-            try:
-                candidate = User.objects.get(username=username)
-                if candidate.check_password(password) and not candidate.is_active:
-                    return Response(
-                        {
-                            "status": "error",
-                            "message": "This account has been deactivated. Contact the administrator.",
-                        },
-                        status=status.HTTP_403_FORBIDDEN,
-                    )
-            except User.DoesNotExist:
-                pass
+            if candidate and candidate.check_password(password) and not candidate.is_active:
+                return Response(
+                    {
+                        "status": "error",
+                        "message": "This account has been deactivated. Contact the administrator.",
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
 
             return Response(
                 {"status": "error", "message": "Invalid credentials."},

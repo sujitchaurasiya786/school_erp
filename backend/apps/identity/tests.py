@@ -776,3 +776,82 @@ class WebAuthViewTests(TestCase):
         self.assertEqual(resp.status_code, 302)
         self.assertIn("/login/", resp.url)
 
+    def test_login_via_staff_employee_id(self):
+        from apps.hrms.models import Department, Designation, StaffProfile
+        dept = Department.objects.create(name="Science", code="SCI")
+        desig = Designation.objects.create(title="Senior Teacher", department=dept)
+        teacher_user = make_user("teacher_emp_user")
+        staff_profile = StaffProfile.objects.create(
+            user_account=teacher_user,
+            employee_id="EMP-2026-999",
+            department=dept,
+            designation=desig,
+            joining_date="2026-01-01"
+        )
+        # Login using employee_id instead of username
+        resp = self.client.post("/login/", {
+            "username": "EMP-2026-999",
+            "password": "TestPass@999",
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, "/")
+
+    def test_login_via_student_admission_number(self):
+        from apps.students.models import Student, Guardian
+        guardian = Guardian.objects.create(first_name="Sunil", last_name="Verma", phone="9988776655")
+        student_user = make_user("student_adm_user", user_type=UserType.STUDENT)
+        student = Student.objects.create(
+            admission_number="ADM-2026-8888",
+            first_name="Rohan",
+            last_name="Verma",
+            date_of_birth="2015-08-15",
+            gender="M",
+            address="Lucknow",
+            admission_date="2026-04-01",
+            primary_guardian=guardian,
+            user_account=student_user
+        )
+        # Login using admission_number
+        resp = self.client.post("/login/", {
+            "username": "ADM-2026-8888",
+            "password": "TestPass@999",
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, "/")
+
+    def test_login_via_student_roll_number(self):
+        from apps.students.models import Student, Guardian, ClassEnrollment
+        from apps.school_config.models import AcademicYear
+        year = AcademicYear.objects.filter(is_current=True).first()
+        if not year:
+            from datetime import date
+            year = AcademicYear.objects.create(name="2026-2027", start_date=date(2026, 4, 1), end_date=date(2027, 3, 31), is_current=True)
+        guardian = Guardian.objects.create(first_name="Alok", last_name="Singh", phone="9988776644")
+        student_user = make_user("student_roll_user", user_type=UserType.STUDENT)
+        student = Student.objects.create(
+            admission_number="ADM-2026-7777",
+            first_name="Aarav",
+            last_name="Singh",
+            date_of_birth="2016-03-20",
+            gender="M",
+            address="Lucknow",
+            admission_date="2026-04-01",
+            primary_guardian=guardian,
+            user_account=student_user
+        )
+        ClassEnrollment.objects.create(
+            student=student,
+            academic_year=year,
+            class_name="Class 5",
+            section_name="A",
+            roll_number=42
+        )
+        # Login using roll number "42"
+        resp = self.client.post("/login/", {
+            "username": "42",
+            "password": "TestPass@999",
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, "/")
+
+

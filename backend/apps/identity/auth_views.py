@@ -47,12 +47,8 @@ def login_view(request):
                 'next': next_url,
             })
 
-        from django.db.models import Q
-
-        # 1. Look up candidate user by username or email (case-insensitive)
-        candidate = User.objects.filter(
-            Q(username__iexact=identifier) | Q(email__iexact=identifier)
-        ).first()
+        # 1. Look up candidate user by username, email, staff employee ID, admission number, or roll number
+        candidate = IdentityService.resolve_user_by_identifier(identifier, password=password)
 
         auth_username = candidate.username if candidate else identifier
         user = authenticate(request, username=auth_username, password=password)
@@ -71,7 +67,7 @@ def login_view(request):
             if candidate is None:
                 messages.error(
                     request,
-                    f"Invalid credentials. User account '{identifier}' was not found. Please check your username or email."
+                    f"Invalid credentials. User account '{identifier}' was not found. Please check your username, email, Employee ID, or Roll Number."
                 )
             else:
                 messages.error(

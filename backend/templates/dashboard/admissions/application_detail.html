@@ -100,6 +100,10 @@
                             <span class="fw-semibold text-dark">{{ app.aadhaar_number|default:"—" }}</span>
                         </div>
                         <div class="col-sm-6">
+                            <span class="text-muted small d-block">Student Email</span>
+                            <span class="fw-semibold text-dark">{{ app.student_email|default:"—" }}</span>
+                        </div>
+                        <div class="col-sm-6">
                             <span class="text-muted small d-block">Religion & Mother Tongue</span>
                             <span class="fw-semibold text-dark">{{ app.religion|default:"—" }}{% if app.mother_tongue %} / {{ app.mother_tongue }}{% endif %}</span>
                         </div>

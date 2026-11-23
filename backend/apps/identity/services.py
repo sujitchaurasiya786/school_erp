@@ -197,3 +197,88 @@ class IdentityService:
         )
 
         return user
+
+    @classmethod
+    def resolve_user_by_identifier(cls, identifier, password=None):
+        """
+        Resolves a User instance from multiple possible identifiers:
+          1. Direct Username or Email (case-insensitive)
+          2. Teacher/Staff Employee ID (StaffProfile.employee_id e.g. EMP-001)
+          3. Student Admission Number (Student.admission_number e.g. ADM-2026-0001)
+          4. Student Roll Number (ClassEnrollment.roll_number in current or active academic year)
+        """
+        if not identifier:
+            return None
+
+        clean_id = str(identifier).strip()
+        from django.db.models import Q
+
+        # 1. Direct username or email match (case-insensitive)
+        candidate = User.objects.filter(
+            Q(username__iexact=clean_id) | Q(email__iexact=clean_id)
+        ).first()
+        if candidate:
+            return candidate
+
+        # 2. Staff / Teacher by Employee ID
+        try:
+            from apps.hrms.models import StaffProfile
+            staff = StaffProfile.objects.filter(
+                employee_id__iexact=clean_id
+            ).select_related('user_account').first()
+            if staff and staff.user_account:
+                return staff.user_account
+        except Exception:
+            pass
+
+        # 3. Student by Admission Number
+        try:
+            from apps.students.models import Student
+            student = Student.objects.filter(
+                admission_number__iexact=clean_id
+            ).select_related('user_account').first()
+            if student and student.user_account:
+                return student.user_account
+        except Exception:
+            pass
+
+        # 4. Student by Roll Number (digits or e.g. ROLL-05)
+        roll_digits = None
+        if clean_id.isdigit():
+            roll_digits = int(clean_id)
+        elif clean_id.upper().startswith(('ROLL-', 'ROLL ', 'R-')):
+            tail = clean_id.split('-')[-1].split()[-1]
+            if tail.isdigit():
+                roll_digits = int(tail)
+
+        if roll_digits is not None:
+            try:
+                from apps.students.models import ClassEnrollment
+                enrollments = list(ClassEnrollment.objects.filter(
+                    roll_number=roll_digits,
+                    academic_year__is_current=True,
+                    student__user_account__isnull=False
+                ).select_related('student__user_account'))
+
+                # Fallback to any latest enrollments if no current-year flag set
+                if not enrollments:
+                    enrollments = list(ClassEnrollment.objects.filter(
+                        roll_number=roll_digits,
+                        student__user_account__isnull=False
+                    ).select_related('student__user_account').order_by('-academic_year__start_date')[:10])
+
+                if len(enrollments) == 1:
+                    return enrollments[0].student.user_account
+                elif len(enrollments) > 1:
+                    # Ambiguous roll number across multiple sections/classes:
+                    # Match against password to pick the correct user account
+                    if password:
+                        for enr in enrollments:
+                            u = enr.student.user_account
+                            if u and (u.check_password(password) or u.password == password):
+                                return u
+                    return enrollments[0].student.user_account
+            except Exception:
+                pass
+
+        return None

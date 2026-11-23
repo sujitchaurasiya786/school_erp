@@ -91,6 +91,7 @@ class AdmissionApplication(TimeStampedModel):
     religion = models.CharField(max_length=50, blank=True, default='')
     mother_tongue = models.CharField(max_length=50, blank=True, default='')
     student_photo = models.ImageField(upload_to='admission_photos/%Y/', blank=True, null=True)
+    student_email = models.EmailField(blank=True, default='', help_text=_("Student personal/contact email"))
 
     # Parent / Guardian Detailed
     guardian_relation = models.CharField(max_length=50, default='Father')
