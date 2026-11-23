@@ -1,0 +1,686 @@
+{% extends 'dashboard/base.html' %}
+
+{% block admin %}
+<div class="container-fluid px-0">
+    <!-- Breadcrumb & Navigation -->
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
+        <div>
+            <nav aria-label="breadcrumb">
+                <ol class="breadcrumb mb-1">
+                    <li class="breadcrumb-item"><a href="{% url 'students-student-list' %}" class="text-decoration-none text-muted">Students</a></li>
+                    <li class="breadcrumb-item active" aria-current="page">{{ student.admission_number }}</li>
+                </ol>
+            </nav>
+            <h3 class="fw-bold mb-0 text-dark">{{ student.full_name }}</h3>
+        </div>
+        <div class="d-flex align-items-center gap-2">
+            <a href="{% url 'students-student-list' %}" class="btn btn-outline-secondary btn-sm shadow-sm">
+                <i class="ti ti-arrow-left me-1"></i> Back to Roster
+            </a>
+            {% if can_change %}
+            <button type="button" class="btn btn-outline-dark btn-sm shadow-sm" data-bs-toggle="modal" data-bs-target="#updateStatusModal">
+                <i class="ti ti-adjustments me-1"></i> Status: {{ student.get_status_display }}
+            </button>
+            <button type="button" class="btn btn-primary btn-sm shadow-sm" data-bs-toggle="modal" data-bs-target="#uploadDocModal">
+                <i class="ti ti-upload me-1"></i> Upload Document
+            </button>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Django Messages Alerts -->
+    {% if messages %}
+    <div class="mb-3">
+        {% for message in messages %}
+        <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show shadow-sm" role="alert">
+            <i class="ti ti-info-circle me-1"></i> {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Student Header Summary Card -->
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body p-4">
+            <div class="row align-items-center g-3">
+                <div class="col-auto">
+                    <div class="avatar-lg rounded-circle bg-primary-subtle text-primary d-flex align-items-center justify-content-center fw-bold fs-2" style="width: 72px; height: 72px;">
+                        {{ student.first_name|first }}{{ student.last_name|first }}
+                    </div>
+                </div>
+                <div class="col">
+                    <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
+                        <h4 class="fw-bold mb-0 text-dark">{{ student.full_name }}</h4>
+                        <span class="badge bg-light text-primary border border-primary-subtle px-2 py-1 fs-6">
+                            {{ student.admission_number }}
+                        </span>
+                        {% if student.status == 'ACTIVE' %}
+                        <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-1">Active</span>
+                        {% elif student.status == 'TC_ISSUED' %}
+                        <span class="badge bg-warning-subtle text-warning border border-warning-subtle px-2 py-1">TC Issued</span>
+                        {% elif student.status == 'PASSED_OUT' %}
+                        <span class="badge bg-info-subtle text-info border border-info-subtle px-2 py-1">Passed Out</span>
+                        {% else %}
+                        <span class="badge bg-danger-subtle text-danger border border-danger-subtle px-2 py-1">{{ student.get_status_display }}</span>
+                        {% endif %}
+                    </div>
+                    <div class="text-muted small d-flex flex-wrap gap-3">
+                        <span><i class="ti ti-school me-1"></i> Class: <strong>{{ student.current_class_name|default:"Not Assigned" }} - {{ student.current_section_name|default:"A" }}</strong></span>
+                        <span><i class="ti ti-hash me-1"></i> Roll No: <strong>{{ student.current_roll_number|default:"-" }}</strong></span>
+                        <span><i class="ti ti-calendar me-1"></i> DOB: <strong>{{ student.date_of_birth|date:"d M Y" }}</strong></span>
+                        <span><i class="ti ti-gender-male me-1"></i> Gender: <strong>{{ student.get_gender_display }}</strong></span>
+                        <span><i class="ti ti-droplet me-1"></i> Blood Group: <strong>{{ student.blood_group|default:"-" }}</strong></span>
+                    </div>
+                </div>
+                <div class="col-auto d-flex flex-wrap gap-2">
+                    {% if can_issue_tc and student.status != 'TC_ISSUED' %}
+                    <button type="button" class="btn btn-outline-warning btn-sm shadow-sm" data-bs-toggle="modal" data-bs-target="#issueTCModal">
+                        <i class="ti ti-certificate me-1"></i> Issue TC
+                    </button>
+                    {% endif %}
+                    {% if can_change %}
+                    <button type="button" class="btn btn-outline-info btn-sm shadow-sm" data-bs-toggle="modal" data-bs-target="#issueBonafideModal">
+                        <i class="ti ti-file-certificate me-1"></i> Issue Bonafide
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm shadow-sm" data-bs-toggle="modal" data-bs-target="#linkSiblingModal">
+                        <i class="ti ti-users me-1"></i> Link Sibling
+                    </button>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Navigation Tabs -->
+    <ul class="nav nav-pills mb-4 gap-2" id="studentTabs" role="tablist">
+        <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="overview-tab" data-bs-toggle="pill" data-bs-target="#overview" type="button" role="tab">
+                <i class="ti ti-user me-1"></i> Overview & Contact
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="guardians-tab" data-bs-toggle="pill" data-bs-target="#guardians" type="button" role="tab">
+                <i class="ti ti-user-check me-1"></i> Guardians ({{ guardians|length }})
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="siblings-tab" data-bs-toggle="pill" data-bs-target="#siblings" type="button" role="tab">
+                <i class="ti ti-users me-1"></i> Siblings ({{ siblings|length }})
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="enrollments-tab" data-bs-toggle="pill" data-bs-target="#enrollments" type="button" role="tab">
+                <i class="ti ti-history me-1"></i> Academic History ({{ enrollments|length }})
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="documents-tab" data-bs-toggle="pill" data-bs-target="#documents" type="button" role="tab">
+                <i class="ti ti-files me-1"></i> Documents ({{ documents|length }})
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="certificates-tab" data-bs-toggle="pill" data-bs-target="#certificates" type="button" role="tab">
+                <i class="ti ti-certificate me-1"></i> Certificates
+            </button>
+        </li>
+    </ul>
+
+    <!-- Tab Contents -->
+    <div class="tab-content" id="studentTabContent">
+        <!-- 1. Overview -->
+        <div class="tab-pane fade show active" id="overview" role="tabpanel">
+            <div class="row g-4">
+                <div class="col-lg-6">
+                    <div class="card border-0 shadow-sm h-100">
+                        <div class="card-header bg-white border-bottom py-3">
+                            <h6 class="fw-bold mb-0 text-dark">Personal Information</h6>
+                        </div>
+                        <div class="card-body p-4">
+                            <div class="row g-3">
+                                <div class="col-sm-6">
+                                    <span class="text-muted small d-block">First Name</span>
+                                    <strong class="text-dark">{{ student.first_name }}</strong>
+                                </div>
+                                <div class="col-sm-6">
+                                    <span class="text-muted small d-block">Last Name</span>
+                                    <strong class="text-dark">{{ student.last_name }}</strong>
+                                </div>
+                                <div class="col-sm-6">
+                                    <span class="text-muted small d-block">Date of Birth</span>
+                                    <strong class="text-dark">{{ student.date_of_birth|date:"d F Y" }}</strong>
+                                </div>
+                                <div class="col-sm-6">
+                                    <span class="text-muted small d-block">Gender</span>
+                                    <strong class="text-dark">{{ student.get_gender_display }}</strong>
+                                </div>
+                                <div class="col-sm-6">
+                                    <span class="text-muted small d-block">Blood Group</span>
+                                    <strong class="text-dark">{{ student.blood_group|default:"Not specified" }}</strong>
+                                </div>
+                                <div class="col-sm-6">
+                                    <span class="text-muted small d-block">Admission Date</span>
+                                    <strong class="text-dark">{{ student.admission_date|date:"d M Y" }}</strong>
+                                </div>
+                                <div class="col-12">
+                                    <span class="text-muted small d-block">Previous School</span>
+                                    <strong class="text-dark">{{ student.previous_school|default:"None / First School" }}</strong>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-lg-6">
+                    <div class="card border-0 shadow-sm h-100">
+                        <div class="card-header bg-white border-bottom py-3">
+                            <h6 class="fw-bold mb-0 text-dark">Address & Contact Details</h6>
+                        </div>
+                        <div class="card-body p-4">
+                            <div class="mb-3">
+                                <span class="text-muted small d-block">Residential Address</span>
+                                <p class="text-dark mb-0">{{ student.address }}</p>
+                            </div>
+                            <div class="row g-3">
+                                <div class="col-sm-4">
+                                    <span class="text-muted small d-block">City</span>
+                                    <strong class="text-dark">{{ student.city|default:"-" }}</strong>
+                                </div>
+                                <div class="col-sm-4">
+                                    <span class="text-muted small d-block">State</span>
+                                    <strong class="text-dark">{{ student.state|default:"-" }}</strong>
+                                </div>
+                                <div class="col-sm-4">
+                                    <span class="text-muted small d-block">Postal Code</span>
+                                    <strong class="text-dark">{{ student.pincode|default:"-" }}</strong>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 2. Guardians -->
+        <div class="tab-pane fade" id="guardians" role="tabpanel">
+            <div class="row g-4">
+                {% for g in guardians %}
+                <div class="col-md-6">
+                    <div class="card border-0 shadow-sm h-100">
+                        <div class="card-header bg-white border-bottom py-3 d-flex align-items-center justify-content-between">
+                            <h6 class="fw-bold mb-0 text-dark">
+                                {% if forloop.first %}Primary Guardian{% else %}Secondary Guardian{% endif %}
+                            </h6>
+                            <span class="badge bg-light text-secondary border">{{ g.relationship }}</span>
+                        </div>
+                        <div class="card-body p-4">
+                            <h5 class="fw-bold text-dark mb-3">{{ g.first_name }} {{ g.last_name }}</h5>
+                            <div class="row g-3">
+                                <div class="col-sm-6">
+                                    <span class="text-muted small d-block">Relationship</span>
+                                    <strong class="text-dark">{{ g.relationship }}</strong>
+                                </div>
+                                <div class="col-sm-6">
+                                    <span class="text-muted small d-block">Phone Number</span>
+                                    <strong class="text-dark"><i class="ti ti-phone me-1"></i>{{ g.phone }}</strong>
+                                </div>
+                                <div class="col-sm-6">
+                                    <span class="text-muted small d-block">Email Address</span>
+                                    <strong class="text-dark">{{ g.email|default:"-" }}</strong>
+                                </div>
+                                <div class="col-sm-6">
+                                    <span class="text-muted small d-block">Occupation</span>
+                                    <strong class="text-dark">{{ g.occupation|default:"-" }}</strong>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {% empty %}
+                <div class="col-12 text-center py-4 text-muted">No guardian records found.</div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- 3. Siblings -->
+        <div class="tab-pane fade" id="siblings" role="tabpanel">
+            <div class="card border-0 shadow-sm">
+                <div class="card-header bg-white border-bottom py-3 d-flex align-items-center justify-content-between">
+                    <h6 class="fw-bold mb-0 text-dark">Linked Siblings</h6>
+                    {% if can_change %}
+                    <button type="button" class="btn btn-outline-primary btn-sm" data-bs-toggle="modal" data-bs-target="#linkSiblingModal">
+                        <i class="ti ti-plus me-1"></i> Link Sibling
+                    </button>
+                    {% endif %}
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th class="ps-3">Admission No</th>
+                                <th>Sibling Name</th>
+                                <th>Class & Section</th>
+                                <th>Gender</th>
+                                <th>Status</th>
+                                {% if can_change %}
+                                <th class="text-end pe-3">Action</th>
+                                {% endif %}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for sib in siblings %}
+                            <tr>
+                                <td class="ps-3 fw-bold">
+                                    <a href="{% url 'students-student-detail' pk=sib.pk %}" class="text-decoration-none">
+                                        {{ sib.admission_number }}
+                                    </a>
+                                </td>
+                                <td>{{ sib.full_name }}</td>
+                                <td>{{ sib.current_class_name }} - {{ sib.current_section_name|default:"A" }}</td>
+                                <td>{{ sib.get_gender_display }}</td>
+                                <td><span class="badge bg-success-subtle text-success border border-success-subtle">{{ sib.get_status_display }}</span></td>
+                                {% if can_change %}
+                                <td class="text-end pe-3">
+                                    <form method="POST" class="d-inline" onsubmit="return confirm('Unlink sibling {{ sib.full_name }}?');">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="action" value="unlink_sibling">
+                                        <input type="hidden" name="sibling_id" value="{{ sib.pk }}">
+                                        <button type="submit" class="btn btn-sm btn-outline-danger">
+                                            <i class="ti ti-unlink"></i> Unlink
+                                        </button>
+                                    </form>
+                                </td>
+                                {% endif %}
+                            </tr>
+                            {% empty %}
+                            <tr>
+                                <td colspan="6" class="text-center py-4 text-muted">
+                                    No siblings currently linked for this student.
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- 4. Academic Enrollments -->
+        <div class="tab-pane fade" id="enrollments" role="tabpanel">
+            <div class="card border-0 shadow-sm">
+                <div class="card-header bg-white border-bottom py-3">
+                    <h6 class="fw-bold mb-0 text-dark">Enrollment & Class Progression History</h6>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th class="ps-3">Academic Session</th>
+                                <th>Class</th>
+                                <th>Section</th>
+                                <th>Roll Number</th>
+                                <th>Enrolled Date</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for enr in enrollments %}
+                            <tr>
+                                <td class="ps-3 fw-bold text-dark">
+                                    {{ enr.academic_year.name }}
+                                    {% if enr.academic_year.is_current %}<span class="badge bg-primary-subtle text-primary ms-1">Current</span>{% endif %}
+                                </td>
+                                <td><span class="badge bg-light text-dark border">{{ enr.class_name }}</span></td>
+                                <td>Section {{ enr.section_name }}</td>
+                                <td><strong class="text-dark">{{ enr.roll_number|default:"-" }}</strong></td>
+                                <td class="text-muted small">{{ enr.created_at|date:"d M Y" }}</td>
+                            </tr>
+                            {% empty %}
+                            <tr>
+                                <td colspan="5" class="text-center py-4 text-muted">No enrollment history records found.</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- 5. Documents -->
+        <div class="tab-pane fade" id="documents" role="tabpanel">
+            <div class="card border-0 shadow-sm">
+                <div class="card-header bg-white border-bottom py-3 d-flex align-items-center justify-content-between">
+                    <h6 class="fw-bold mb-0 text-dark">Official Student Documents</h6>
+                    {% if can_change %}
+                    <button type="button" class="btn btn-outline-primary btn-sm" data-bs-toggle="modal" data-bs-target="#uploadDocModal">
+                        <i class="ti ti-upload me-1"></i> Upload Document
+                    </button>
+                    {% endif %}
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th class="ps-3">Document Type</th>
+                                <th>Title / Description</th>
+                                <th>Uploaded Date</th>
+                                <th class="text-end pe-3">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for doc in documents %}
+                            <tr>
+                                <td class="ps-3 fw-bold text-dark">
+                                    <i class="ti ti-file-text text-primary me-1"></i> {{ doc.doc_type }}
+                                </td>
+                                <td>{{ doc.title|default:"-" }}</td>
+                                <td class="text-muted small">{{ doc.created_at|date:"d M Y, h:i A" }}</td>
+                                <td class="text-end pe-3">
+                                    {% if doc.document_file %}
+                                    <a href="{{ doc.document_file.url }}" target="_blank" class="btn btn-sm btn-outline-secondary">
+                                        <i class="ti ti-download"></i> View / Download
+                                    </a>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% empty %}
+                            <tr>
+                                <td colspan="4" class="text-center py-4 text-muted">
+                                    No documents uploaded for this student yet.
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- 6. Certificates -->
+        <div class="tab-pane fade" id="certificates" role="tabpanel">
+            <div class="row g-4">
+                <!-- Transfer Certificate Status Card -->
+                <div class="col-lg-6">
+                    <div class="card border-0 shadow-sm h-100">
+                        <div class="card-header bg-white border-bottom py-3 d-flex align-items-center justify-content-between">
+                            <h6 class="fw-bold mb-0 text-dark">Transfer Certificate (TC)</h6>
+                            {% if student.status == 'TC_ISSUED' %}
+                            <span class="badge bg-warning-subtle text-warning border border-warning-subtle">Issued</span>
+                            {% else %}
+                            <span class="badge bg-light text-secondary border">Not Issued</span>
+                            {% endif %}
+                        </div>
+                        <div class="card-body p-4">
+                            {% if hasattr_tc or student.transfer_certificate %}
+                            <div class="mb-3">
+                                <span class="text-muted small d-block">TC Number</span>
+                                <h5 class="fw-bold text-primary">{{ student.transfer_certificate.tc_number }}</h5>
+                            </div>
+                            <div class="row g-3 mb-3">
+                                <div class="col-sm-6">
+                                    <span class="text-muted small d-block">Issue Date</span>
+                                    <strong class="text-dark">{{ student.transfer_certificate.issue_date|date:"d M Y" }}</strong>
+                                </div>
+                                <div class="col-sm-6">
+                                    <span class="text-muted small d-block">Dues Cleared</span>
+                                    {% if student.transfer_certificate.dues_cleared %}
+                                    <span class="badge bg-success-subtle text-success">Yes</span>
+                                    {% else %}
+                                    <span class="badge bg-danger-subtle text-danger">Pending</span>
+                                    {% endif %}
+                                </div>
+                                <div class="col-12">
+                                    <span class="text-muted small d-block">Reason for Leaving</span>
+                                    <p class="text-dark mb-0">{{ student.transfer_certificate.reason_for_leaving }}</p>
+                                </div>
+                            </div>
+                            <a href="{% url 'students-tc-print' pk=student.transfer_certificate.pk %}" target="_blank" class="btn btn-outline-dark btn-sm">
+                                <i class="ti ti-printer me-1"></i> Print Transfer Certificate
+                            </a>
+                            {% else %}
+                            <p class="text-muted small mb-3">No Transfer Certificate has been issued for this student.</p>
+                            {% if can_issue_tc %}
+                            <button type="button" class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#issueTCModal">
+                                <i class="ti ti-certificate me-1"></i> Issue Transfer Certificate
+                            </button>
+                            {% endif %}
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Bonafide Certificates Card -->
+                <div class="col-lg-6">
+                    <div class="card border-0 shadow-sm h-100">
+                        <div class="card-header bg-white border-bottom py-3 d-flex align-items-center justify-content-between">
+                            <h6 class="fw-bold mb-0 text-dark">Bonafide Certificates</h6>
+                            {% if can_change %}
+                            <button type="button" class="btn btn-outline-primary btn-sm" data-bs-toggle="modal" data-bs-target="#issueBonafideModal">
+                                <i class="ti ti-plus me-1"></i> Issue New
+                            </button>
+                            {% endif %}
+                        </div>
+                        <div class="card-body p-3">
+                            <div class="table-responsive">
+                                <table class="table table-hover align-middle mb-0">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th>Cert No</th>
+                                            <th>Purpose</th>
+                                            <th>Date</th>
+                                            <th class="text-end">Print</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for b in bonafide_certificates %}
+                                        <tr>
+                                            <td class="fw-bold text-primary">{{ b.certificate_number }}</td>
+                                            <td>{{ b.purpose }}</td>
+                                            <td class="text-muted small">{{ b.issue_date|date:"d M Y" }}</td>
+                                            <td class="text-end">
+                                                <a href="{% url 'students-bonafide-print' pk=b.pk %}" target="_blank" class="btn btn-sm btn-outline-secondary">
+                                                    <i class="ti ti-printer"></i>
+                                                </a>
+                                            </td>
+                                        </tr>
+                                        {% empty %}
+                                        <tr>
+                                            <td colspan="4" class="text-center py-4 text-muted small">No bonafide certificates issued.</td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Issue Transfer Certificate -->
+{% if can_issue_tc and student.status != 'TC_ISSUED' %}
+<div class="modal fade" id="issueTCModal" tabindex="-1" aria-labelledby="issueTCModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <form method="POST">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="issue_tc">
+                <div class="modal-header bg-light">
+                    <h5 class="modal-title fw-bold" id="issueTCModalLabel">Issue Transfer Certificate</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="alert alert-warning small mb-3">
+                        <i class="ti ti-alert-triangle me-1"></i>
+                        Issuing a TC will automatically set student status to <strong>TC Issued</strong>. This action is recorded in the permanent audit trail.
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold small text-muted">Reason for Leaving <span class="text-danger">*</span></label>
+                        <textarea name="reason" class="form-control" rows="3" placeholder="e.g. Relocation, Completion of Class 12, Parent Request" required></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold small text-muted">Conduct Remarks</label>
+                        <input type="text" name="conduct_remarks" class="form-control" value="Good">
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" name="dues_cleared" id="duesCheck" checked>
+                        <label class="form-check-label small" for="duesCheck">
+                            All school dues and library books cleared
+                        </label>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light">
+                    <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-danger px-4">Issue TC</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Modal: Issue Bonafide Certificate -->
+{% if can_change %}
+<div class="modal fade" id="issueBonafideModal" tabindex="-1" aria-labelledby="issueBonafideModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <form method="POST">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="issue_bonafide">
+                <div class="modal-header bg-light">
+                    <h5 class="modal-title fw-bold" id="issueBonafideModalLabel">Issue Bonafide Certificate</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold small text-muted">Academic Session <span class="text-danger">*</span></label>
+                        <select name="academic_year_id" class="form-select" required>
+                            {% for ay in academic_years %}
+                            <option value="{{ ay.pk }}" {% if ay.is_current %}selected{% endif %}>{{ ay.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold small text-muted">Purpose <span class="text-danger">*</span></label>
+                        <input type="text" name="purpose" class="form-control" placeholder="e.g. Passport Application, Bank Account Opening, Visa, Bus Pass" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold small text-muted">Conduct Remarks</label>
+                        <input type="text" name="conduct_remarks" class="form-control" value="Good">
+                    </div>
+                </div>
+                <div class="modal-footer bg-light">
+                    <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary px-4">Issue Certificate</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Link Sibling -->
+<div class="modal fade" id="linkSiblingModal" tabindex="-1" aria-labelledby="linkSiblingModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <form method="POST">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="link_sibling">
+                <div class="modal-header bg-light">
+                    <h5 class="modal-title fw-bold" id="linkSiblingModalLabel">Link Sibling</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold small text-muted">Sibling's Admission Number <span class="text-danger">*</span></label>
+                        <input type="text" name="sibling_admission_number" class="form-control" placeholder="e.g. ADM-2026-0001" required>
+                        <div class="form-text small">Enter the exact admission number of the brother or sister.</div>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light">
+                    <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary px-4">Link Sibling</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Upload Document -->
+<div class="modal fade" id="uploadDocModal" tabindex="-1" aria-labelledby="uploadDocModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <form method="POST" enctype="multipart/form-data">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="upload_document">
+                <div class="modal-header bg-light">
+                    <h5 class="modal-title fw-bold" id="uploadDocModalLabel">Upload Student Document</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold small text-muted">Document Type <span class="text-danger">*</span></label>
+                        <select name="doc_type" class="form-select" required>
+                            <option value="">-- Select Type --</option>
+                            <option value="Birth Certificate">Birth Certificate</option>
+                            <option value="Aadhaar Card">Aadhaar Card / Government ID</option>
+                            <option value="Transfer Certificate">Previous Transfer Certificate</option>
+                            <option value="Previous Marksheet">Previous Report Card / Marksheet</option>
+                            <option value="Address Proof">Address Proof</option>
+                            <option value="Medical Certificate">Medical Certificate / Immunization Record</option>
+                            <option value="Other">Other Document</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold small text-muted">Title / Description</label>
+                        <input type="text" name="title" class="form-control" placeholder="e.g. Class 5 Marksheet Original">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold small text-muted">Select File <span class="text-danger">*</span></label>
+                        <input type="file" name="document_file" class="form-control" required>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light">
+                    <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary px-4">Upload</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Update Status -->
+<div class="modal fade" id="updateStatusModal" tabindex="-1" aria-labelledby="updateStatusModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <form method="POST">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="update_status">
+                <div class="modal-header bg-light">
+                    <h5 class="modal-title fw-bold" id="updateStatusModalLabel">Change Student Status</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold small text-muted">New Status <span class="text-danger">*</span></label>
+                        <select name="status" class="form-select" required>
+                            {% for code, label in status_choices %}
+                            <option value="{{ code }}" {% if student.status == code %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold small text-muted">Reason for Status Change</label>
+                        <textarea name="reason" class="form-control" rows="2" placeholder="Explain reason for status change"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light">
+                    <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-dark px-4">Update Status</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

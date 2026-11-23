@@ -1,0 +1,162 @@
+{% extends 'dashboard/base.html' %}
+
+{% block admin %}
+<div class="container-fluid px-0">
+    <!-- Header -->
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
+        <div>
+            <h3 class="fw-bold mb-1 text-dark">Certificates & Document Issuance</h3>
+            <p class="text-muted mb-0 small">Manage Transfer Certificates (TC) and Bonafide Certificates issued to students.</p>
+        </div>
+        <div class="d-flex align-items-center gap-2">
+            <a href="{% url 'students-student-list' %}" class="btn btn-outline-secondary btn-sm shadow-sm">
+                <i class="ti ti-users me-1"></i> Student Directory
+            </a>
+        </div>
+    </div>
+
+    <!-- Django Messages Alerts -->
+    {% if messages %}
+    <div class="mb-3">
+        {% for message in messages %}
+        <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show shadow-sm" role="alert">
+            <i class="ti ti-info-circle me-1"></i> {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Tabs Navigation -->
+    <ul class="nav nav-pills mb-4 gap-2" id="certTabs" role="tablist">
+        <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="tc-tab" data-bs-toggle="pill" data-bs-target="#tcPane" type="button" role="tab">
+                <i class="ti ti-certificate me-1"></i> Transfer Certificates ({{ tc_list|length }})
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="bonafide-tab" data-bs-toggle="pill" data-bs-target="#bonafidePane" type="button" role="tab">
+                <i class="ti ti-file-certificate me-1"></i> Bonafide Certificates ({{ bonafide_list|length }})
+            </button>
+        </li>
+    </ul>
+
+    <div class="tab-content" id="certTabContent">
+        <!-- 1. Transfer Certificates Tab -->
+        <div class="tab-pane fade show active" id="tcPane" role="tabpanel">
+            <div class="card border-0 shadow-sm">
+                <div class="card-header bg-white border-bottom py-3 d-flex align-items-center justify-content-between">
+                    <h5 class="fw-bold mb-0 text-dark">Issued Transfer Certificates</h5>
+                    <span class="badge bg-light text-secondary border">{{ tc_list|length }} Records</span>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th class="ps-3">TC Number</th>
+                                <th>Student</th>
+                                <th>Admission No</th>
+                                <th>Issue Date</th>
+                                <th>Dues Status</th>
+                                <th>Reason for Leaving</th>
+                                <th>Conduct</th>
+                                <th class="text-end pe-3">Print / View</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for tc in tc_list %}
+                            <tr>
+                                <td class="ps-3 fw-bold text-primary">{{ tc.tc_number }}</td>
+                                <td>
+                                    <a href="{% url 'students-student-detail' pk=tc.student.pk %}" class="text-dark fw-semibold text-decoration-none">
+                                        {{ tc.student.full_name }}
+                                    </a>
+                                </td>
+                                <td>{{ tc.student.admission_number }}</td>
+                                <td>{{ tc.issue_date|date:"d M Y" }}</td>
+                                <td>
+                                    {% if tc.dues_cleared %}
+                                    <span class="badge bg-success-subtle text-success border border-success-subtle">Cleared</span>
+                                    {% else %}
+                                    <span class="badge bg-danger-subtle text-danger border border-danger-subtle">Pending Dues</span>
+                                    {% endif %}
+                                </td>
+                                <td><span class="text-truncate d-inline-block" style="max-width: 250px;">{{ tc.reason_for_leaving }}</span></td>
+                                <td>{{ tc.conduct_remarks }}</td>
+                                <td class="text-end pe-3">
+                                    <a href="{% url 'students-tc-print' pk=tc.pk %}" target="_blank" class="btn btn-sm btn-outline-dark" title="Print TC">
+                                        <i class="ti ti-printer"></i> Print
+                                    </a>
+                                </td>
+                            </tr>
+                            {% empty %}
+                            <tr>
+                                <td colspan="8" class="text-center py-5 text-muted">
+                                    <i class="ti ti-certificate fs-1 mb-2 d-block"></i>
+                                    No Transfer Certificates have been issued yet.
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- 2. Bonafide Certificates Tab -->
+        <div class="tab-pane fade" id="bonafidePane" role="tabpanel">
+            <div class="card border-0 shadow-sm">
+                <div class="card-header bg-white border-bottom py-3 d-flex align-items-center justify-content-between">
+                    <h5 class="fw-bold mb-0 text-dark">Issued Bonafide Certificates</h5>
+                    <span class="badge bg-light text-secondary border">{{ bonafide_list|length }} Records</span>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th class="ps-3">Certificate No</th>
+                                <th>Student</th>
+                                <th>Admission No</th>
+                                <th>Session</th>
+                                <th>Purpose</th>
+                                <th>Issue Date</th>
+                                <th>Conduct</th>
+                                <th class="text-end pe-3">Print / View</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for b in bonafide_list %}
+                            <tr>
+                                <td class="ps-3 fw-bold text-primary">{{ b.certificate_number }}</td>
+                                <td>
+                                    <a href="{% url 'students-student-detail' pk=b.student.pk %}" class="text-dark fw-semibold text-decoration-none">
+                                        {{ b.student.full_name }}
+                                    </a>
+                                </td>
+                                <td>{{ b.student.admission_number }}</td>
+                                <td>{{ b.academic_year.name }}</td>
+                                <td>{{ b.purpose }}</td>
+                                <td>{{ b.issue_date|date:"d M Y" }}</td>
+                                <td>{{ b.conduct_remarks }}</td>
+                                <td class="text-end pe-3">
+                                    <a href="{% url 'students-bonafide-print' pk=b.pk %}" target="_blank" class="btn btn-sm btn-outline-dark" title="Print Bonafide">
+                                        <i class="ti ti-printer"></i> Print
+                                    </a>
+                                </td>
+                            </tr>
+                            {% empty %}
+                            <tr>
+                                <td colspan="8" class="text-center py-5 text-muted">
+                                    <i class="ti ti-file-certificate fs-1 mb-2 d-block"></i>
+                                    No Bonafide Certificates have been issued yet.
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

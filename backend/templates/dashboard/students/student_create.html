@@ -1,0 +1,235 @@
+{% extends 'dashboard/base.html' %}
+
+{% block admin %}
+<div class="container-fluid px-0">
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
+        <div>
+            <nav aria-label="breadcrumb">
+                <ol class="breadcrumb mb-1">
+                    <li class="breadcrumb-item"><a href="{% url 'students-student-list' %}" class="text-decoration-none text-muted">Students</a></li>
+                    <li class="breadcrumb-item active" aria-current="page">New Student Profile</li>
+                </ol>
+            </nav>
+            <h3 class="fw-bold mb-0 text-dark">Register New Student</h3>
+            <p class="text-muted small mb-0">Create an official student record, assign guardians, and enroll in initial academic class.</p>
+        </div>
+        <a href="{% url 'students-student-list' %}" class="btn btn-outline-secondary btn-sm shadow-sm">
+            <i class="ti ti-arrow-left me-1"></i> Back to Roster
+        </a>
+    </div>
+
+    {% if messages %}
+    <div class="mb-3">
+        {% for message in messages %}
+        <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show shadow-sm" role="alert">
+            <i class="ti ti-info-circle me-1"></i> {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <form method="POST">
+        {% csrf_token %}
+        <div class="row g-4">
+            <!-- 1. Student Personal Details -->
+            <div class="col-lg-6">
+                <div class="card border-0 shadow-sm h-100">
+                    <div class="card-header bg-white border-bottom py-3">
+                        <h6 class="fw-bold mb-0 text-dark"><i class="ti ti-user me-1 text-primary"></i> 1. Student Personal Details</h6>
+                    </div>
+                    <div class="card-body p-4">
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold small text-muted">First Name <span class="text-danger">*</span></label>
+                                <input type="text" name="first_name" class="form-control" placeholder="e.g. Aarav" required>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold small text-muted">Last Name <span class="text-danger">*</span></label>
+                                <input type="text" name="last_name" class="form-control" placeholder="e.g. Kumar" required>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold small text-muted">Date of Birth <span class="text-danger">*</span></label>
+                                <input type="date" name="date_of_birth" class="form-control" required>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold small text-muted">Gender <span class="text-danger">*</span></label>
+                                <select name="gender" class="form-select" required>
+                                    <option value="M">Male</option>
+                                    <option value="F">Female</option>
+                                    <option value="O">Other</option>
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold small text-muted">Blood Group</label>
+                                <input type="text" name="blood_group" class="form-control" placeholder="e.g. B+, O+, A-">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold small text-muted">Previous School</label>
+                                <input type="text" name="previous_school" class="form-control" placeholder="Optional">
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label fw-semibold small text-muted">Residential Address <span class="text-danger">*</span></label>
+                                <textarea name="address" class="form-control" rows="2" placeholder="Street, House No, Locality" required></textarea>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label fw-semibold small text-muted">City</label>
+                                <input type="text" name="city" class="form-control" placeholder="City">
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label fw-semibold small text-muted">State</label>
+                                <input type="text" name="state" class="form-control" placeholder="State">
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label fw-semibold small text-muted">Pincode</label>
+                                <input type="text" name="pincode" class="form-control" placeholder="Postal Code">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 2. Guardian & Initial Enrollment -->
+            <div class="col-lg-6">
+                <!-- Guardian Details -->
+                <div class="card border-0 shadow-sm mb-4">
+                    <div class="card-header bg-white border-bottom py-3">
+                        <h6 class="fw-bold mb-0 text-dark"><i class="ti ti-user-check me-1 text-primary"></i> 2. Primary Guardian Details</h6>
+                    </div>
+                    <div class="card-body p-4">
+                        <div class="mb-3">
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="radio" name="guardian_mode" id="guardianNew" value="new" checked onchange="toggleGuardianMode()">
+                                <label class="form-check-label small fw-semibold" for="guardianNew">Create New Guardian</label>
+                            </div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="radio" name="guardian_mode" id="guardianExisting" value="existing" onchange="toggleGuardianMode()">
+                                <label class="form-check-label small fw-semibold" for="guardianExisting">Select Existing Guardian</label>
+                            </div>
+                        </div>
+
+                        <!-- Existing Guardian Selector -->
+                        <div id="existingGuardianBlock" class="d-none mb-3">
+                            <label class="form-label fw-semibold small text-muted">Existing Guardian</label>
+                            <select name="existing_guardian_id" id="existingGuardianSelect" class="form-select">
+                                <option value="">-- Choose Existing Guardian --</option>
+                                {% for g in guardians %}
+                                <option value="{{ g.pk }}">{{ g.first_name }} {{ g.last_name }} ({{ g.relationship }} - {{ g.phone }})</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <!-- New Guardian Form Fields -->
+                        <div id="newGuardianBlock" class="row g-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold small text-muted">Guardian First Name <span class="text-danger">*</span></label>
+                                <input type="text" name="guardian_first_name" id="gFirstName" class="form-control" placeholder="e.g. Ramesh">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold small text-muted">Guardian Last Name</label>
+                                <input type="text" name="guardian_last_name" id="gLastName" class="form-control" placeholder="e.g. Kumar">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold small text-muted">Relationship <span class="text-danger">*</span></label>
+                                <select name="guardian_relationship" class="form-select">
+                                    <option value="Father">Father</option>
+                                    <option value="Mother">Mother</option>
+                                    <option value="Guardian">Legal Guardian</option>
+                                    <option value="Other">Other</option>
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold small text-muted">Contact Phone <span class="text-danger">*</span></label>
+                                <input type="tel" name="guardian_phone" id="gPhone" class="form-control" placeholder="10-digit mobile number">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold small text-muted">Email Address</label>
+                                <input type="email" name="guardian_email" class="form-control" placeholder="name@example.com">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold small text-muted">Occupation</label>
+                                <input type="text" name="guardian_occupation" class="form-control" placeholder="e.g. Service / Business">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Initial Enrollment Details -->
+                <div class="card border-0 shadow-sm">
+                    <div class="card-header bg-white border-bottom py-3">
+                        <h6 class="fw-bold mb-0 text-dark"><i class="ti ti-school me-1 text-primary"></i> 3. Initial Class Enrollment</h6>
+                    </div>
+                    <div class="card-body p-4">
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold small text-muted">Academic Session <span class="text-danger">*</span></label>
+                                <select name="academic_year_id" class="form-select" required>
+                                    {% for ay in academic_years %}
+                                    <option value="{{ ay.pk }}" {% if ay.is_current %}selected{% endif %}>{{ ay.name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold small text-muted">Class <span class="text-danger">*</span></label>
+                                <select name="class_name" class="form-select" required>
+                                    <option value="">-- Select Class --</option>
+                                    {% for c in classes %}
+                                    <option value="{{ c.name }}">{{ c.name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold small text-muted">Section <span class="text-danger">*</span></label>
+                                <select name="section_name" class="form-select" required>
+                                    {% for s in sections %}
+                                    <option value="{{ s.name }}">Section {{ s.name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-semibold small text-muted">Roll Number</label>
+                                <input type="number" name="roll_number" class="form-control" placeholder="Optional roll number" min="1">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Submit Button Bar -->
+            <div class="col-12 text-end">
+                <hr class="my-3">
+                <a href="{% url 'students-student-list' %}" class="btn btn-light me-2">Cancel</a>
+                <button type="submit" class="btn btn-primary px-4 shadow-sm">
+                    <i class="ti ti-check me-1"></i> Register Student Profile
+                </button>
+            </div>
+        </div>
+    </form>
+</div>
+
+<script>
+function toggleGuardianMode() {
+    const isExisting = document.getElementById('guardianExisting').checked;
+    const existingBlock = document.getElementById('existingGuardianBlock');
+    const newBlock = document.getElementById('newGuardianBlock');
+    const existingSelect = document.getElementById('existingGuardianSelect');
+    const gFirstName = document.getElementById('gFirstName');
+    const gPhone = document.getElementById('gPhone');
+
+    if (isExisting) {
+        existingBlock.classList.remove('d-none');
+        newBlock.classList.add('d-none');
+        existingSelect.required = true;
+        gFirstName.required = false;
+        gPhone.required = false;
+    } else {
+        existingBlock.classList.add('d-none');
+        newBlock.classList.remove('d-none');
+        existingSelect.required = false;
+        gFirstName.required = true;
+        gPhone.required = true;
+    }
+}
+document.addEventListener('DOMContentLoaded', toggleGuardianMode);
+</script>
+{% endblock %}

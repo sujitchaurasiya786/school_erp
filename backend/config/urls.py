@@ -71,6 +71,7 @@ urlpatterns = [
     path('dashboard/academics/', include('apps.academics.web_urls')),
     path('dashboard/attendance/', include('apps.attendance.web_urls')),
     path('dashboard/admissions/', include('apps.admissions.web_urls')),
+    path('dashboard/students/', include('apps.students.web_urls')),
     path('dashboard/users/', users_list_view, name='identity-users-direct'),
     path('api/v1/', include(api_v1_patterns)),
 ]

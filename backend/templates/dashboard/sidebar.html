@@ -55,31 +55,32 @@
               </a>
             </li>
             {% endif %}
-            <li class="pc-item" role="none">
-              <a class="pc-link" href="#!" role="menuitem">
+            {% if request.user.is_superuser or request.user|has_perm:'students.profile.view' %}
+            <li class="pc-item {% nav_active 'students-student-list,students-student-detail,students-student-create' %}" role="none">
+              <a class="pc-link" href="{% url 'students-student-list' %}" role="menuitem">
                 <i class="ti ti-users me-2" aria-hidden="true"></i> Student Directory
               </a>
             </li>
-            <li class="pc-item" role="none">
-              <a class="pc-link" href="#!" role="menuitem">
+            <li class="pc-item {% nav_active 'students-guardians-list' %}" role="none">
+              <a class="pc-link" href="{% url 'students-guardians-list' %}" role="menuitem">
                 <i class="ti ti-user-check me-2" aria-hidden="true"></i> Guardians
               </a>
             </li>
-            <li class="pc-item" role="none">
-              <a class="pc-link" href="#!" role="menuitem">
-                <i class="ti ti-id me-2" aria-hidden="true"></i> Class Enrollments
+            {% endif %}
+            {% if request.user.is_superuser or request.user|has_perm:'students.promotion.approve' %}
+            <li class="pc-item {% nav_active 'students-class-promotion' %}" role="none">
+              <a class="pc-link" href="{% url 'students-class-promotion' %}" role="menuitem">
+                <i class="ti ti-arrow-up-circle me-2" aria-hidden="true"></i> Class Promotion
               </a>
             </li>
-            <li class="pc-item" role="none">
-              <a class="pc-link" href="#!" role="menuitem">
-                <i class="ti ti-arrow-up-circle me-2" aria-hidden="true"></i> Promotion
+            {% endif %}
+            {% if request.user.is_superuser or request.user|has_perm:'students.profile.view' %}
+            <li class="pc-item {% nav_active 'students-certificates-list' %}" role="none">
+              <a class="pc-link" href="{% url 'students-certificates-list' %}" role="menuitem">
+                <i class="ti ti-certificate me-2" aria-hidden="true"></i> Certificates (TC & Bonafide)
               </a>
             </li>
-            <li class="pc-item" role="none">
-              <a class="pc-link" href="#!" role="menuitem">
-                <i class="ti ti-certificate me-2" aria-hidden="true"></i> Certificates
-              </a>
-            </li>
+            {% endif %}
           </ul>
         </li>
         {% endif %}
