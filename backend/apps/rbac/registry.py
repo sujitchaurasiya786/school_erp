@@ -327,6 +327,27 @@ PERMISSION_REGISTRY = [
         "description": "Mark daily or period-wise attendance for a section.",
     },
     {
+        "codename": "attendance.record.correct",
+        "module": "attendance",
+        "action": "change",
+        "name": "Submit Attendance Correction Request",
+        "description": "Submit requests to correct marked student attendance.",
+    },
+    {
+        "codename": "attendance.staff.view",
+        "module": "attendance",
+        "action": "view",
+        "name": "View Staff Attendance",
+        "description": "View daily staff attendance records.",
+    },
+    {
+        "codename": "attendance.staff.mark",
+        "module": "attendance",
+        "action": "add",
+        "name": "Mark Staff Attendance",
+        "description": "Mark daily attendance for teaching and non-teaching staff.",
+    },
+    {
         "codename": "attendance.correction.approve",
         "module": "attendance",
         "action": "approve",

@@ -14,13 +14,16 @@ from apps.academics.services import TimetableService
 from apps.attendance.models import (
     Holiday, HolidayType, SaturdayRule, OverrideType,
     WorkingDayConfig, SpecialDayOverride,
-    StudentDailyAttendance, AttendanceStatus, WEEKDAY_CHOICES
+    StudentDailyAttendance, AttendanceCorrectionRequest, StaffDailyAttendance, AttendanceStatus, WEEKDAY_CHOICES
 )
-from apps.attendance.services import CalendarService, StudentDailyAttendanceService
+from apps.attendance.services import (
+    CalendarService, StudentDailyAttendanceService,
+    StaffDailyAttendanceService, AttendanceReportService
+)
 from apps.identity.models import User, UserType
 from apps.rbac.models import Permission, Role, ScopeType, UserRoleAssignment
 from apps.school_config.models import AcademicYear
-from apps.students.models import Student, Guardian
+from apps.students.models import Student, Guardian, ClassEnrollment
 from common.exceptions import BusinessConflictError
 
 
@@ -117,6 +120,13 @@ class AttendanceTestBase(TestCase):
             start_time="08:30:00",
             end_time="09:15:00",
             is_break=False
+        )
+        cls.enrollment = ClassEnrollment.objects.create(
+            student=cls.student,
+            academic_year=cls.ay,
+            class_name="Class 10",
+            section_name="A",
+            roll_number=1
         )
 
     def create_user_with_permissions(self, username, perms):
@@ -813,3 +823,736 @@ class CalendarDashboardWebViewsTests(AttendanceTestBase):
         self.client.force_login(self.no_perm_user)
         res = self.client.get(reverse('attendance-calendar'))
         self.assertEqual(res.status_code, 302)  # Redirects to home-dashboard
+
+
+# ==============================================================================
+# 10. Daily Attendance Service & Scope Tests
+# ==============================================================================
+class DailyAttendanceServiceTests(AttendanceTestBase):
+
+    def setUp(self):
+        super().setUp()
+        # Create second student enrolled in same section
+        self.student2 = Student.objects.create(
+            admission_number="ADM-2027-002",
+            first_name="Priya",
+            last_name="Sharma",
+            date_of_birth=date(2013, 2, 10),
+            gender="F",
+            primary_guardian=self.guardian,
+            address="456 School Lane",
+            admission_date=date(2027, 4, 1)
+        )
+        self.enrollment2 = ClassEnrollment.objects.create(
+            student=self.student2,
+            academic_year=self.ay,
+            class_name="Class 10",
+            section_name="A",
+            roll_number=2
+        )
+
+    def test_get_section_roster_with_attendance(self):
+        # Target working date: Monday 2027-04-05
+        t_date = date(2027, 4, 5)
+        data = StudentDailyAttendanceService.get_section_roster_with_attendance(
+            academic_year=self.ay,
+            class_name="Class 10",
+            section_name="A",
+            target_date=t_date
+        )
+        self.assertEqual(data['total_students'], 2)
+        self.assertTrue(data['is_working'])
+        self.assertFalse(data['is_already_marked'])
+        self.assertEqual(len(data['roster']), 2)
+        self.assertEqual(data['roster'][0]['roll_number'], 1)
+        self.assertEqual(data['roster'][1]['roll_number'], 2)
+
+    def test_mark_individual_attendance_success(self):
+        t_date = date(2027, 4, 5)  # Monday
+        record = StudentDailyAttendanceService.mark_attendance(
+            student_id=self.student.pk,
+            academic_year_id=self.ay.pk,
+            attendance_date=t_date,
+            class_name="Class 10",
+            section_name="A",
+            status=AttendanceStatus.PRESENT,
+            remarks="On time",
+            actor=self.superuser
+        )
+        self.assertEqual(record.status, AttendanceStatus.PRESENT)
+        self.assertEqual(record.remarks, "On time")
+        self.assertEqual(record.student, self.student)
+        self.assertEqual(record.marked_by, self.superuser)
+
+    def test_mark_attendance_non_working_day_fails(self):
+        # 2027-04-04 is Sunday (non-working)
+        sunday_date = date(2027, 4, 4)
+        with self.assertRaises(ValidationError):
+            StudentDailyAttendanceService.mark_attendance(
+                student_id=self.student.pk,
+                academic_year_id=self.ay.pk,
+                attendance_date=sunday_date,
+                class_name="Class 10",
+                section_name="A",
+                status=AttendanceStatus.PRESENT
+            )
+
+    def test_mark_attendance_holiday_fails_without_override(self):
+        h_date = date(2027, 4, 14)  # Ambedkar Jayanti
+        Holiday.objects.create(
+            academic_year=self.ay,
+            title="Ambedkar Jayanti",
+            date=h_date,
+            holiday_type=HolidayType.GAZETTED
+        )
+        with self.assertRaises(ValidationError):
+            StudentDailyAttendanceService.mark_attendance(
+                student_id=self.student.pk,
+                academic_year_id=self.ay.pk,
+                attendance_date=h_date,
+                class_name="Class 10",
+                section_name="A",
+                status=AttendanceStatus.PRESENT
+            )
+
+    def test_mark_attendance_holiday_with_override_succeeds(self):
+        h_date = date(2027, 4, 14)
+        Holiday.objects.create(
+            academic_year=self.ay,
+            title="Ambedkar Jayanti",
+            date=h_date,
+            holiday_type=HolidayType.GAZETTED
+        )
+        # Create special working day override
+        SpecialDayOverride.objects.create(
+            academic_year=self.ay,
+            date=h_date,
+            is_working=True,
+            override_type=OverrideType.SPECIAL_WORKING,
+            timetable_weekday=3,  # Wednesday
+            reason="Special Examination Day",
+            created_by=self.superuser
+        )
+        record = StudentDailyAttendanceService.mark_attendance(
+            student_id=self.student.pk,
+            academic_year_id=self.ay.pk,
+            attendance_date=h_date,
+            class_name="Class 10",
+            section_name="A",
+            status=AttendanceStatus.PRESENT
+        )
+        self.assertEqual(record.status, AttendanceStatus.PRESENT)
+
+    def test_mark_attendance_unenrolled_student_fails(self):
+        t_date = date(2027, 4, 5)
+        # Attempt to mark attendance in Class 9 Section B where student is not enrolled
+        with self.assertRaises(ValidationError):
+            StudentDailyAttendanceService.mark_attendance(
+                student_id=self.student.pk,
+                academic_year_id=self.ay.pk,
+                attendance_date=t_date,
+                class_name="Class 9",
+                section_name="B",
+                status=AttendanceStatus.PRESENT
+            )
+
+    def test_duplicate_marking_updates_existing_record(self):
+        t_date = date(2027, 4, 5)
+        rec1 = StudentDailyAttendanceService.mark_attendance(
+            student_id=self.student.pk,
+            academic_year_id=self.ay.pk,
+            attendance_date=t_date,
+            class_name="Class 10",
+            section_name="A",
+            status=AttendanceStatus.PRESENT,
+            remarks="Present initial"
+        )
+        # Mark again on same date with ABSENT
+        rec2 = StudentDailyAttendanceService.mark_attendance(
+            student_id=self.student.pk,
+            academic_year_id=self.ay.pk,
+            attendance_date=t_date,
+            class_name="Class 10",
+            section_name="A",
+            status=AttendanceStatus.ABSENT,
+            remarks="Absent updated"
+        )
+        self.assertEqual(rec1.pk, rec2.pk)
+        self.assertEqual(rec2.status, AttendanceStatus.ABSENT)
+        self.assertEqual(rec2.remarks, "Absent updated")
+        self.assertEqual(StudentDailyAttendance.objects.filter(student=self.student, date=t_date).count(), 1)
+
+    def test_mark_bulk_attendance_success(self):
+        t_date = date(2027, 4, 5)
+        records = [
+            {
+                'student_id': self.student.pk,
+                'academic_year_id': self.ay.pk,
+                'date': t_date,
+                'class_name': "Class 10",
+                'section_name': "A",
+                'status': AttendanceStatus.PRESENT,
+                'remarks': "Regular"
+            },
+            {
+                'student_id': self.student2.pk,
+                'academic_year_id': self.ay.pk,
+                'date': t_date,
+                'class_name': "Class 10",
+                'section_name': "A",
+                'status': AttendanceStatus.ABSENT,
+                'remarks': "Sick leave"
+            }
+        ]
+        ids = StudentDailyAttendanceService.mark_bulk_attendance(records=records, actor=self.superuser)
+        self.assertEqual(len(ids), 2)
+        self.assertEqual(StudentDailyAttendance.objects.get(student=self.student, date=t_date).status, AttendanceStatus.PRESENT)
+        self.assertEqual(StudentDailyAttendance.objects.get(student=self.student2, date=t_date).status, AttendanceStatus.ABSENT)
+
+    def test_validate_user_attendance_scope(self):
+        # 1. Superuser has global access
+        self.assertTrue(StudentDailyAttendanceService.validate_user_attendance_scope(self.superuser, "Class 10", "A"))
+
+        # 2. Teacher assigned as class_teacher to Section A
+        self.section.class_teacher = self.teacher
+        self.section.save()
+        self.assertTrue(StudentDailyAttendanceService.validate_user_attendance_scope(self.teacher, "Class 10", "A"))
+
+        # 3. Another teacher without assignment or role is blocked
+        other_teacher = User.objects.create_user(
+            username="other_teacher",
+            email="other@school.edu",
+            password="Password123!"
+        )
+        self.assertFalse(StudentDailyAttendanceService.validate_user_attendance_scope(other_teacher, "Class 10", "A"))
+
+
+# ==============================================================================
+# 11. Attendance Correction Workflow Tests
+# ==============================================================================
+class AttendanceCorrectionWorkflowTests(AttendanceTestBase):
+
+    def setUp(self):
+        super().setUp()
+        # Create marked attendance record
+        self.t_date = date(2027, 4, 5)
+        self.attendance = StudentDailyAttendanceService.mark_attendance(
+            student_id=self.student.pk,
+            academic_year_id=self.ay.pk,
+            attendance_date=self.t_date,
+            class_name="Class 10",
+            section_name="A",
+            status=AttendanceStatus.ABSENT,
+            remarks="Marked absent by mistake",
+            actor=self.teacher
+        )
+
+    def test_submit_correction_request_success(self):
+        req = StudentDailyAttendanceService.submit_correction_request(
+            attendance_id=self.attendance.pk,
+            new_status=AttendanceStatus.PRESENT,
+            reason="Student arrived during period 2 with medical note",
+            user=self.teacher
+        )
+        self.assertEqual(req.attendance, self.attendance)
+        self.assertEqual(req.new_status, AttendanceStatus.PRESENT)
+        self.assertEqual(req.requested_by, self.teacher)
+        self.assertIsNone(req.is_approved)
+
+    def test_duplicate_pending_correction_fails(self):
+        StudentDailyAttendanceService.submit_correction_request(
+            attendance_id=self.attendance.pk,
+            new_status=AttendanceStatus.PRESENT,
+            reason="First request",
+            user=self.teacher
+        )
+        with self.assertRaises(BusinessConflictError):
+            StudentDailyAttendanceService.submit_correction_request(
+                attendance_id=self.attendance.pk,
+                new_status=AttendanceStatus.HALF_DAY,
+                reason="Second request while first is pending",
+                user=self.teacher
+            )
+
+    def test_review_correction_approve_updates_attendance(self):
+        req = StudentDailyAttendanceService.submit_correction_request(
+            attendance_id=self.attendance.pk,
+            new_status=AttendanceStatus.PRESENT,
+            reason="Was present in lab",
+            user=self.teacher
+        )
+        # Approver reviews and approves
+        reviewed = StudentDailyAttendanceService.review_correction_request(
+            request_id=req.pk,
+            is_approved=True,
+            review_notes="Verified by Principal",
+            user=self.superuser
+        )
+        self.assertTrue(reviewed.is_approved)
+        self.assertEqual(reviewed.reviewed_by, self.superuser)
+
+        # Target StudentDailyAttendance record is updated!
+        self.attendance.refresh_from_db()
+        self.assertEqual(self.attendance.status, AttendanceStatus.PRESENT)
+        self.assertIn("Corrected to PRESENT", self.attendance.remarks)
+
+    def test_review_correction_reject_keeps_original_status(self):
+        req = StudentDailyAttendanceService.submit_correction_request(
+            attendance_id=self.attendance.pk,
+            new_status=AttendanceStatus.PRESENT,
+            reason="Student claims was present",
+            user=self.teacher
+        )
+        # Approver rejects
+        reviewed = StudentDailyAttendanceService.review_correction_request(
+            request_id=req.pk,
+            is_approved=False,
+            review_notes="No evidence found in CCTV",
+            user=self.superuser
+        )
+        self.assertFalse(reviewed.is_approved)
+
+        # Status remains ABSENT
+        self.attendance.refresh_from_db()
+        self.assertEqual(self.attendance.status, AttendanceStatus.ABSENT)
+
+    def test_review_already_reviewed_request_fails(self):
+        req = StudentDailyAttendanceService.submit_correction_request(
+            attendance_id=self.attendance.pk,
+            new_status=AttendanceStatus.PRESENT,
+            reason="Reason",
+            user=self.teacher
+        )
+        StudentDailyAttendanceService.review_correction_request(
+            request_id=req.pk,
+            is_approved=True,
+            review_notes="Approved",
+            user=self.superuser
+        )
+        with self.assertRaises(BusinessConflictError):
+            StudentDailyAttendanceService.review_correction_request(
+                request_id=req.pk,
+                is_approved=False,
+                review_notes="Cannot review twice",
+                user=self.superuser
+            )
+
+
+# ==============================================================================
+# 12. Daily Attendance & Corrections Web Views Tests
+# ==============================================================================
+class AttendanceDailyWebViewsTests(AttendanceTestBase):
+
+    def setUp(self):
+        super().setUp()
+        self.section.class_teacher = self.teacher
+        self.section.save()
+        role = Role.objects.create(name="Class Teacher Attendance Role", code="ROLE_TEACHER_ATT")
+        for p_code in ['attendance.record.view', 'attendance.record.mark', 'attendance.record.correct']:
+            perm = Permission.objects.get(codename=p_code)
+            role.permissions.add(perm)
+        UserRoleAssignment.objects.create(
+            user=self.teacher, role=role, scope_type=ScopeType.GLOBAL, is_active=True
+        )
+
+    def test_daily_attendance_view_get_authenticated(self):
+        self.client.force_login(self.superuser)
+        res = self.client.get(
+            reverse('attendance-daily'),
+            {
+                'year': self.ay.pk,
+                'class_id': self.school_class.pk,
+                'section_name': 'A',
+                'date': '2027-04-05'
+            }
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "Daily Student Attendance")
+        self.assertContains(res, "Aarav")
+        self.assertContains(res, "ADM-2027-001")
+
+    def test_daily_attendance_view_post_save_success(self):
+        self.client.force_login(self.superuser)
+        res = self.client.post(
+            f"{reverse('attendance-daily')}?year={self.ay.pk}&class_id={self.school_class.pk}&section_name=A&date=2027-04-05",
+            {
+                'action': 'save_attendance',
+                'student_ids': [self.student.pk],
+                f'status_{self.student.pk}': 'PRESENT',
+                f'remarks_{self.student.pk}': 'All good',
+            }
+        )
+        self.assertEqual(res.status_code, 302)
+        rec = StudentDailyAttendance.objects.filter(student=self.student, date='2027-04-05').first()
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec.status, AttendanceStatus.PRESENT)
+
+    def test_daily_attendance_view_post_blocked_on_non_working_day(self):
+        self.client.force_login(self.superuser)
+        # 2027-04-04 is Sunday
+        res = self.client.post(
+            f"{reverse('attendance-daily')}?year={self.ay.pk}&class_id={self.school_class.pk}&section_name=A&date=2027-04-04",
+            {
+                'action': 'save_attendance',
+                'student_ids': [self.student.pk],
+                f'status_{self.student.pk}': 'PRESENT',
+            }
+        )
+        self.assertEqual(res.status_code, 302)
+        # Attendance must NOT be saved!
+        self.assertFalse(StudentDailyAttendance.objects.filter(student=self.student, date='2027-04-04').exists())
+
+    def test_daily_attendance_view_post_submit_correction(self):
+        # Create marked record first
+        att = StudentDailyAttendanceService.mark_attendance(
+            student_id=self.student.pk,
+            academic_year_id=self.ay.pk,
+            attendance_date=date(2027, 4, 5),
+            class_name="Class 10",
+            section_name="A",
+            status=AttendanceStatus.ABSENT,
+            actor=self.teacher
+        )
+        self.client.force_login(self.teacher)
+        res = self.client.post(
+            f"{reverse('attendance-daily')}?year={self.ay.pk}&class_id={self.school_class.pk}&section_name=A&date=2027-04-05",
+            {
+                'action': 'submit_correction',
+                'attendance_id': att.pk,
+                'new_status': 'PRESENT',
+                'reason': 'Student arrived late with gate pass'
+            }
+        )
+        self.assertEqual(res.status_code, 302)
+        req = AttendanceCorrectionRequest.objects.filter(attendance=att).first()
+        self.assertIsNotNone(req)
+        self.assertEqual(req.new_status, AttendanceStatus.PRESENT)
+
+    def test_corrections_list_view_get(self):
+        self.client.force_login(self.superuser)
+        res = self.client.get(reverse('attendance-corrections'))
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "Attendance Correction Requests")
+
+    def test_corrections_list_view_post_review(self):
+        att = StudentDailyAttendanceService.mark_attendance(
+            student_id=self.student.pk,
+            academic_year_id=self.ay.pk,
+            attendance_date=date(2027, 4, 5),
+            class_name="Class 10",
+            section_name="A",
+            status=AttendanceStatus.ABSENT,
+            actor=self.teacher
+        )
+        req = StudentDailyAttendanceService.submit_correction_request(
+            attendance_id=att.pk,
+            new_status=AttendanceStatus.PRESENT,
+            reason="Valid medical note",
+            user=self.teacher
+        )
+        self.client.force_login(self.superuser)
+        res = self.client.post(
+            reverse('attendance-corrections'),
+            {
+                'action': 'review_correction',
+                'request_id': req.pk,
+                'decision': 'approve',
+                'review_notes': 'Approved by Admin'
+            }
+        )
+        self.assertEqual(res.status_code, 302)
+        req.refresh_from_db()
+        self.assertTrue(req.is_approved)
+        att.refresh_from_db()
+        self.assertEqual(att.status, AttendanceStatus.PRESENT)
+
+
+# ==============================================================================
+# 13. Daily Attendance REST API Tests
+# ==============================================================================
+class AttendanceDailyAPITests(AttendanceTestBase):
+
+    def setUp(self):
+        super().setUp()
+        self.client = APIClient()
+
+    def test_api_roster_endpoint(self):
+        self.client.force_authenticate(user=self.superuser)
+        url = reverse('daily-attendance-roster')
+        res = self.client.get(url, {
+            'academic_year': self.ay.pk,
+            'class_name': 'Class 10',
+            'section_name': 'A',
+            'date': '2027-04-05'
+        })
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data['is_working'])
+        self.assertEqual(len(res.data['roster']), 1)
+        self.assertEqual(res.data['roster'][0]['admission_number'], 'ADM-2027-001')
+
+    def test_api_mark_bulk_endpoint(self):
+        self.client.force_authenticate(user=self.superuser)
+        url = reverse('daily-attendance-mark-bulk')
+        res = self.client.post(url, {
+            'records': [
+                {
+                    'student_id': self.student.pk,
+                    'academic_year_id': self.ay.pk,
+                    'class_name': 'Class 10',
+                    'section_name': 'A',
+                    'date': '2027-04-05',
+                    'status': 'PRESENT',
+                    'remarks': 'Via API'
+                }
+            ]
+        }, format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['updated_count'], 1)
+
+    def test_api_correction_review_endpoint(self):
+        att = StudentDailyAttendanceService.mark_attendance(
+            student_id=self.student.pk,
+            academic_year_id=self.ay.pk,
+            attendance_date=date(2027, 4, 5),
+            class_name="Class 10",
+            section_name="A",
+            status=AttendanceStatus.ABSENT,
+            actor=self.superuser
+        )
+        req = StudentDailyAttendanceService.submit_correction_request(
+            attendance_id=att.pk,
+            new_status=AttendanceStatus.HALF_DAY,
+            reason="Left after lunch",
+            user=self.superuser
+        )
+        self.client.force_authenticate(user=self.superuser)
+        url = reverse('attendance-correction-review', kwargs={'pk': req.pk})
+        res = self.client.post(url, {
+            'is_approved': True,
+            'review_notes': 'Approved over API'
+        }, format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        att.refresh_from_db()
+        self.assertEqual(att.status, AttendanceStatus.HALF_DAY)
+
+
+# ==============================================================================
+# 14. Staff Daily Attendance Service Tests
+# ==============================================================================
+class StaffDailyAttendanceServiceTests(AttendanceTestBase):
+
+    def setUp(self):
+        super().setUp()
+        self.staff_member = User.objects.create_user(
+            username="staff_sunil",
+            email="sunil@school.edu",
+            password="Password123!",
+            user_type=UserType.STAFF,
+            first_name="Sunil",
+            last_name="Kumar"
+        )
+
+    def test_get_staff_roster_with_attendance(self):
+        t_date = date(2027, 4, 5)  # Monday
+        data = StaffDailyAttendanceService.get_staff_roster_with_attendance(t_date)
+        self.assertTrue(data['is_working'])
+        self.assertGreaterEqual(data['total_staff'], 2)
+        usernames = [r['user'].username for r in data['roster']]
+        self.assertIn("teacher_sharma", usernames)
+        self.assertIn("staff_sunil", usernames)
+
+    def test_mark_individual_staff_attendance_success(self):
+        t_date = date(2027, 4, 5)
+        rec = StaffDailyAttendanceService.mark_staff_attendance(
+            user_id=self.teacher.pk,
+            attendance_date=t_date,
+            status=AttendanceStatus.PRESENT,
+            remarks="Present in morning assembly",
+            actor=self.superuser
+        )
+        self.assertEqual(rec.status, AttendanceStatus.PRESENT)
+        self.assertEqual(rec.remarks, "Present in morning assembly")
+        self.assertEqual(rec.user, self.teacher)
+
+    def test_mark_staff_attendance_non_working_day_fails(self):
+        sunday_date = date(2027, 4, 4)
+        with self.assertRaises(ValidationError):
+            StaffDailyAttendanceService.mark_staff_attendance(
+                user_id=self.teacher.pk,
+                attendance_date=sunday_date,
+                status=AttendanceStatus.PRESENT
+            )
+
+    def test_duplicate_staff_attendance_updates_record(self):
+        t_date = date(2027, 4, 5)
+        rec1 = StaffDailyAttendanceService.mark_staff_attendance(
+            user_id=self.teacher.pk,
+            attendance_date=t_date,
+            status=AttendanceStatus.PRESENT,
+            remarks="First entry"
+        )
+        rec2 = StaffDailyAttendanceService.mark_staff_attendance(
+            user_id=self.teacher.pk,
+            attendance_date=t_date,
+            status=AttendanceStatus.LEAVE,
+            remarks="Applied casual leave"
+        )
+        self.assertEqual(rec1.pk, rec2.pk)
+        self.assertEqual(rec2.status, AttendanceStatus.LEAVE)
+        self.assertEqual(StaffDailyAttendance.objects.filter(user=self.teacher, date=t_date).count(), 1)
+
+    def test_mark_bulk_staff_attendance_success(self):
+        t_date = date(2027, 4, 5)
+        records = [
+            {'user_id': self.teacher.pk, 'status': 'PRESENT', 'remarks': 'On duty'},
+            {'user_id': self.staff_member.pk, 'status': 'HALF_DAY', 'remarks': 'Half day leave'}
+        ]
+        ids = StaffDailyAttendanceService.mark_bulk_staff_attendance(records, t_date, actor=self.superuser)
+        self.assertEqual(len(ids), 2)
+        self.assertEqual(StaffDailyAttendance.objects.get(user=self.teacher, date=t_date).status, AttendanceStatus.PRESENT)
+        self.assertEqual(StaffDailyAttendance.objects.get(user=self.staff_member, date=t_date).status, AttendanceStatus.HALF_DAY)
+
+
+# ==============================================================================
+# 15. Attendance Reports & Shortage Analysis Tests
+# ==============================================================================
+class AttendanceReportServiceTests(AttendanceTestBase):
+
+    def setUp(self):
+        super().setUp()
+        days = [date(2027, 4, 5), date(2027, 4, 6), date(2027, 4, 7), date(2027, 4, 8)]
+        for d in days:
+            StudentDailyAttendanceService.mark_attendance(
+                student_id=self.student.pk,
+                academic_year_id=self.ay.pk,
+                attendance_date=d,
+                class_name="Class 10",
+                section_name="A",
+                status=AttendanceStatus.PRESENT
+            )
+        StudentDailyAttendanceService.mark_attendance(
+            student_id=self.student.pk,
+            academic_year_id=self.ay.pk,
+            attendance_date=date(2027, 4, 9),
+            class_name="Class 10",
+            section_name="A",
+            status=AttendanceStatus.ABSENT
+        )
+
+    def test_get_student_attendance_summary(self):
+        summary = AttendanceReportService.get_student_attendance_summary(
+            academic_year=self.ay,
+            class_name="Class 10",
+            section_name="A",
+            start_date="2027-04-05",
+            end_date="2027-04-09",
+            threshold=75.0
+        )
+        self.assertEqual(summary['total_working_days'], 5)
+        self.assertEqual(len(summary['rows']), 1)
+        row = summary['rows'][0]
+        self.assertEqual(row['present_days'], 4)
+        self.assertEqual(row['absent_days'], 1)
+        self.assertEqual(row['percentage'], 80.0)
+        self.assertFalse(row['is_shortage'])
+
+    def test_attendance_shortage_alert_flag(self):
+        summary = AttendanceReportService.get_student_attendance_summary(
+            academic_year=self.ay,
+            class_name="Class 10",
+            section_name="A",
+            start_date="2027-04-05",
+            end_date="2027-04-09",
+            threshold=85.0
+        )
+        row = summary['rows'][0]
+        self.assertTrue(row['is_shortage'])
+        self.assertEqual(summary['shortage_count'], 1)
+
+    def test_get_staff_attendance_summary(self):
+        StaffDailyAttendanceService.mark_staff_attendance(
+            user_id=self.teacher.pk,
+            attendance_date=date(2027, 4, 5),
+            status=AttendanceStatus.PRESENT
+        )
+        summary = AttendanceReportService.get_staff_attendance_summary(
+            start_date="2027-04-05",
+            end_date="2027-04-09"
+        )
+        self.assertGreaterEqual(summary['total_staff'], 1)
+        teacher_row = next((r for r in summary['rows'] if r['user'] == self.teacher), None)
+        self.assertIsNotNone(teacher_row)
+        self.assertEqual(teacher_row['present_days'], 1)
+
+    def test_export_csv(self):
+        headers = ['Name', 'Attendance %']
+        rows = [['Aarav Verma', '80.0%']]
+        response = AttendanceReportService.export_csv("test_report.csv", headers, rows)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'text/csv')
+        self.assertIn('Aarav Verma,80.0%', response.content.decode('utf-8'))
+
+
+# ==============================================================================
+# 16. Staff Attendance & Reports Web Views Tests
+# ==============================================================================
+class StaffAttendanceAndReportsWebViewsTests(AttendanceTestBase):
+
+    def test_staff_attendance_web_view_get(self):
+        self.client.force_login(self.superuser)
+        res = self.client.get(reverse('attendance-staff'), {'date': '2027-04-05'})
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "Staff Daily Attendance")
+        self.assertContains(res, "teacher_sharma")
+
+    def test_staff_attendance_web_view_post_save(self):
+        self.client.force_login(self.superuser)
+        res = self.client.post(
+            f"{reverse('attendance-staff')}?date=2027-04-05",
+            {
+                'action': 'save_staff_attendance',
+                'user_ids': [self.teacher.pk],
+                f'status_{self.teacher.pk}': 'PRESENT',
+                f'remarks_{self.teacher.pk}': 'On duty',
+            }
+        )
+        self.assertEqual(res.status_code, 302)
+        rec = StaffDailyAttendance.objects.filter(user=self.teacher, date='2027-04-05').first()
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec.status, AttendanceStatus.PRESENT)
+
+    def test_attendance_reports_web_view_get(self):
+        self.client.force_login(self.superuser)
+        res = self.client.get(
+            reverse('attendance-reports'),
+            {
+                'report_type': 'student_summary',
+                'year': self.ay.pk,
+                'class_id': self.school_class.pk,
+                'section_name': 'A',
+                'start_date': '2027-04-05',
+                'end_date': '2027-04-09'
+            }
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "Attendance Analytics & Reports")
+        self.assertContains(res, "Student Section Attendance Report")
+
+    def test_attendance_reports_web_view_csv_export(self):
+        self.client.force_login(self.superuser)
+        res = self.client.get(
+            reverse('attendance-reports'),
+            {
+                'report_type': 'student_summary',
+                'year': self.ay.pk,
+                'class_id': self.school_class.pk,
+                'section_name': 'A',
+                'start_date': '2027-04-05',
+                'end_date': '2027-04-09',
+                'export': 'csv'
+            }
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res['Content-Type'], 'text/csv')
+        self.assertIn('Aarav Verma', res.content.decode('utf-8'))
+

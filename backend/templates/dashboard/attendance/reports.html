@@ -1,0 +1,336 @@
+{% extends 'dashboard/base.html' %}
+
+{% block admin %}
+<div class="container-fluid px-0">
+    <!-- Header with Title & Navigation -->
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
+        <div>
+            <h3 class="fw-bold mb-1 text-dark">Attendance Analytics & Reports</h3>
+            <p class="text-muted mb-0 small">Section-wise attendance percentage, shortage alerts (&lt;75%), and comprehensive exports.</p>
+        </div>
+        <div class="d-flex align-items-center gap-2">
+            <a href="{% url 'attendance-daily' %}" class="btn btn-outline-secondary btn-sm shadow-sm">
+                <i class="ti ti-checklist me-1"></i> Student Attendance
+            </a>
+            <a href="{% url 'attendance-staff' %}" class="btn btn-outline-secondary btn-sm shadow-sm">
+                <i class="ti ti-clipboard-check me-1"></i> Staff Attendance
+            </a>
+        </div>
+    </div>
+
+    <!-- Django Messages Alerts -->
+    {% if messages %}
+    <div class="mb-3">
+        {% for message in messages %}
+        <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show shadow-sm" role="alert">
+            <i class="ti ti-info-circle me-1"></i> {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Report Type Selector Tabs -->
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-header bg-white border-bottom py-2">
+            <ul class="nav nav-pills card-header-pills gap-1">
+                <li class="nav-item">
+                    <a class="nav-link {% if report_type == 'student_summary' %}active{% endif %} py-1 px-3" href="?report_type=student_summary">
+                        <i class="ti ti-users me-1"></i> Student Attendance Summary
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link {% if report_type == 'shortage_alert' %}active{% endif %} py-1 px-3" href="?report_type=shortage_alert">
+                        <i class="ti ti-alert-triangle me-1"></i> Shortage Alert (&lt;75%)
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link {% if report_type == 'staff_summary' %}active{% endif %} py-1 px-3" href="?report_type=staff_summary">
+                        <i class="ti ti-briefcase me-1"></i> Staff Attendance Summary
+                    </a>
+                </li>
+            </ul>
+        </div>
+
+        <div class="card-body p-3 p-md-4">
+            <form method="GET" class="row g-3 align-items-end">
+                <input type="hidden" name="report_type" value="{{ report_type }}">
+
+                {% if report_type != 'staff_summary' %}
+                <div class="col-md-2">
+                    <label for="filterYear" class="form-label small fw-semibold text-muted">Session</label>
+                    <select id="filterYear" name="year" class="form-select form-select-sm shadow-sm" onchange="this.form.submit()">
+                        {% for ay in academic_years %}
+                        <option value="{{ ay.pk }}" {% if selected_year and selected_year.pk == ay.pk %}selected{% endif %}>
+                            {{ ay.name }} {% if ay.is_current %}(Current){% endif %}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="col-md-2">
+                    <label for="filterClass" class="form-label small fw-semibold text-muted">Class</label>
+                    <select id="filterClass" name="class_id" class="form-select form-select-sm shadow-sm" onchange="this.form.submit()">
+                        <option value="">-- Select Class --</option>
+                        {% for cl in classes %}
+                        <option value="{{ cl.pk }}" {% if selected_class and selected_class.pk == cl.pk %}selected{% endif %}>
+                            {{ cl.name }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="col-md-2">
+                    <label for="filterSection" class="form-label small fw-semibold text-muted">Section</label>
+                    <select id="filterSection" name="section_name" class="form-select form-select-sm shadow-sm" {% if not selected_class %}disabled{% endif %}>
+                        <option value="">-- Select --</option>
+                        {% for sec in sections %}
+                        <option value="{{ sec.name }}" {% if selected_section_name == sec.name %}selected{% endif %}>
+                            Section {{ sec.name }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="col-md-2">
+                    <label for="filterStart" class="form-label small fw-semibold text-muted">From Date</label>
+                    <input type="date" id="filterStart" name="start_date" class="form-control form-control-sm shadow-sm" value="{{ start_date_str }}" required>
+                </div>
+
+                <div class="col-md-2">
+                    <label for="filterEnd" class="form-label small fw-semibold text-muted">To Date</label>
+                    <input type="date" id="filterEnd" name="end_date" class="form-control form-control-sm shadow-sm" value="{{ end_date_str }}" required>
+                </div>
+
+                <div class="col-md-1">
+                    <label for="filterThreshold" class="form-label small fw-semibold text-muted">Min %</label>
+                    <input type="number" id="filterThreshold" name="threshold" class="form-control form-control-sm shadow-sm" value="{{ threshold }}" min="1" max="100" step="1">
+                </div>
+
+                <div class="col-md-1">
+                    <button type="submit" class="btn btn-primary btn-sm w-100 shadow-sm">
+                        <i class="ti ti-search me-1"></i> View
+                    </button>
+                </div>
+                {% else %}
+                <!-- Staff Report Filters -->
+                <div class="col-md-3">
+                    <label for="staffDept" class="form-label small fw-semibold text-muted">Department</label>
+                    <select id="staffDept" name="department" class="form-select form-select-sm shadow-sm">
+                        <option value="">All Departments</option>
+                        {% for dept in departments %}
+                        <option value="{{ dept.pk }}" {% if department_id == dept.pk|stringformat:"s" %}selected{% endif %}>
+                            {{ dept.name }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="col-md-3">
+                    <label for="filterStartStaff" class="form-label small fw-semibold text-muted">From Date</label>
+                    <input type="date" id="filterStartStaff" name="start_date" class="form-control form-control-sm shadow-sm" value="{{ start_date_str }}" required>
+                </div>
+
+                <div class="col-md-3">
+                    <label for="filterEndStaff" class="form-label small fw-semibold text-muted">To Date</label>
+                    <input type="date" id="filterEndStaff" name="end_date" class="form-control form-control-sm shadow-sm" value="{{ end_date_str }}" required>
+                </div>
+
+                <div class="col-md-3">
+                    <button type="submit" class="btn btn-primary btn-sm w-100 shadow-sm">
+                        <i class="ti ti-search me-1"></i> Generate Report
+                    </button>
+                </div>
+                {% endif %}
+            </form>
+        </div>
+    </div>
+
+    <!-- Report Output Section -->
+    {% if report_data %}
+        <!-- Summary Cards -->
+        <div class="row g-3 mb-4">
+            <div class="col-6 col-md-3">
+                <div class="card border-0 shadow-sm text-center py-3">
+                    <small class="text-muted fw-semibold">Working Days in Period</small>
+                    <h3 class="fw-bold mb-0 text-dark">{{ report_data.total_working_days }}</h3>
+                    <small class="text-muted">Operational days</small>
+                </div>
+            </div>
+
+            <div class="col-6 col-md-3">
+                <div class="card border-0 shadow-sm text-center py-3 border-start border-4 border-primary">
+                    <small class="text-primary fw-semibold">Evaluated Count</small>
+                    <h3 class="fw-bold mb-0 text-primary">
+                        {% if report_type == 'staff_summary' %}{{ report_data.total_staff }}{% else %}{{ report_data.total_students }}{% endif %}
+                    </h3>
+                    <small class="text-muted">Total records</small>
+                </div>
+            </div>
+
+            <div class="col-6 col-md-3">
+                <div class="card border-0 shadow-sm text-center py-3 border-start border-4 border-success">
+                    <small class="text-success fw-semibold">Average Attendance</small>
+                    <h3 class="fw-bold mb-0 text-success">{{ report_data.average_percentage }}%</h3>
+                    <small class="text-muted">Overall rate</small>
+                </div>
+            </div>
+
+            <div class="col-6 col-md-3">
+                <div class="card border-0 shadow-sm text-center py-3 border-start border-4 {% if report_data.shortage_count %}border-danger{% else %}border-secondary{% endif %}">
+                    <small class="{% if report_data.shortage_count %}text-danger{% else %}text-muted{% endif %} fw-semibold">
+                        Shortage (&lt;{{ threshold }}%)
+                    </small>
+                    <h3 class="fw-bold mb-0 {% if report_data.shortage_count %}text-danger{% else %}text-muted{% endif %}">
+                        {{ report_data.shortage_count|default:"0" }}
+                    </h3>
+                    <small class="text-muted">Students below threshold</small>
+                </div>
+            </div>
+        </div>
+
+        <!-- Detailed Table Card -->
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white border-bottom py-3 d-flex flex-wrap align-items-center justify-content-between gap-2">
+                <div>
+                    <h5 class="card-title mb-0 fw-bold text-dark">
+                        <i class="ti ti-file-analytics text-primary me-2"></i>
+                        {% if report_type == 'shortage_alert' %}
+                            Attendance Shortage Report (&lt;{{ threshold }}%)
+                        {% elif report_type == 'staff_summary' %}
+                            Staff Attendance Summary Report
+                        {% else %}
+                            Student Section Attendance Report
+                        {% endif %}
+                    </h5>
+                    <small class="text-muted">
+                        Range: {{ start_date_str }} to {{ end_date_str }} &bull;
+                        {% if selected_class %}Class {{ selected_class.name }} - {{ selected_section_name }}{% endif %}
+                    </small>
+                </div>
+
+                {% if can_export %}
+                <div>
+                    <a href="{{ request.get_full_path }}&export=csv" class="btn btn-outline-success btn-sm shadow-sm">
+                        <i class="ti ti-download me-1"></i> Export to CSV
+                    </a>
+                </div>
+                {% endif %}
+            </div>
+
+            <div class="card-body p-0">
+                {% if report_data.rows %}
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light text-muted small text-uppercase">
+                            <tr>
+                                {% if report_type != 'staff_summary' %}
+                                <th class="ps-3" style="width: 70px;">Roll</th>
+                                <th style="width: 120px;">Adm No.</th>
+                                <th>Student Name</th>
+                                <th class="text-center text-success" style="width: 80px;">Present</th>
+                                <th class="text-center text-warning" style="width: 80px;">Half Day</th>
+                                <th class="text-center text-danger" style="width: 80px;">Absent</th>
+                                <th class="text-center text-info" style="width: 80px;">Leave</th>
+                                <th class="text-center" style="width: 100px;">Effective</th>
+                                <th style="min-width: 180px;">Attendance %</th>
+                                <th class="text-end pe-3" style="width: 130px;">Status</th>
+                                {% else %}
+                                <th class="ps-3">Staff Member</th>
+                                <th>Department</th>
+                                <th>Designation</th>
+                                <th class="text-center text-success" style="width: 80px;">Present</th>
+                                <th class="text-center text-warning" style="width: 80px;">Half Day</th>
+                                <th class="text-center text-danger" style="width: 80px;">Absent</th>
+                                <th class="text-center text-info" style="width: 80px;">Leave</th>
+                                <th style="min-width: 180px;">Attendance %</th>
+                                {% endif %}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for r in report_data.rows %}
+                            <tr>
+                                {% if report_type != 'staff_summary' %}
+                                <td class="ps-3 fw-bold text-dark">{{ r.roll_number|default:"-" }}</td>
+                                <td>
+                                    <span class="badge bg-light text-dark border font-monospace">{{ r.admission_number }}</span>
+                                </td>
+                                <td>
+                                    <div class="fw-semibold text-dark">{{ r.name }}</div>
+                                </td>
+                                <td class="text-center fw-semibold text-success">{{ r.present_days }}</td>
+                                <td class="text-center fw-semibold text-warning">{{ r.half_days }}</td>
+                                <td class="text-center fw-semibold text-danger">{{ r.absent_days }}</td>
+                                <td class="text-center fw-semibold text-info">{{ r.leave_days }}</td>
+                                <td class="text-center fw-bold text-dark">{{ r.effective_attendance }} / {{ r.total_working_days }}</td>
+                                <td>
+                                    <div class="d-flex align-items-center gap-2">
+                                        <div class="progress flex-grow-1" style="height: 8px;">
+                                            <div class="progress-bar {% if r.percentage >= 75 %}bg-success{% elif r.percentage >= 60 %}bg-warning{% else %}bg-danger{% endif %}" role="progressbar" style="width: {{ r.percentage }}%;" aria-valuenow="{{ r.percentage }}" aria-valuemin="0" aria-valuemax="100"></div>
+                                        </div>
+                                        <span class="small fw-bold {% if r.is_shortage %}text-danger{% else %}text-dark{% endif %}" style="min-width: 45px;">
+                                            {{ r.percentage }}%
+                                        </span>
+                                    </div>
+                                </td>
+                                <td class="text-end pe-3">
+                                    {% if r.is_shortage %}
+                                    <span class="badge bg-danger-subtle text-danger border border-danger-subtle">
+                                        <i class="ti ti-alert-triangle me-1"></i> Shortage
+                                    </span>
+                                    {% else %}
+                                    <span class="badge bg-success-subtle text-success border border-success-subtle">
+                                        <i class="ti ti-check me-1"></i> Regular
+                                    </span>
+                                    {% endif %}
+                                </td>
+                                {% else %}
+                                <td class="ps-3">
+                                    <div class="fw-semibold text-dark">{{ r.name }}</div>
+                                    <small class="text-muted">{{ r.user.email }}</small>
+                                </td>
+                                <td>{{ r.department }}</td>
+                                <td>{{ r.designation }}</td>
+                                <td class="text-center fw-semibold text-success">{{ r.present_days }}</td>
+                                <td class="text-center fw-semibold text-warning">{{ r.half_days }}</td>
+                                <td class="text-center fw-semibold text-danger">{{ r.absent_days }}</td>
+                                <td class="text-center fw-semibold text-info">{{ r.leave_days }}</td>
+                                <td>
+                                    <div class="d-flex align-items-center gap-2">
+                                        <div class="progress flex-grow-1" style="height: 8px;">
+                                            <div class="progress-bar bg-success" role="progressbar" style="width: {{ r.percentage }}%;" aria-valuenow="{{ r.percentage }}" aria-valuemin="0" aria-valuemax="100"></div>
+                                        </div>
+                                        <span class="small fw-bold text-dark" style="min-width: 45px;">
+                                            {{ r.percentage }}%
+                                        </span>
+                                    </div>
+                                </td>
+                                {% endif %}
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="text-center py-5">
+                    <i class="ti ti-file-search fs-1 text-muted d-block mb-2"></i>
+                    <h6 class="fw-bold text-dark mb-1">No Records Found</h6>
+                    <p class="text-muted small mb-0">No attendance data matching the selected filters and date range.</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    {% else %}
+        <!-- Guide / Empty State before filter selection -->
+        <div class="card border-0 shadow-sm text-center py-5">
+            <div class="card-body">
+                <i class="ti ti-chart-dots text-primary fs-1 mb-3 d-block"></i>
+                <h5 class="fw-bold text-dark mb-2">Generate Attendance Reports</h5>
+                <p class="text-muted small max-w-500 mx-auto mb-0">
+                    Select a class, section, and date range above and click <strong>View</strong> to inspect student attendance rates, calculate shortage thresholds, or export authorized CSV reports.
+                </p>
+            </div>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

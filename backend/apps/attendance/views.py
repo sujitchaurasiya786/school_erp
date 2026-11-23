@@ -409,6 +409,7 @@ class StudentDailyAttendanceViewSet(viewsets.ModelViewSet):
     action_permission_map = {
         'list': 'attendance.record.view',
         'retrieve': 'attendance.record.view',
+        'roster': 'attendance.record.view',
         'create': 'attendance.record.mark',
         'update': 'attendance.record.mark',
         'partial_update': 'attendance.record.mark',
@@ -416,6 +417,72 @@ class StudentDailyAttendanceViewSet(viewsets.ModelViewSet):
         'mark_bulk': 'attendance.record.mark',
     }
     filterset_fields = ['class_name', 'section_name', 'date', 'status', 'academic_year']
+
+    @action(detail=False, methods=['get'])
+    def roster(self, request):
+        """
+        Retrieves section roster with attendance for an academic year, class, section, date.
+        """
+        ay_id = request.query_params.get('academic_year')
+        class_name = request.query_params.get('class_name')
+        section_name = request.query_params.get('section_name')
+        date_val = request.query_params.get('date', str(date.today()))
+
+        if not class_name or not section_name:
+            return Response({'error': "class_name and section_name are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        current_ay = None
+        if ay_id:
+            try:
+                current_ay = AcademicYear.objects.get(pk=ay_id)
+            except AcademicYear.DoesNotExist:
+                return Response({'error': f"Academic year {ay_id} not found."}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            current_ay = AcademicYear.objects.filter(is_current=True).first()
+            if not current_ay:
+                return Response({'error': "No active academic year found."}, status=status.HTTP_400_BAD_REQUEST)
+
+        can_mark = StudentDailyAttendanceService.validate_user_attendance_scope(request.user, class_name, section_name)
+        if not can_mark and not request.user.is_superuser:
+            return Response({'error': "You are not authorized to view attendance for this section."}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            data = StudentDailyAttendanceService.get_section_roster_with_attendance(
+                academic_year=current_ay,
+                class_name=class_name,
+                section_name=section_name,
+                target_date=date_val
+            )
+        except DjangoValidationError as err:
+            return Response({'error': err.message_dict if hasattr(err, 'message_dict') else err.messages}, status=status.HTTP_400_BAD_REQUEST)
+
+        roster_data = []
+        for r in data['roster']:
+            roster_data.append({
+                'student_id': r['student'].id,
+                'admission_number': r['student'].admission_number,
+                'name': r['student'].full_name,
+                'roll_number': r['roll_number'],
+                'status': r['current_status'],
+                'remarks': r['remarks'],
+                'attendance_id': r['attendance'].id if r['attendance'] else None,
+                'pending_correction': bool(r['pending_correction']),
+                'pending_correction_id': r['pending_correction'].id if r['pending_correction'] else None,
+            })
+
+        return Response({
+            'academic_year': current_ay.id,
+            'academic_year_name': current_ay.name,
+            'class_name': class_name,
+            'section_name': section_name,
+            'date': str(data['date']),
+            'is_working': data['is_working'],
+            'calendar_reason': data['calendar_status'].get('reason'),
+            'calendar_type': data['calendar_status'].get('type'),
+            'is_already_marked': data['is_already_marked'],
+            'counts': data['counts'],
+            'roster': roster_data
+        })
 
     def perform_create(self, serializer):
         data = serializer.validated_data
@@ -458,7 +525,7 @@ class StudentDailyAttendanceViewSet(viewsets.ModelViewSet):
 
 
 class AttendanceCorrectionRequestViewSet(viewsets.ModelViewSet):
-    queryset = AttendanceCorrectionRequest.objects.all()
+    queryset = AttendanceCorrectionRequest.objects.select_related('attendance', 'attendance__student', 'requested_by', 'reviewed_by').all()
     serializer_class = AttendanceCorrectionRequestSerializer
     permission_classes = [IsAuthenticated, HasDynamicPermission]
     module_name = 'attendance'
@@ -469,7 +536,45 @@ class AttendanceCorrectionRequestViewSet(viewsets.ModelViewSet):
         'update': 'attendance.correction.approve',
         'partial_update': 'attendance.correction.approve',
         'destroy': 'attendance.correction.approve',
+        'review': 'attendance.correction.approve',
     }
 
     def perform_create(self, serializer):
-        serializer.save(requested_by=self.request.user)
+        data = serializer.validated_data
+        try:
+            req = StudentDailyAttendanceService.submit_correction_request(
+                attendance_id=data['attendance'].pk,
+                new_status=data['new_status'],
+                reason=data.get('reason', ''),
+                user=self.request.user,
+                request=self.request
+            )
+            serializer.instance = req
+        except DjangoValidationError as err:
+            raise drf_serializers.ValidationError(err.message_dict if hasattr(err, 'message_dict') else err.messages)
+        except BusinessConflictError as err:
+            raise drf_serializers.ValidationError({'detail': str(err)})
+
+    @action(detail=True, methods=['post'])
+    def review(self, request, pk=None):
+        """
+        Review (approve or reject) an attendance correction request.
+        """
+        is_approved = request.data.get('is_approved')
+        if is_approved is None:
+            return Response({'error': "'is_approved' boolean parameter is required."}, status=status.HTTP_400_BAD_REQUEST)
+        review_notes = request.data.get('review_notes', '')
+
+        try:
+            req = StudentDailyAttendanceService.review_correction_request(
+                request_id=pk,
+                is_approved=is_approved,
+                review_notes=review_notes,
+                user=request.user,
+                request=request
+            )
+            return Response(AttendanceCorrectionRequestSerializer(req).data)
+        except BusinessConflictError as err:
+            return Response({'error': str(err)}, status=status.HTTP_400_BAD_REQUEST)
+        except ResourceNotFoundError as err:
+            return Response({'error': str(err)}, status=status.HTTP_404_NOT_FOUND)

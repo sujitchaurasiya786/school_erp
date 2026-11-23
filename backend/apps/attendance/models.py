@@ -244,3 +244,45 @@ class AttendanceCorrectionRequest(TimeStampedModel):
 
     def __str__(self):
         return f"Correction for {self.attendance} -> {self.new_status}"
+
+
+class StaffDailyAttendance(TimeStampedModel):
+    """
+    Daily attendance record for school staff (teachers, administrative, and support staff).
+    One record per staff member per calendar date.
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='staff_daily_attendances',
+        db_index=True
+    )
+    staff_profile = models.ForeignKey(
+        'hrms.StaffProfile',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='daily_attendances'
+    )
+    date = models.DateField(db_index=True)
+    status = models.CharField(
+        max_length=20,
+        choices=AttendanceStatus.choices,
+        default=AttendanceStatus.PRESENT
+    )
+    remarks = models.CharField(max_length=200, blank=True, default='')
+    marked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='marked_staff_attendances'
+    )
+
+    class Meta:
+        db_table = 'attendance_staff_daily_records'
+        unique_together = ('user', 'date')
+        ordering = ['date', 'user__first_name']
+
+    def __str__(self):
+        return f"{self.user.get_full_name() or self.user.username} - {self.date}: {self.status}"

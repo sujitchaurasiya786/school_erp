@@ -9,13 +9,19 @@ from django.core.exceptions import ValidationError
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
+from apps.academics.models import SchoolClass, Section
 from apps.attendance.models import (
     Holiday, HolidayType, SaturdayRule, OverrideType,
-    WorkingDayConfig, SpecialDayOverride, WEEKDAY_CHOICES
+    WorkingDayConfig, SpecialDayOverride, WEEKDAY_CHOICES,
+    StudentDailyAttendance, AttendanceCorrectionRequest, StaffDailyAttendance, AttendanceStatus
 )
-from apps.attendance.services import CalendarService
+from apps.attendance.services import (
+    CalendarService, StudentDailyAttendanceService,
+    StaffDailyAttendanceService, AttendanceReportService
+)
 from apps.audit.models import AuditAction
 from apps.audit.services import AuditService
+from apps.hrms.models import Department
 from apps.rbac.services import RBACService
 from apps.school_config.models import AcademicYear
 from common.exceptions import BusinessConflictError
@@ -301,3 +307,469 @@ def holidays_list_view(request):
         'holiday_types': HolidayType.choices,
     }
     return render(request, 'dashboard/attendance/holidays.html', context)
+
+
+@login_required(login_url='login')
+def daily_attendance_view(request):
+    """
+    Daily Student Attendance Management Dashboard.
+    Enables authorized teachers and administrators to view section rosters,
+    check operational calendar day status, record bulk or individual daily attendance,
+    and submit correction requests.
+    """
+    if not _check_attendance_permission(request, 'attendance.record.view'):
+        messages.error(request, "You do not have permission to view student attendance.")
+        return redirect('home-dashboard')
+
+    can_mark = _check_attendance_permission(request, 'attendance.record.mark')
+    can_correct = _check_attendance_permission(request, 'attendance.record.correct') or can_mark
+
+    academic_years = AcademicYear.objects.all().order_by('-start_date')
+    current_year = AcademicYear.objects.filter(is_current=True).first()
+
+    selected_year_id = request.GET.get('year')
+    if selected_year_id:
+        selected_year = get_object_or_404(AcademicYear, pk=selected_year_id)
+    else:
+        selected_year = current_year or academic_years.first()
+
+    classes = SchoolClass.objects.filter(is_active=True).order_by('order')
+
+    selected_class_id = request.GET.get('class_id')
+    selected_class = None
+    sections = []
+    if selected_class_id:
+        selected_class = SchoolClass.objects.filter(pk=selected_class_id, is_active=True).first()
+        if selected_class:
+            sections = Section.objects.filter(school_class=selected_class, is_active=True).order_by('name')
+
+    selected_section_name = request.GET.get('section_name', '').strip()
+    selected_date_str = request.GET.get('date', '').strip()
+
+    if not selected_date_str:
+        selected_date = date.today()
+        selected_date_str = selected_date.isoformat()
+    else:
+        try:
+            selected_date = datetime.strptime(selected_date_str, "%Y-%m-%d").date()
+        except ValueError:
+            selected_date = date.today()
+            selected_date_str = selected_date.isoformat()
+
+    # Scope authorization
+    is_scoped = False
+    if selected_class and selected_section_name:
+        is_scoped = StudentDailyAttendanceService.validate_user_attendance_scope(
+            user=request.user,
+            class_name=selected_class.name,
+            section_name=selected_section_name
+        )
+
+    # Handle POST mutations
+    if request.method == 'POST':
+        action = request.POST.get('action')
+
+        if action == 'save_attendance':
+            if not can_mark:
+                messages.error(request, "You do not have permission to mark attendance.")
+                return redirect(request.get_full_path())
+
+            if not is_scoped and not request.user.is_superuser:
+                messages.error(request, f"You are not authorized to mark attendance for Class {selected_class.name} Section {selected_section_name}.")
+                return redirect(request.get_full_path())
+
+            # Calendar validation
+            cal_status = CalendarService.get_day_status(selected_year, selected_date)
+            if not cal_status.get('is_working', False):
+                messages.error(request, f"Cannot record attendance: {selected_date} is a non-working day ({cal_status.get('reason')}).")
+                return redirect(request.get_full_path())
+
+            student_ids = request.POST.getlist('student_ids')
+            if not student_ids:
+                messages.warning(request, "No students selected for attendance marking.")
+                return redirect(request.get_full_path())
+
+            records_to_save = []
+            for sid in student_ids:
+                status_val = request.POST.get(f"status_{sid}", AttendanceStatus.PRESENT)
+                remarks_val = request.POST.get(f"remarks_{sid}", "").strip()
+                records_to_save.append({
+                    'student_id': sid,
+                    'academic_year_id': selected_year.pk,
+                    'date': selected_date,
+                    'class_name': selected_class.name,
+                    'section_name': selected_section_name,
+                    'status': status_val,
+                    'remarks': remarks_val
+                })
+
+            try:
+                saved_ids = StudentDailyAttendanceService.mark_bulk_attendance(
+                    records=records_to_save,
+                    actor=request.user,
+                    request=request
+                )
+                messages.success(request, f"Attendance saved successfully for {len(saved_ids)} students.")
+            except (ValidationError, BusinessConflictError) as err:
+                messages.error(request, f"Failed to save attendance: {err}")
+            except Exception as ex:
+                messages.error(request, f"Unexpected error while saving attendance: {ex}")
+
+            return redirect(request.get_full_path())
+
+        elif action == 'submit_correction':
+            if not can_correct:
+                messages.error(request, "You do not have permission to submit attendance corrections.")
+                return redirect(request.get_full_path())
+
+            attendance_id = request.POST.get('attendance_id')
+            new_status = request.POST.get('new_status')
+            reason = request.POST.get('reason', '').strip()
+
+            try:
+                StudentDailyAttendanceService.submit_correction_request(
+                    attendance_id=attendance_id,
+                    new_status=new_status,
+                    reason=reason,
+                    user=request.user,
+                    request=request
+                )
+                messages.success(request, "Attendance correction request submitted for administrative review.")
+            except (ValidationError, BusinessConflictError) as err:
+                messages.error(request, f"Could not submit correction request: {err}")
+            except Exception as ex:
+                messages.error(request, f"Error: {ex}")
+
+            return redirect(request.get_full_path())
+
+    # Build Roster Data if section & date are selected
+    roster_data = None
+    calendar_status = None
+    if selected_year and selected_class and selected_section_name:
+        calendar_status = CalendarService.get_day_status(selected_year, selected_date)
+        if is_scoped or request.user.is_superuser:
+            roster_data = StudentDailyAttendanceService.get_section_roster_with_attendance(
+                academic_year=selected_year,
+                class_name=selected_class.name,
+                section_name=selected_section_name,
+                target_date=selected_date
+            )
+
+    context = {
+        'academic_years': academic_years,
+        'selected_year': selected_year,
+        'classes': classes,
+        'selected_class': selected_class,
+        'sections': sections,
+        'selected_section_name': selected_section_name,
+        'selected_date_str': selected_date_str,
+        'selected_date': selected_date,
+        'is_scoped': is_scoped,
+        'can_mark': can_mark,
+        'can_correct': can_correct,
+        'calendar_status': calendar_status,
+        'roster_data': roster_data,
+        'attendance_statuses': AttendanceStatus.choices,
+    }
+    return render(request, 'dashboard/attendance/daily_attendance.html', context)
+
+
+@login_required(login_url='login')
+def attendance_corrections_view(request):
+    """
+    Attendance Correction Requests Queue.
+    Enables authorized administrators to review, approve, or reject attendance correction requests.
+    """
+    if not _check_attendance_permission(request, 'attendance.record.view'):
+        messages.error(request, "You do not have permission to view attendance corrections.")
+        return redirect('home-dashboard')
+
+    can_approve = _check_attendance_permission(request, 'attendance.correction.approve')
+
+    status_filter = request.GET.get('status', 'pending')
+
+    # Handle Review POST
+    if request.method == 'POST':
+        action = request.POST.get('action')
+        if action == 'review_correction':
+            if not can_approve:
+                messages.error(request, "You do not have permission to approve or reject attendance corrections.")
+                return redirect(request.get_full_path())
+
+            request_id = request.POST.get('request_id')
+            decision = request.POST.get('decision')  # 'approve' or 'reject'
+            review_notes = request.POST.get('review_notes', '').strip()
+
+            is_approved = (decision == 'approve')
+            try:
+                corr = StudentDailyAttendanceService.review_correction_request(
+                    request_id=request_id,
+                    is_approved=is_approved,
+                    review_notes=review_notes,
+                    user=request.user,
+                    request=request
+                )
+                action_word = "approved and student attendance updated" if is_approved else "rejected"
+                messages.success(request, f"Correction request for {corr.attendance.student.admission_number} {action_word}.")
+            except (ValidationError, BusinessConflictError) as err:
+                messages.error(request, f"Review failed: {err}")
+            except Exception as ex:
+                messages.error(request, f"Error: {ex}")
+
+            return redirect(request.get_full_path())
+
+    qs = AttendanceCorrectionRequest.objects.select_related(
+        'attendance', 'attendance__student', 'attendance__academic_year',
+        'requested_by', 'reviewed_by'
+    ).order_by('-created_at')
+
+    pending_count = qs.filter(is_approved__isnull=True).count()
+    approved_count = qs.filter(is_approved=True).count()
+    rejected_count = qs.filter(is_approved=False).count()
+
+    if status_filter == 'pending':
+        corrections = qs.filter(is_approved__isnull=True)
+    elif status_filter == 'approved':
+        corrections = qs.filter(is_approved=True)
+    elif status_filter == 'rejected':
+        corrections = qs.filter(is_approved=False)
+    else:
+        corrections = qs
+
+    context = {
+        'corrections': corrections,
+        'status_filter': status_filter,
+        'pending_count': pending_count,
+        'approved_count': approved_count,
+        'rejected_count': rejected_count,
+        'total_count': qs.count(),
+        'can_approve': can_approve,
+    }
+    return render(request, 'dashboard/attendance/corrections_list.html', context)
+
+
+@login_required(login_url='login')
+def staff_attendance_view(request):
+    """
+    Staff Attendance Management Dashboard.
+    Enables authorized administrators to record and inspect daily staff attendance.
+    """
+    if not (request.user.is_superuser or _check_attendance_permission(request, 'attendance.staff.view') or _check_attendance_permission(request, 'attendance.record.view')):
+        messages.error(request, "You do not have permission to view staff attendance.")
+        return redirect('home-dashboard')
+
+    can_mark = request.user.is_superuser or _check_attendance_permission(request, 'attendance.staff.mark')
+
+    selected_date_str = request.GET.get('date', '').strip()
+    if not selected_date_str:
+        selected_date = date.today()
+        selected_date_str = selected_date.isoformat()
+    else:
+        try:
+            selected_date = datetime.strptime(selected_date_str, "%Y-%m-%d").date()
+        except ValueError:
+            selected_date = date.today()
+            selected_date_str = selected_date.isoformat()
+
+    department_id = request.GET.get('department')
+    departments = Department.objects.all().order_by('name')
+
+    # Handle POST submission
+    if request.method == 'POST':
+        action = request.POST.get('action')
+        if action == 'save_staff_attendance':
+            if not can_mark:
+                messages.error(request, "You do not have permission to mark staff attendance.")
+                return redirect(request.get_full_path())
+
+            current_ay = AcademicYear.objects.filter(is_current=True).first()
+            if current_ay:
+                cal_status = CalendarService.get_day_status(current_ay, selected_date)
+                if not cal_status.get('is_working', False):
+                    messages.error(request, f"Cannot record staff attendance: {selected_date} is a non-working day ({cal_status.get('reason')}).")
+                    return redirect(request.get_full_path())
+
+            user_ids = request.POST.getlist('user_ids')
+            if not user_ids:
+                messages.warning(request, "No staff members selected for attendance marking.")
+                return redirect(request.get_full_path())
+
+            records_to_save = []
+            for uid in user_ids:
+                status_val = request.POST.get(f"status_{uid}", AttendanceStatus.PRESENT)
+                remarks_val = request.POST.get(f"remarks_{uid}", "").strip()
+                records_to_save.append({
+                    'user_id': uid,
+                    'status': status_val,
+                    'remarks': remarks_val
+                })
+
+            try:
+                saved_ids = StaffDailyAttendanceService.mark_bulk_staff_attendance(
+                    records=records_to_save,
+                    attendance_date=selected_date,
+                    actor=request.user,
+                    request=request
+                )
+                messages.success(request, f"Staff attendance saved successfully for {len(saved_ids)} staff members.")
+            except (ValidationError, BusinessConflictError) as err:
+                messages.error(request, f"Failed to save staff attendance: {err}")
+            except Exception as ex:
+                messages.error(request, f"Error: {ex}")
+
+            return redirect(request.get_full_path())
+
+    roster_data = StaffDailyAttendanceService.get_staff_roster_with_attendance(
+        target_date=selected_date,
+        department_id=department_id
+    )
+
+    context = {
+        'selected_date_str': selected_date_str,
+        'selected_date': selected_date,
+        'department_id': department_id,
+        'departments': departments,
+        'roster_data': roster_data,
+        'can_mark': can_mark,
+        'attendance_statuses': AttendanceStatus.choices,
+    }
+    return render(request, 'dashboard/attendance/staff_attendance.html', context)
+
+
+@login_required(login_url='login')
+def attendance_reports_view(request):
+    """
+    Attendance Analytics & Summary Reports.
+    Enables staff to view student section attendance, calculate attendance percentage %,
+    inspect shortage threshold alerts (<75%), and export to CSV.
+    """
+    if not (request.user.is_superuser or _check_attendance_permission(request, 'attendance.record.view')):
+        messages.error(request, "You do not have permission to view attendance reports.")
+        return redirect('home-dashboard')
+
+    can_export = request.user.is_superuser or _check_attendance_permission(request, 'attendance.report.export')
+
+    academic_years = AcademicYear.objects.all().order_by('-start_date')
+    current_year = AcademicYear.objects.filter(is_current=True).first()
+
+    selected_year_id = request.GET.get('year')
+    if selected_year_id:
+        selected_year = get_object_or_404(AcademicYear, pk=selected_year_id)
+    else:
+        selected_year = current_year or academic_years.first()
+
+    classes = SchoolClass.objects.filter(is_active=True).order_by('order')
+    selected_class_id = request.GET.get('class_id')
+    selected_class = None
+    sections = []
+    if selected_class_id:
+        selected_class = SchoolClass.objects.filter(pk=selected_class_id, is_active=True).first()
+        if selected_class:
+            sections = Section.objects.filter(school_class=selected_class, is_active=True).order_by('name')
+
+    selected_section_name = request.GET.get('section_name', '').strip()
+
+    # Dates
+    today = date.today()
+    default_start = today.replace(day=1) if today.day > 1 else today - timedelta(days=30)
+    start_date_str = request.GET.get('start_date', default_start.isoformat())
+    end_date_str = request.GET.get('end_date', today.isoformat())
+
+    try:
+        start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+    except ValueError:
+        start_date = default_start
+        start_date_str = start_date.isoformat()
+
+    try:
+        end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+    except ValueError:
+        end_date = today
+        end_date_str = end_date.isoformat()
+
+    report_type = request.GET.get('report_type', 'student_summary')
+    try:
+        threshold = float(request.GET.get('threshold', 75.0))
+    except ValueError:
+        threshold = 75.0
+
+    report_data = None
+    export_format = request.GET.get('export')
+
+    if report_type in ('student_summary', 'shortage_alert') and selected_year and selected_class and selected_section_name:
+        summary = AttendanceReportService.get_student_attendance_summary(
+            academic_year=selected_year,
+            class_name=selected_class.name,
+            section_name=selected_section_name,
+            start_date=start_date,
+            end_date=end_date,
+            threshold=threshold
+        )
+        if report_type == 'shortage_alert':
+            summary['rows'] = [r for r in summary['rows'] if r['is_shortage']]
+        report_data = summary
+
+        if export_format == 'csv' and can_export:
+            headers = ['Roll No', 'Admission No', 'Student Name', 'Present Days', 'Half Days', 'Absent Days', 'Leave Days', 'Effective Days', 'Total Working Days', 'Percentage (%)', 'Shortage Alert']
+            csv_rows = []
+            for r in report_data['rows']:
+                csv_rows.append([
+                    r['roll_number'] or '-',
+                    r['admission_number'],
+                    r['name'],
+                    r['present_days'],
+                    r['half_days'],
+                    r['absent_days'],
+                    r['leave_days'],
+                    r['effective_attendance'],
+                    r['total_working_days'],
+                    f"{r['percentage']}%",
+                    'YES (<75%)' if r['is_shortage'] else 'NO'
+                ])
+            fname = f"Attendance_Report_{selected_class.name}_{selected_section_name}_{start_date_str}_to_{end_date_str}.csv"
+            return AttendanceReportService.export_csv(fname, headers, csv_rows)
+
+    elif report_type == 'staff_summary':
+        department_id = request.GET.get('department')
+        report_data = AttendanceReportService.get_staff_attendance_summary(
+            start_date=start_date,
+            end_date=end_date,
+            department_id=department_id
+        )
+        if export_format == 'csv' and can_export:
+            headers = ['Staff Name', 'Department', 'Designation', 'Present Days', 'Half Days', 'Absent Days', 'Leave Days', 'Total Working Days', 'Percentage (%)']
+            csv_rows = []
+            for r in report_data['rows']:
+                csv_rows.append([
+                    r['name'],
+                    r['department'],
+                    r['designation'],
+                    r['present_days'],
+                    r['half_days'],
+                    r['absent_days'],
+                    r['leave_days'],
+                    r['total_working_days'],
+                    f"{r['percentage']}%"
+                ])
+            fname = f"Staff_Attendance_Report_{start_date_str}_to_{end_date_str}.csv"
+            return AttendanceReportService.export_csv(fname, headers, csv_rows)
+
+    departments = Department.objects.all().order_by('name')
+
+    context = {
+        'academic_years': academic_years,
+        'selected_year': selected_year,
+        'classes': classes,
+        'selected_class': selected_class,
+        'sections': sections,
+        'selected_section_name': selected_section_name,
+        'start_date_str': start_date_str,
+        'end_date_str': end_date_str,
+        'report_type': report_type,
+        'threshold': threshold,
+        'departments': departments,
+        'department_id': request.GET.get('department'),
+        'report_data': report_data,
+        'can_export': can_export,
+    }
+    return render(request, 'dashboard/attendance/reports.html', context)

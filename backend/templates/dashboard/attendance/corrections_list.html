@@ -1,0 +1,240 @@
+{% extends 'dashboard/base.html' %}
+
+{% block admin %}
+<div class="container-fluid px-0">
+    <!-- Header with Title & Navigation -->
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
+        <div>
+            <h3 class="fw-bold mb-1 text-dark">Attendance Correction Requests</h3>
+            <p class="text-muted mb-0 small">Review, verify, and approve or reject requested modifications to marked student attendance.</p>
+        </div>
+        <div class="d-flex align-items-center gap-2">
+            <a href="{% url 'attendance-daily' %}" class="btn btn-outline-primary btn-sm shadow-sm">
+                <i class="ti ti-arrow-left me-1"></i> Back to Daily Attendance
+            </a>
+        </div>
+    </div>
+
+    <!-- Django Messages Alerts -->
+    {% if messages %}
+    <div class="mb-3">
+        {% for message in messages %}
+        <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show shadow-sm" role="alert">
+            <i class="ti ti-info-circle me-1"></i> {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Filter Nav Pills -->
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-3">
+        <ul class="nav nav-pills gap-1">
+            <li class="nav-item">
+                <a class="nav-link {% if status_filter == 'pending' %}active{% endif %} shadow-sm py-1 px-3" href="?status=pending">
+                    <i class="ti ti-clock me-1"></i> Pending
+                    <span class="badge bg-light text-dark ms-1">{{ pending_count }}</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if status_filter == 'approved' %}active{% endif %} shadow-sm py-1 px-3" href="?status=approved">
+                    <i class="ti ti-check me-1"></i> Approved
+                    <span class="badge bg-light text-dark ms-1">{{ approved_count }}</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if status_filter == 'rejected' %}active{% endif %} shadow-sm py-1 px-3" href="?status=rejected">
+                    <i class="ti ti-x me-1"></i> Rejected
+                    <span class="badge bg-light text-dark ms-1">{{ rejected_count }}</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if status_filter == 'all' %}active{% endif %} shadow-sm py-1 px-3" href="?status=all">
+                    <i class="ti ti-list me-1"></i> All
+                    <span class="badge bg-light text-dark ms-1">{{ total_count }}</span>
+                </a>
+            </li>
+        </ul>
+    </div>
+
+    <!-- Corrections Table Card -->
+    <div class="card border-0 shadow-sm">
+        <div class="card-body p-0">
+            {% if corrections %}
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light text-muted small text-uppercase">
+                        <tr>
+                            <th class="ps-3" style="width: 140px;">Date & Session</th>
+                            <th>Student</th>
+                            <th>Class & Section</th>
+                            <th style="min-width: 180px;">Status Change</th>
+                            <th style="min-width: 200px;">Reason</th>
+                            <th>Requested By</th>
+                            <th>Review Status</th>
+                            <th class="text-end pe-3" style="width: 130px;">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for req in corrections %}
+                        <tr>
+                            <td class="ps-3">
+                                <div class="fw-bold text-dark">{{ req.attendance.date }}</div>
+                                <small class="text-muted">{{ req.attendance.academic_year.name }}</small>
+                            </td>
+                            <td>
+                                <div class="fw-semibold text-dark">{{ req.attendance.student.full_name }}</div>
+                                <span class="badge bg-light text-dark border font-monospace">{{ req.attendance.student.admission_number }}</span>
+                            </td>
+                            <td>
+                                <span class="fw-medium text-dark">{{ req.attendance.class_name }}</span>
+                                <span class="badge bg-secondary-subtle text-secondary ms-1">Sec {{ req.attendance.section_name }}</span>
+                            </td>
+                            <td>
+                                <span class="badge bg-secondary">{{ req.attendance.status }}</span>
+                                <i class="ti ti-arrow-right mx-1 text-muted"></i>
+                                <span class="badge bg-primary">{{ req.new_status }}</span>
+                            </td>
+                            <td>
+                                <div class="small text-dark text-break" style="max-width: 250px;">{{ req.reason }}</div>
+                                <small class="text-muted d-block">Submitted: {{ req.created_at|date:"M d, Y H:i" }}</small>
+                            </td>
+                            <td>
+                                <div class="small fw-semibold text-dark">{{ req.requested_by.get_full_name|default:req.requested_by.username }}</div>
+                                <small class="text-muted">{{ req.requested_by.email }}</small>
+                            </td>
+                            <td>
+                                {% if req.is_approved is None %}
+                                <span class="badge bg-warning-subtle text-warning border border-warning-subtle">
+                                    <i class="ti ti-clock me-1"></i> Pending Review
+                                </span>
+                                {% elif req.is_approved %}
+                                <span class="badge bg-success-subtle text-success border border-success-subtle">
+                                    <i class="ti ti-check me-1"></i> Approved
+                                </span>
+                                {% if req.reviewed_by %}
+                                <small class="text-muted d-block mt-1">by {{ req.reviewed_by.get_full_name|default:req.reviewed_by.username }}</small>
+                                {% endif %}
+                                {% else %}
+                                <span class="badge bg-danger-subtle text-danger border border-danger-subtle">
+                                    <i class="ti ti-x me-1"></i> Rejected
+                                </span>
+                                {% if req.reviewed_by %}
+                                <small class="text-muted d-block mt-1">by {{ req.reviewed_by.get_full_name|default:req.reviewed_by.username }}</small>
+                                {% endif %}
+                                {% endif %}
+                                {% if req.review_notes %}
+                                <small class="text-muted d-block mt-1 fst-italic">"{{ req.review_notes }}"</small>
+                                {% endif %}
+                            </td>
+                            <td class="text-end pe-3">
+                                {% if req.is_approved is None and can_approve %}
+                                <button type="button" class="btn btn-primary btn-sm shadow-sm" onclick="openReviewModal('{{ req.pk }}', '{{ req.attendance.student.full_name|escapejs }}', '{{ req.attendance.student.admission_number }}', '{{ req.attendance.date }}', '{{ req.attendance.status }}', '{{ req.new_status }}', '{{ req.reason|escapejs }}')">
+                                    <i class="ti ti-gavel me-1"></i> Review
+                                </button>
+                                {% else %}
+                                <span class="text-muted small">Completed</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="text-center py-5">
+                <i class="ti ti-checklist fs-1 text-muted d-block mb-2"></i>
+                <h6 class="fw-bold text-dark mb-1">No Correction Requests</h6>
+                <p class="text-muted small mb-0">No attendance correction requests found for the selected status filter.</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Review Attendance Correction Request -->
+<div class="modal fade" id="reviewModal" tabindex="-1" aria-labelledby="reviewModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content border-0 shadow">
+            <form method="POST" id="reviewCorrectionForm">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="review_correction">
+                <input type="hidden" name="request_id" id="reviewRequestId">
+                <input type="hidden" name="decision" id="reviewDecision" value="approve">
+
+                <div class="modal-header border-bottom">
+                    <h5 class="modal-title fw-bold text-dark" id="reviewModalLabel">
+                        <i class="ti ti-gavel text-primary me-2"></i> Review Attendance Correction
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="card bg-light border-0 p-3 mb-3">
+                        <div class="d-flex justify-content-between mb-1">
+                            <span class="text-muted small">Student:</span>
+                            <strong class="text-dark" id="reviewStudentName">-</strong>
+                        </div>
+                        <div class="d-flex justify-content-between mb-1">
+                            <span class="text-muted small">Admission No:</span>
+                            <span class="badge bg-white text-dark border font-monospace" id="reviewAdmissionNumber">-</span>
+                        </div>
+                        <div class="d-flex justify-content-between mb-1">
+                            <span class="text-muted small">Attendance Date:</span>
+                            <span class="fw-semibold text-dark" id="reviewDate">-</span>
+                        </div>
+                        <div class="d-flex justify-content-between align-items-center mt-2 pt-2 border-top">
+                            <span class="text-muted small">Requested Change:</span>
+                            <div>
+                                <span class="badge bg-secondary" id="reviewOldStatus">-</span>
+                                <i class="ti ti-arrow-right mx-1 text-muted"></i>
+                                <span class="badge bg-primary" id="reviewNewStatus">-</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label small text-muted">Applicant Reason</label>
+                        <div class="p-2 bg-light border rounded small text-dark text-break" id="reviewApplicantReason">-</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="reviewNotes" class="form-label small fw-semibold text-muted">Review Notes / Justification</label>
+                        <textarea name="review_notes" id="reviewNotes" class="form-control shadow-sm" rows="3" placeholder="Add administrative notes regarding this decision..."></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer border-top bg-light d-flex justify-content-between">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <div class="d-flex gap-2">
+                        <button type="button" class="btn btn-danger shadow-sm" onclick="submitDecision('reject')">
+                            <i class="ti ti-x me-1"></i> Reject
+                        </button>
+                        <button type="button" class="btn btn-success shadow-sm" onclick="submitDecision('approve')">
+                            <i class="ti ti-check me-1"></i> Approve & Apply
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+function openReviewModal(reqId, studentName, admNo, attDate, oldStatus, newStatus, reason) {
+    document.getElementById('reviewRequestId').value = reqId;
+    document.getElementById('reviewStudentName').innerText = studentName;
+    document.getElementById('reviewAdmissionNumber').innerText = admNo;
+    document.getElementById('reviewDate').innerText = attDate;
+    document.getElementById('reviewOldStatus').innerText = oldStatus;
+    document.getElementById('reviewNewStatus').innerText = newStatus;
+    document.getElementById('reviewApplicantReason').innerText = reason;
+    document.getElementById('reviewNotes').value = '';
+    const modal = new bootstrap.Modal(document.getElementById('reviewModal'));
+    modal.show();
+}
+
+function submitDecision(decision) {
+    document.getElementById('reviewDecision').value = decision;
+    document.getElementById('reviewCorrectionForm').submit();
+}
+</script>
+{% endblock %}
