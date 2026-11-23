@@ -93,6 +93,14 @@ class Section(TimeStampedModel):
         related_name='class_teacher_sections'
     )
     room_number = models.CharField(max_length=50, blank=True, default='')
+    room_ref = models.ForeignKey(
+        'Room',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='sections',
+        help_text=_("Optional link to managed Room Master record")
+    )
 
     class Meta:
         db_table = 'academic_sections'
@@ -331,6 +339,79 @@ class ClassSubject(TimeStampedModel):
         super().save(*args, **kwargs)
 
 
+class RoomType(models.TextChoices):
+    CLASSROOM = 'CLASSROOM', _('General Classroom')
+    SCIENCE_LAB = 'SCIENCE_LAB', _('Science Laboratory')
+    COMPUTER_LAB = 'COMPUTER_LAB', _('Computer Laboratory')
+    LIBRARY = 'LIBRARY', _('Library / Reading Room')
+    AUDITORIUM = 'AUDITORIUM', _('Auditorium / Hall')
+    ACTIVITY_ROOM = 'ACTIVITY_ROOM', _('Sports / Activity Room')
+    OTHER = 'OTHER', _('Other Facility')
+
+
+class Room(TimeStampedModel):
+    """
+    Physical room/facility master for timetable scheduling and section allocation.
+    """
+    room_number = models.CharField(
+        max_length=50,
+        unique=True,
+        help_text=_("Unique room identifier/code, e.g. Room 101, Science Lab 1, Hall A")
+    )
+    name = models.CharField(
+        max_length=100,
+        blank=True,
+        default='',
+        help_text=_("Descriptive name, e.g. Senior Physics Laboratory")
+    )
+    room_type = models.CharField(
+        max_length=30,
+        choices=RoomType.choices,
+        default=RoomType.CLASSROOM,
+        help_text=_("Classification of the room/facility")
+    )
+    capacity = models.PositiveIntegerField(
+        default=40,
+        help_text=_("Maximum seating capacity (>= 1)")
+    )
+    floor = models.CharField(
+        max_length=50,
+        blank=True,
+        default='',
+        help_text=_("Floor or Wing, e.g. Ground Floor, Block B")
+    )
+    description = models.TextField(blank=True, default='')
+
+    class Meta:
+        db_table = 'academic_rooms'
+        ordering = ['room_number']
+
+    def __str__(self):
+        type_str = f" ({self.get_room_type_display()})" if self.room_type else ""
+        return f"{self.room_number}{type_str}"
+
+    def clean(self):
+        super().clean()
+        if self.room_number:
+            self.room_number = str(self.room_number).strip()
+            if not self.room_number:
+                raise ValidationError({'room_number': _("Room number cannot be empty.")})
+            qs = Room.objects.filter(room_number__iexact=self.room_number)
+            if self.pk:
+                qs = qs.exclude(pk=self.pk)
+            if qs.exists():
+                raise ValidationError({'room_number': _(f"A room with number/code '{self.room_number}' already exists.")})
+        else:
+            raise ValidationError({'room_number': _("Room number/code is required.")})
+
+        if self.capacity is not None and self.capacity < 1:
+            raise ValidationError({'capacity': _("Room capacity must be a positive integer (>= 1).")})
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
+
+
 class TimetablePeriod(TimeStampedModel):
     """
     Period slot definition (e.g. Period 1: 08:30 - 09:15).
@@ -355,13 +436,22 @@ class TimetableSlot(TimeStampedModel):
     """
     DAYS_OF_WEEK = [
         (1, 'Monday'), (2, 'Tuesday'), (3, 'Wednesday'),
-        (4, 'Thursday'), (5, 'Friday'), (6, 'Saturday')
+        (4, 'Thursday'), (5, 'Friday'), (6, 'Saturday'),
+        (7, 'Sunday')
     ]
     academic_year = models.ForeignKey('school_config.AcademicYear', on_delete=models.CASCADE)
     day_of_week = models.PositiveSmallIntegerField(choices=DAYS_OF_WEEK)
     period = models.ForeignKey(TimetablePeriod, on_delete=models.CASCADE)
     class_subject = models.ForeignKey(ClassSubject, on_delete=models.CASCADE)
     room = models.CharField(max_length=50, blank=True, default='')
+    room_ref = models.ForeignKey(
+        Room,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='timetable_slots',
+        help_text=_("Optional link to managed Room Master record")
+    )
 
     class Meta:
         db_table = 'academic_timetable_slots'

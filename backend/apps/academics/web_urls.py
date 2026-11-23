@@ -10,6 +10,8 @@ from apps.academics.web_views import (
     streams_list_view,
     subjects_list_view,
     class_subjects_list_view,
+    teacher_assignments_view,
+    timetable_view,
 )
 
 urlpatterns = [
@@ -31,4 +33,10 @@ urlpatterns = [
 
     # Class–Subject Mapping Management
     path('class-subjects/', class_subjects_list_view, name='academics-class-subjects-list'),
+
+    # Teacher Assignments Management (Phase 3)
+    path('teacher-assignments/', teacher_assignments_view, name='academics-teacher-assignments-list'),
+
+    # Timetable & Scheduling Management (Phase 4)
+    path('timetable/', timetable_view, name='academics-timetable-list'),
 ]

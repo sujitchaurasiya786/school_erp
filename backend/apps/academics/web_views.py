@@ -9,9 +9,13 @@ from django.db.models import Count, Sum
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
-from apps.academics.models import AcademicStream, ClassSubject, SchoolClass, Section, Stream, Subject, SubjectType
+from apps.academics.models import (
+    AcademicStream, ClassSubject, Room, RoomType, SchoolClass, Section, Stream, Subject, SubjectType,
+    TimetablePeriod, TimetableSlot
+)
 from apps.academics.services import (
-    AcademicYearService, ClassSubjectService, SchoolClassService, SectionService, StreamService, SubjectService
+    AcademicYearService, ClassSubjectService, RoomService, SchoolClassService, SectionService, StreamService, SubjectService,
+    TeacherAssignmentService, TimetablePeriodService, TimetableService
 )
 from apps.rbac.services import RBACService
 from apps.school_config.models import AcademicYear, SchoolProfile
@@ -823,8 +827,7 @@ def class_subjects_list_view(request):
     all_sections = Section.objects.filter(is_active=True).select_related('school_class').order_by('school_class__order', 'name')
     all_subjects = Subject.objects.filter(is_active=True).order_by('name', 'code')
 
-    from apps.identity.models import User
-    all_teachers = User.objects.filter(is_active=True).order_by('first_name', 'last_name', 'username')
+    all_teachers = TeacherAssignmentService.get_eligible_faculty_queryset()
     academic_years = AcademicYear.objects.all().order_by('-start_date')
     current_year = AcademicYearService.get_current_year()
 
@@ -857,3 +860,584 @@ def class_subjects_list_view(request):
         'can_manage': can_manage,
     }
     return render(request, 'dashboard/academics/class_subjects_list.html', context)
+
+
+# ==============================================================================
+# 7. Teacher Assignments Management (Phase 3)
+# ==============================================================================
+@login_required(login_url='login')
+def teacher_assignments_view(request):
+    """
+    Consolidated Teacher Assignments Dashboard:
+      - Tab 1: Class Teachers Directory & Assignment
+      - Tab 2: Subject Teachers Directory & Single/Bulk Assignment
+      - Tab 3: Faculty Workload Overview & Distribution
+    """
+    can_view = _check_academics_permission(request, 'academics.assignment.view') or \
+               _check_academics_permission(request, 'academics.timetable.view') or \
+               _check_academics_permission(request, 'academics.class.view')
+    if not can_view:
+        messages.error(request, "You do not have permission to view teacher assignments.")
+        return redirect('home-dashboard')
+
+    can_manage = _check_academics_permission(request, 'academics.assignment.manage') or \
+                 _check_academics_permission(request, 'academics.timetable.manage')
+
+    active_tab = request.GET.get('tab', 'class_teachers').strip()
+    if active_tab not in ('class_teachers', 'subject_teachers', 'workload'):
+        active_tab = 'class_teachers'
+
+    if request.method == 'POST':
+        if not can_manage:
+            messages.error(request, "You do not have permission to manage teacher assignments.")
+            return redirect('academics-teacher-assignments-list')
+
+        action = request.POST.get('action')
+
+        if action == 'assign_class_teacher':
+            section_id = request.POST.get('section_id')
+            teacher_id = request.POST.get('teacher_id')
+            reason = request.POST.get('reason', '').strip()
+            force = request.POST.get('force') == '1'
+
+            try:
+                sec = TeacherAssignmentService.assign_class_teacher(
+                    section_id=section_id,
+                    teacher_id=teacher_id,
+                    actor=request.user,
+                    reason=reason,
+                    request=request,
+                    force=force
+                )
+                messages.success(request, f"Class Teacher '{sec.class_teacher.get_full_name() or sec.class_teacher.username}' assigned to {sec} successfully.")
+            except (ValidationError, ResourceNotFoundError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to assign class teacher: {msg}")
+            except Exception as err:
+                messages.error(request, f"An unexpected error occurred: {err}")
+
+            return redirect(f"{request.path}?tab=class_teachers")
+
+        elif action == 'remove_class_teacher':
+            section_id = request.POST.get('section_id')
+            reason = request.POST.get('reason', '').strip()
+
+            try:
+                TeacherAssignmentService.remove_class_teacher(
+                    section_id=section_id,
+                    actor=request.user,
+                    reason=reason,
+                    request=request
+                )
+                messages.success(request, "Class Teacher unassigned successfully.")
+            except (ValidationError, ResourceNotFoundError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to unassign class teacher: {msg}")
+            except Exception as err:
+                messages.error(request, f"An unexpected error occurred: {err}")
+
+            return redirect(f"{request.path}?tab=class_teachers")
+
+        elif action == 'assign_subject_teacher':
+            class_subject_id = request.POST.get('class_subject_id')
+            teacher_id = request.POST.get('teacher_id')
+            reason = request.POST.get('reason', '').strip()
+
+            try:
+                cs = TeacherAssignmentService.assign_subject_teacher(
+                    class_subject_id=class_subject_id,
+                    teacher_id=teacher_id,
+                    actor=request.user,
+                    reason=reason,
+                    request=request
+                )
+                messages.success(request, f"Assigned '{cs.teacher.get_full_name() or cs.teacher.username}' to {cs.subject.name} in {cs.section}.")
+            except (ValidationError, ResourceNotFoundError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to assign subject teacher: {msg}")
+            except Exception as err:
+                messages.error(request, f"An unexpected error occurred: {err}")
+
+            return redirect(f"{request.path}?tab=subject_teachers")
+
+        elif action == 'bulk_assign_subject_teacher':
+            class_subject_ids = request.POST.getlist('class_subject_ids')
+            teacher_id = request.POST.get('teacher_id')
+            reason = request.POST.get('reason', '').strip()
+
+            try:
+                count = TeacherAssignmentService.bulk_assign_subject_teacher(
+                    class_subject_ids=class_subject_ids,
+                    teacher_id=teacher_id,
+                    actor=request.user,
+                    reason=reason,
+                    request=request
+                )
+                messages.success(request, f"Successfully assigned teacher to {count} subject mapping(s).")
+            except (ValidationError, ResourceNotFoundError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Bulk assignment failed: {msg}")
+            except Exception as err:
+                messages.error(request, f"An unexpected error occurred: {err}")
+
+            return redirect(f"{request.path}?tab=subject_teachers")
+
+        elif action == 'remove_subject_teacher':
+            class_subject_id = request.POST.get('class_subject_id')
+            reason = request.POST.get('reason', '').strip()
+
+            try:
+                TeacherAssignmentService.remove_subject_teacher(
+                    class_subject_id=class_subject_id,
+                    actor=request.user,
+                    reason=reason,
+                    request=request
+                )
+                messages.success(request, "Subject Teacher unassigned successfully.")
+            except (ValidationError, ResourceNotFoundError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to unassign subject teacher: {msg}")
+            except Exception as err:
+                messages.error(request, f"An unexpected error occurred: {err}")
+
+            return redirect(f"{request.path}?tab=subject_teachers")
+
+    # Filters & Query Params
+    selected_class_id = request.GET.get('class_id', '').strip()
+    selected_stream = request.GET.get('stream', '').strip()
+    selected_teacher_id = request.GET.get('teacher_id', '').strip()
+    unassigned_only = request.GET.get('unassigned_only') == '1'
+    search_query = request.GET.get('q', '').strip()
+
+    # Data collections
+    class_id_filter = int(selected_class_id) if selected_class_id.isdigit() else None
+    teacher_id_filter = int(selected_teacher_id) if selected_teacher_id.isdigit() else None
+    stream_filter = selected_stream if selected_stream in dict(Stream.choices) else None
+
+    sections_list = TeacherAssignmentService.list_sections_with_class_teachers(
+        school_class_id=class_id_filter,
+        stream=stream_filter,
+        has_teacher=False if unassigned_only else None,
+        search=search_query or None
+    )
+
+    subject_assignments_list = TeacherAssignmentService.list_subject_assignments(
+        school_class_id=class_id_filter,
+        teacher_id=teacher_id_filter,
+        unassigned_only=unassigned_only,
+        search=search_query or None
+    )
+
+    faculty_workload_list = TeacherAssignmentService.get_faculty_workload_summary()
+
+    all_classes = SchoolClass.objects.filter(is_active=True).order_by('order', 'name')
+    all_teachers = TeacherAssignmentService.get_eligible_faculty_queryset()
+
+    # Metrics
+    total_sections = Section.objects.filter(is_active=True).count()
+    assigned_class_teachers_count = Section.objects.filter(is_active=True, class_teacher__isnull=False).count()
+    unassigned_class_teachers_count = total_sections - assigned_class_teachers_count
+
+    total_subject_mappings = ClassSubject.objects.filter(is_active=True).count()
+    assigned_subject_teachers_count = ClassSubject.objects.filter(is_active=True, teacher__isnull=False).count()
+    unassigned_subject_teachers_count = total_subject_mappings - assigned_subject_teachers_count
+
+    total_faculty_count = all_teachers.count()
+
+    context = {
+        'active_tab': active_tab,
+        'sections_list': sections_list,
+        'subject_assignments_list': subject_assignments_list,
+        'faculty_workload_list': faculty_workload_list,
+        'all_classes': all_classes,
+        'all_teachers': all_teachers,
+        'streams': Stream.choices,
+        'selected_class_id': class_id_filter,
+        'selected_stream': stream_filter,
+        'selected_teacher_id': teacher_id_filter,
+        'unassigned_only': unassigned_only,
+        'search_query': search_query,
+        'total_sections': total_sections,
+        'assigned_class_teachers_count': assigned_class_teachers_count,
+        'unassigned_class_teachers_count': unassigned_class_teachers_count,
+        'total_subject_mappings': total_subject_mappings,
+        'assigned_subject_teachers_count': assigned_subject_teachers_count,
+        'unassigned_subject_teachers_count': unassigned_subject_teachers_count,
+        'total_faculty_count': total_faculty_count,
+        'can_manage': can_manage,
+    }
+    return render(request, 'dashboard/academics/teacher_assignments.html', context)
+
+
+# ==============================================================================
+# 8. Timetable & Scheduling Management (Phase 4)
+# ==============================================================================
+@login_required(login_url='login')
+def timetable_view(request):
+    """
+    Consolidated Timetable & Scheduling Dashboard:
+      - Tab 1: Section Timetable Matrix (Weekly Grid by Section, with conflict-checked slot assignment modals)
+      - Tab 2: Teacher Timetable Matrix (Weekly Grid by Faculty member)
+      - Tab 3: Bell Schedule / Period Management (Timetable Periods, times, break flags, CBSE defaults generation)
+    """
+    has_timetable_view = _check_academics_permission(request, 'academics.timetable.view')
+    has_room_view = _check_academics_permission(request, 'academics.room.view')
+    if not (has_timetable_view or has_room_view):
+        messages.error(request, "You do not have permission to view timetables or rooms.")
+        return redirect('home-dashboard')
+
+    can_manage_timetable = _check_academics_permission(request, 'academics.timetable.manage')
+    can_manage_room = _check_academics_permission(request, 'academics.room.manage') or can_manage_timetable
+    can_manage = can_manage_timetable or can_manage_room
+
+    active_tab = request.GET.get('tab', 'section_matrix').strip()
+    if active_tab not in ('section_matrix', 'teacher_matrix', 'periods', 'rooms'):
+        active_tab = 'section_matrix'
+
+    if request.method == 'POST':
+        action = request.POST.get('action')
+
+        # 1. Period Actions
+        if action == 'create_period':
+            if not can_manage_timetable:
+                messages.error(request, "You do not have permission to manage timetables.")
+                return redirect('academics-timetable-list')
+            period_number = request.POST.get('period_number')
+            name = request.POST.get('name', 'Period')
+            start_time = request.POST.get('start_time')
+            end_time = request.POST.get('end_time')
+            is_break = request.POST.get('is_break') == 'on'
+
+            try:
+                p = TimetablePeriodService.create_period(
+                    period_number=period_number,
+                    start_time=start_time,
+                    end_time=end_time,
+                    name=name,
+                    is_break=is_break,
+                    actor=request.user,
+                    request=request,
+                )
+                messages.success(request, f"Period '{p.name} {p.period_number}' created successfully.")
+            except (ValidationError, BusinessConflictError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to create period: {msg}")
+            return redirect(f"{request.path}?tab=periods")
+
+        elif action == 'update_period':
+            if not can_manage_timetable:
+                messages.error(request, "You do not have permission to manage timetables.")
+                return redirect('academics-timetable-list')
+            period_id = request.POST.get('period_id')
+            period_number = request.POST.get('period_number')
+            name = request.POST.get('name')
+            start_time = request.POST.get('start_time')
+            end_time = request.POST.get('end_time')
+            is_break = request.POST.get('is_break') == 'on'
+
+            try:
+                p = TimetablePeriodService.update_period(
+                    period_id=period_id,
+                    period_number=period_number,
+                    name=name,
+                    start_time=start_time,
+                    end_time=end_time,
+                    is_break=is_break,
+                    actor=request.user,
+                    request=request,
+                )
+                messages.success(request, f"Period '{p.name} {p.period_number}' updated successfully.")
+            except (ValidationError, ResourceNotFoundError, BusinessConflictError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to update period: {msg}")
+            return redirect(f"{request.path}?tab=periods")
+
+        elif action == 'delete_period':
+            if not can_manage_timetable:
+                messages.error(request, "You do not have permission to manage timetables.")
+                return redirect('academics-timetable-list')
+            period_id = request.POST.get('period_id')
+            try:
+                TimetablePeriodService.delete_period(period_id=period_id, actor=request.user, request=request)
+                messages.success(request, "Period deleted successfully.")
+            except (ResourceNotFoundError, BusinessConflictError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to delete period: {msg}")
+            return redirect(f"{request.path}?tab=periods")
+
+        elif action == 'generate_cbSE_periods' or action == 'generate_cbse_periods':
+            if not can_manage_timetable:
+                messages.error(request, "You do not have permission to manage timetables.")
+                return redirect('academics-timetable-list')
+            try:
+                periods = TimetablePeriodService.bulk_create_cbse_standard_periods(actor=request.user, request=request)
+                messages.success(request, f"Generated {len(periods)} CBSE standard periods (with Assembly, Breaks & 8 Teaching Periods).")
+            except BusinessConflictError as err:
+                messages.error(request, str(err))
+            return redirect(f"{request.path}?tab=periods")
+
+        # 2. Slot Actions
+        elif action == 'create_slot':
+            if not can_manage_timetable:
+                messages.error(request, "You do not have permission to manage timetables.")
+                return redirect('academics-timetable-list')
+            day_of_week = request.POST.get('day_of_week')
+            period_id = request.POST.get('period_id')
+            class_subject_id = request.POST.get('class_subject_id')
+            room_id = request.POST.get('room_id')
+            room = request.POST.get('room', '')
+            section_id = request.POST.get('section_id')
+
+            try:
+                slot = TimetableService.create_slot(
+                    day_of_week=day_of_week,
+                    period_id=period_id,
+                    class_subject_id=class_subject_id,
+                    room=room,
+                    room_id=int(room_id) if room_id and room_id.isdigit() else None,
+                    actor=request.user,
+                    request=request,
+                )
+                day_name = dict(TimetableSlot.DAYS_OF_WEEK).get(int(day_of_week), '')
+                messages.success(request, f"Scheduled {slot.class_subject.subject.name} for {slot.class_subject.section} on {day_name} ({slot.period.name} {slot.period.period_number}).")
+            except (ValidationError, ResourceNotFoundError, BusinessConflictError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Collision / Scheduling Error: {msg}")
+
+            redirect_url = f"{request.path}?tab=section_matrix"
+            if section_id:
+                redirect_url += f"&section_id={section_id}"
+            return redirect(redirect_url)
+
+        elif action == 'update_slot':
+            if not can_manage_timetable:
+                messages.error(request, "You do not have permission to manage timetables.")
+                return redirect('academics-timetable-list')
+            slot_id = request.POST.get('slot_id')
+            class_subject_id = request.POST.get('class_subject_id')
+            room_id = request.POST.get('room_id')
+            room = request.POST.get('room', '')
+            section_id = request.POST.get('section_id')
+
+            update_data = {}
+            if class_subject_id:
+                update_data['class_subject_id'] = class_subject_id
+            if room_id and room_id.isdigit():
+                update_data['room_id'] = int(room_id)
+            elif room is not None:
+                update_data['room'] = room
+
+            try:
+                slot = TimetableService.update_slot(
+                    slot_id=slot_id,
+                    actor=request.user,
+                    request=request,
+                    **update_data
+                )
+                messages.success(request, "Timetable slot updated successfully.")
+            except (ValidationError, ResourceNotFoundError, BusinessConflictError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Collision / Scheduling Error: {msg}")
+
+            redirect_url = f"{request.path}?tab=section_matrix"
+            if section_id:
+                redirect_url += f"&section_id={section_id}"
+            return redirect(redirect_url)
+
+        elif action == 'delete_slot':
+            if not can_manage_timetable:
+                messages.error(request, "You do not have permission to manage timetables.")
+                return redirect('academics-timetable-list')
+            slot_id = request.POST.get('slot_id')
+            section_id = request.POST.get('section_id')
+            try:
+                TimetableService.delete_slot(slot_id=slot_id, actor=request.user, request=request)
+                messages.success(request, "Class period unassigned from timetable.")
+            except (ResourceNotFoundError, ValidationError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to delete slot: {msg}")
+
+            redirect_url = f"{request.path}?tab=section_matrix"
+            if section_id:
+                redirect_url += f"&section_id={section_id}"
+            return redirect(redirect_url)
+
+        # 3. Room Actions
+        elif action == 'create_room':
+            if not can_manage_room:
+                messages.error(request, "You do not have permission to manage rooms.")
+                return redirect(f"{request.path}?tab=rooms")
+
+            room_number = request.POST.get('room_number', '').strip()
+            name = request.POST.get('name', '').strip()
+            room_type = request.POST.get('room_type', RoomType.CLASSROOM).strip()
+            capacity = request.POST.get('capacity', 40)
+            floor = request.POST.get('floor', '').strip()
+            description = request.POST.get('description', '').strip()
+            is_active = request.POST.get('is_active') == 'on'
+
+            try:
+                room_obj = RoomService.create_room(
+                    room_number=room_number,
+                    room_type=room_type,
+                    capacity=capacity,
+                    name=name,
+                    floor=floor,
+                    description=description,
+                    is_active=is_active,
+                    actor=request.user,
+                    request=request
+                )
+                messages.success(request, f"Room '{room_obj.room_number}' created successfully.")
+            except (ValidationError, BusinessConflictError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to create room: {msg}")
+            return redirect(f"{request.path}?tab=rooms")
+
+        elif action == 'update_room':
+            if not can_manage_room:
+                messages.error(request, "You do not have permission to manage rooms.")
+                return redirect(f"{request.path}?tab=rooms")
+
+            room_id = request.POST.get('room_id')
+            room_number = request.POST.get('room_number', '').strip()
+            name = request.POST.get('name', '').strip()
+            room_type = request.POST.get('room_type')
+            capacity = request.POST.get('capacity')
+            floor = request.POST.get('floor', '').strip()
+            description = request.POST.get('description', '').strip()
+            is_active = request.POST.get('is_active') == 'on'
+
+            try:
+                room_obj = RoomService.update_room(
+                    room_id=room_id,
+                    room_number=room_number,
+                    name=name,
+                    room_type=room_type,
+                    capacity=capacity,
+                    floor=floor,
+                    description=description,
+                    is_active=is_active,
+                    actor=request.user,
+                    request=request
+                )
+                messages.success(request, f"Room '{room_obj.room_number}' updated successfully.")
+            except (ValidationError, ResourceNotFoundError, BusinessConflictError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to update room: {msg}")
+            return redirect(f"{request.path}?tab=rooms")
+
+        elif action == 'toggle_room_status':
+            if not can_manage_room:
+                messages.error(request, "You do not have permission to manage rooms.")
+                return redirect(f"{request.path}?tab=rooms")
+
+            room_id = request.POST.get('room_id')
+            target_status = request.POST.get('is_active') == 'true'
+            try:
+                room_obj = RoomService.toggle_room_status(
+                    room_id=room_id,
+                    is_active=target_status,
+                    actor=request.user,
+                    request=request
+                )
+                messages.success(request, f"Room '{room_obj.room_number}' {'activated' if target_status else 'deactivated'} successfully.")
+            except (ResourceNotFoundError, ValidationError) as err:
+                msg = "; ".join(err.messages) if hasattr(err, 'messages') else str(err)
+                messages.error(request, f"Failed to change status: {msg}")
+            return redirect(f"{request.path}?tab=rooms")
+
+        elif action == 'delete_room':
+            if not can_manage_room:
+                messages.error(request, "You do not have permission to manage rooms.")
+                return redirect(f"{request.path}?tab=rooms")
+
+            room_id = request.POST.get('room_id')
+            try:
+                RoomService.delete_room(room_id=room_id, actor=request.user, request=request)
+                messages.success(request, "Room deleted successfully.")
+            except (BusinessConflictError, ResourceNotFoundError) as err:
+                messages.warning(request, str(err))
+            except Exception as err:
+                messages.error(request, f"An unexpected error occurred: {err}")
+            return redirect(f"{request.path}?tab=rooms")
+
+    # Context Data
+    all_periods = TimetablePeriodService.list_periods()
+    all_classes = SchoolClass.objects.filter(is_active=True).order_by('order', 'name')
+    all_sections = Section.objects.filter(is_active=True).select_related('school_class').order_by('school_class__order', 'name')
+    all_teachers = TeacherAssignmentService.get_eligible_faculty_queryset()
+    current_year = AcademicYearService.get_current_year()
+
+    # Section Matrix
+    selected_section_id = request.GET.get('section_id', '').strip()
+    selected_section = None
+    if selected_section_id.isdigit():
+        selected_section = Section.objects.filter(pk=int(selected_section_id), is_active=True).first()
+    elif all_sections.exists():
+        selected_section = all_sections.first()
+
+    section_matrix = None
+    available_subjects = []
+    if selected_section:
+        section_matrix = TimetableService.get_section_timetable_matrix(selected_section.pk)
+        available_subjects = ClassSubject.objects.filter(
+            section=selected_section, is_active=True
+        ).select_related('subject', 'teacher').order_by('subject__name')
+
+    # Teacher Matrix
+    selected_teacher_id = request.GET.get('teacher_id', '').strip()
+    selected_teacher = None
+    teacher_matrix = None
+    if selected_teacher_id.isdigit():
+        selected_teacher = all_teachers.filter(pk=int(selected_teacher_id)).first()
+    elif all_teachers.exists() and active_tab == 'teacher_matrix':
+        selected_teacher = all_teachers.first()
+
+    if selected_teacher:
+        teacher_matrix = TimetableService.get_teacher_timetable_matrix(selected_teacher.pk)
+
+    total_periods_count = all_periods.count()
+    teaching_periods_count = all_periods.filter(is_break=False).count()
+    break_periods_count = total_periods_count - teaching_periods_count
+    total_slots_count = TimetableSlot.objects.count()
+
+    # Room Master data
+    selected_room_type = request.GET.get('room_type', '').strip()
+    room_search_query = request.GET.get('q', '').strip()
+    all_rooms_qs = RoomService.list_rooms(
+        room_type=selected_room_type if selected_room_type else None,
+        search=room_search_query if room_search_query else None
+    )
+    active_rooms = RoomService.list_rooms(is_active=True)
+    total_rooms_count = Room.objects.count()
+    active_rooms_count = Room.objects.filter(is_active=True).count()
+
+    context = {
+        'active_tab': active_tab,
+        'all_periods': all_periods,
+        'all_classes': all_classes,
+        'all_sections': all_sections,
+        'all_teachers': all_teachers,
+        'current_year': current_year,
+        'selected_section': selected_section,
+        'section_matrix': section_matrix,
+        'available_subjects': available_subjects,
+        'selected_teacher': selected_teacher,
+        'teacher_matrix': teacher_matrix,
+        'all_rooms': all_rooms_qs,
+        'active_rooms': active_rooms,
+        'room_types': RoomType.choices,
+        'selected_room_type': selected_room_type,
+        'room_search_query': room_search_query,
+        'total_rooms_count': total_rooms_count,
+        'active_rooms_count': active_rooms_count,
+        'days_of_week': TimetableSlot.DAYS_OF_WEEK,
+        'total_periods_count': total_periods_count,
+        'teaching_periods_count': teaching_periods_count,
+        'break_periods_count': break_periods_count,
+        'total_slots_count': total_slots_count,
+        'can_manage': can_manage,
+        'can_manage_room': can_manage_room,
+    }
+    return render(request, 'dashboard/academics/timetable.html', context)

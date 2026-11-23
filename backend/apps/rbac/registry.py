@@ -256,6 +256,20 @@ PERMISSION_REGISTRY = [
         "description": "Create and edit class timetables and teacher assignments.",
     },
     {
+        "codename": "academics.room.view",
+        "module": "academics",
+        "action": "view",
+        "name": "View Rooms & Facilities",
+        "description": "View school classrooms, laboratories, facilities, and capacity details.",
+    },
+    {
+        "codename": "academics.room.manage",
+        "module": "academics",
+        "action": "change",
+        "name": "Manage Rooms & Facilities",
+        "description": "Create, edit, configure, and activate/deactivate school rooms and laboratories.",
+    },
+    {
         "codename": "academics.subjects.view",
         "module": "academics",
         "action": "view",
@@ -282,6 +296,20 @@ PERMISSION_REGISTRY = [
         "action": "change",
         "name": "Manage Class-Subject Mappings",
         "description": "Map subjects to classes, streams, and sections, and set compulsory/elective types.",
+    },
+    {
+        "codename": "academics.assignment.view",
+        "module": "academics",
+        "action": "view",
+        "name": "View Teacher Assignments",
+        "description": "View class teacher and subject teacher assignments and faculty workloads.",
+    },
+    {
+        "codename": "academics.assignment.manage",
+        "module": "academics",
+        "action": "change",
+        "name": "Manage Teacher Assignments",
+        "description": "Assign, reassign, or remove class teachers and subject teachers.",
     },
     # ── Attendance ────────────────────────────────────────────────────────
     {
@@ -311,6 +339,34 @@ PERMISSION_REGISTRY = [
         "action": "export",
         "name": "Export Attendance Reports",
         "description": "Download attendance shortage and summary reports.",
+    },
+    {
+        "codename": "attendance.holiday.view",
+        "module": "attendance",
+        "action": "view",
+        "name": "View School Holidays",
+        "description": "View school holiday calendar, gazetted holidays, and vacations.",
+    },
+    {
+        "codename": "attendance.holiday.manage",
+        "module": "attendance",
+        "action": "change",
+        "name": "Manage School Holidays",
+        "description": "Create, edit, and delete holidays and multi-day vacation breaks.",
+    },
+    {
+        "codename": "attendance.calendar.view",
+        "module": "attendance",
+        "action": "view",
+        "name": "View Calendar & Working Days",
+        "description": "View weekly working-day configurations and special day overrides.",
+    },
+    {
+        "codename": "attendance.calendar.manage",
+        "module": "attendance",
+        "action": "change",
+        "name": "Manage Calendar & Working Days",
+        "description": "Configure weekly working days, Saturday rules, and special day overrides.",
     },
     # ── Finance ───────────────────────────────────────────────────────────
     {

@@ -1,0 +1,91 @@
+{% extends 'dashboard/base.html' %}
+
+{% block admin %}
+<div class="container-fluid px-0">
+    <!-- Header -->
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
+        <div>
+            <h3 class="fw-bold mb-1 text-dark">Guardians Directory</h3>
+            <p class="text-muted mb-0 small">Directory of parents and legal guardians linked with enrolled students.</p>
+        </div>
+        <div class="d-flex align-items-center gap-2">
+            <a href="{% url 'students-student-list' %}" class="btn btn-outline-secondary btn-sm shadow-sm">
+                <i class="ti ti-users me-1"></i> Student Directory
+            </a>
+        </div>
+    </div>
+
+    <!-- Search Toolbar -->
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body p-3">
+            <form method="GET" class="row g-2 align-items-center">
+                <div class="col-md-6">
+                    <div class="input-group input-group-sm">
+                        <span class="input-group-text bg-white border-end-0"><i class="ti ti-search text-muted"></i></span>
+                        <input type="text" name="q" class="form-control border-start-0" placeholder="Search by guardian name, phone, email, or ward admission no..." value="{{ search_query }}">
+                    </div>
+                </div>
+                <div class="col-md-2">
+                    <button type="submit" class="btn btn-dark btn-sm w-100"><i class="ti ti-filter me-1"></i> Search</button>
+                </div>
+                {% if search_query %}
+                <div class="col-md-2">
+                    <a href="{% url 'students-guardians-list' %}" class="btn btn-outline-secondary btn-sm w-100">Clear</a>
+                </div>
+                {% endif %}
+            </form>
+        </div>
+    </div>
+
+    <!-- Guardians Table Card -->
+    <div class="card border-0 shadow-sm">
+        <div class="card-header bg-white border-bottom py-3 d-flex align-items-center justify-content-between">
+            <h5 class="fw-bold mb-0 text-dark">Parent & Guardian Records</h5>
+            <span class="badge bg-light text-secondary border">{{ guardians|length }} Records</span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th class="ps-3">Guardian Name</th>
+                        <th>Relationship</th>
+                        <th>Contact Phone</th>
+                        <th>Email Address</th>
+                        <th>Occupation</th>
+                        <th>Linked Wards (Students)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for g in guardians %}
+                    <tr>
+                        <td class="ps-3 fw-bold text-dark">
+                            <i class="ti ti-user text-primary me-1"></i> {{ g.first_name }} {{ g.last_name }}
+                        </td>
+                        <td><span class="badge bg-light text-secondary border">{{ g.relationship }}</span></td>
+                        <td><span class="text-dark"><i class="ti ti-phone me-1 text-muted"></i>{{ g.phone }}</span></td>
+                        <td>{{ g.email|default:"-" }}</td>
+                        <td>{{ g.occupation|default:"-" }}</td>
+                        <td>
+                            {% for student in g.students.all %}
+                            <a href="{% url 'students-student-detail' pk=student.pk %}" class="badge bg-primary-subtle text-primary border border-primary-subtle text-decoration-none me-1 mb-1">
+                                {{ student.full_name }} ({{ student.admission_number }})
+                            </a>
+                            {% empty %}
+                            <span class="text-muted small">No active wards</span>
+                            {% endfor %}
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="6" class="text-center py-5 text-muted">
+                            <i class="ti ti-user-x fs-1 mb-2 d-block"></i>
+                            No guardian records found.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

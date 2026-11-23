@@ -9,15 +9,22 @@ from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
 from django.contrib.auth import get_user_model
 
-from apps.academics.models import AcademicStream, ClassSubject, SchoolClass, Section, Stream, Subject, SubjectType, TimetablePeriod, TimetableSlot
+from apps.academics.models import (
+    AcademicStream, ClassSubject, Room, RoomType, SchoolClass, Section, Stream, Subject, SubjectType,
+    TimetablePeriod, TimetableSlot
+)
 from apps.academics.services import (
-    AcademicYearService, ClassSubjectService, SchoolClassService, SectionService, StreamService, SubjectService
+    AcademicYearService, ClassSubjectService, RoomService, SchoolClassService, SectionService, StreamService, SubjectService,
+    TeacherAssignmentService, TimetablePeriodService, TimetableService
 )
 from apps.audit.models import AuditAction, AuditLog
-from apps.rbac.models import Permission
+from apps.rbac.models import Permission, Role, ScopeType, UserRoleAssignment
 from apps.rbac.registry import PERMISSION_REGISTRY
 from apps.school_config.models import AcademicYear, SchoolProfile
 from common.exceptions import BusinessConflictError, ResourceNotFoundError
+
+from apps.identity.models import UserType
+from rest_framework.test import APIClient
 
 User = get_user_model()
 
@@ -1946,4 +1953,1525 @@ class ClassSubjectWebViewsTests(TestCase):
         mappings = list(response.context['mappings'])
         self.assertNotIn(m1, mappings)
         self.assertIn(m2, mappings)
+
+
+# ==============================================================================
+# Phase 3: Teacher Assignment Tests (Class Teachers & Subject Teachers)
+# ==============================================================================
+
+class TeacherAssignmentServiceTests(TestCase):
+    """
+    Focused unit tests for TeacherAssignmentService (Class Teachers & Subject Teachers).
+    """
+
+    def setUp(self):
+        self.admin = User.objects.create_superuser(username='admin_ta_svc', email='admin_ta@example.com', password='Password123!')
+        self.teacher1 = User.objects.create_user(username='t_sharma', first_name='Rohan', last_name='Sharma', email='rohan@school.edu', is_staff=True, user_type=UserType.TEACHER)
+        self.teacher2 = User.objects.create_user(username='t_verma', first_name='Priya', last_name='Verma', email='priya@school.edu', is_staff=True, user_type=UserType.TEACHER)
+        self.student_user = User.objects.create_user(username='student_user', first_name='Arun', is_staff=False, user_type=UserType.STUDENT)
+
+        self.c10 = SchoolClassService.create_class(name='Class 10', code='CL-10', order=10, actor=self.admin)
+        self.sec10_a = SectionService.create_section(school_class_id=self.c10.pk, name='A', actor=self.admin)
+        self.sec10_b = SectionService.create_section(school_class_id=self.c10.pk, name='B', actor=self.admin)
+
+        self.sub_math = SubjectService.create_subject(name='Mathematics Standard', code='MATH-10', actor=self.admin)
+        self.sub_sci = SubjectService.create_subject(name='Science', code='SCI-10', actor=self.admin)
+
+        self.mapping_math_a = ClassSubjectService.create_mapping(section_id=self.sec10_a.pk, subject_id=self.sub_math.pk, actor=self.admin)
+        self.mapping_math_b = ClassSubjectService.create_mapping(section_id=self.sec10_b.pk, subject_id=self.sub_math.pk, actor=self.admin)
+        self.mapping_sci_a = ClassSubjectService.create_mapping(section_id=self.sec10_a.pk, subject_id=self.sub_sci.pk, actor=self.admin)
+
+    def test_assign_class_teacher_success_and_audit(self):
+        sec = TeacherAssignmentService.assign_class_teacher(
+            section_id=self.sec10_a.pk,
+            teacher_id=self.teacher1.pk,
+            actor=self.admin,
+            reason="Appointed as Class Teacher for 10-A"
+        )
+        self.assertEqual(sec.class_teacher, self.teacher1)
+
+        log = AuditLog.objects.filter(entity_type='Section', entity_id=str(sec.pk), action=AuditAction.UPDATE).first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.actor, self.admin)
+        self.assertIn('class_teacher', log.changes)
+
+    def test_assign_class_teacher_inactive_user_fails(self):
+        self.teacher1.is_active = False
+        self.teacher1.save()
+        with self.assertRaises(ValidationError) as ctx:
+            TeacherAssignmentService.assign_class_teacher(section_id=self.sec10_a.pk, teacher_id=self.teacher1.pk, actor=self.admin)
+        self.assertIn('teacher', ctx.exception.message_dict)
+
+    def test_assign_class_teacher_ineligible_user_fails(self):
+        with self.assertRaises(ValidationError) as ctx:
+            TeacherAssignmentService.assign_class_teacher(section_id=self.sec10_a.pk, teacher_id=self.student_user.pk, actor=self.admin)
+        self.assertIn('teacher', ctx.exception.message_dict)
+
+    def test_assign_scoped_non_staff_teacher_succeeds(self):
+        """
+        Verifies that a user created with user_type=TEACHER and is_staff=False
+        (e.g., scoped to OWN_ONLY or SECTION from dashboard) is eligible faculty,
+        appears in get_eligible_faculty_queryset(), can be assigned as Class Teacher
+        and Subject Teacher, and appears in the workload summary.
+        """
+        scoped_teacher = User.objects.create_user(
+            username='divya_test',
+            email='divya_test@example.com',
+            first_name='Divya',
+            last_name='Singh',
+            user_type=UserType.TEACHER,
+            is_staff=False,
+        )
+        self.assertTrue(TeacherAssignmentService.is_eligible_faculty(scoped_teacher))
+        faculty_qs = TeacherAssignmentService.get_eligible_faculty_queryset()
+        self.assertIn(scoped_teacher, faculty_qs)
+
+        # Assign as class teacher
+        sec = TeacherAssignmentService.assign_class_teacher(
+            section_id=self.sec10_a.pk,
+            teacher_id=scoped_teacher.pk,
+            actor=self.admin
+        )
+        self.assertEqual(sec.class_teacher, scoped_teacher)
+
+        # Assign as subject teacher
+        cs = TeacherAssignmentService.assign_subject_teacher(
+            class_subject_id=self.mapping_math_a.pk,
+            teacher_id=scoped_teacher.pk,
+            actor=self.admin
+        )
+        self.assertEqual(cs.teacher, scoped_teacher)
+
+        # Workload summary includes scoped_teacher
+        workload = TeacherAssignmentService.get_faculty_workload_summary()
+        teacher_workload = [w for w in workload if w['teacher'] == scoped_teacher]
+        self.assertEqual(len(teacher_workload), 1)
+        self.assertEqual(teacher_workload[0]['total_subjects'], 1)
+        self.assertEqual(len(teacher_workload[0]['class_teacher_sections']), 1)
+
+    def test_assign_class_teacher_collision_prevention(self):
+        # Teacher 1 assigned to 10-A
+        TeacherAssignmentService.assign_class_teacher(section_id=self.sec10_a.pk, teacher_id=self.teacher1.pk, actor=self.admin)
+
+        # Assigning Teacher 1 to 10-B fails without force
+        with self.assertRaises(ValidationError) as ctx:
+            TeacherAssignmentService.assign_class_teacher(section_id=self.sec10_b.pk, teacher_id=self.teacher1.pk, actor=self.admin)
+        self.assertIn('teacher', ctx.exception.message_dict)
+
+        # With force=True, it succeeds
+        sec_b = TeacherAssignmentService.assign_class_teacher(
+            section_id=self.sec10_b.pk,
+            teacher_id=self.teacher1.pk,
+            actor=self.admin,
+            force=True
+        )
+        self.assertEqual(sec_b.class_teacher, self.teacher1)
+
+    def test_remove_class_teacher(self):
+        TeacherAssignmentService.assign_class_teacher(section_id=self.sec10_a.pk, teacher_id=self.teacher1.pk, actor=self.admin)
+        sec = TeacherAssignmentService.remove_class_teacher(section_id=self.sec10_a.pk, actor=self.admin)
+        self.assertIsNone(sec.class_teacher)
+
+    def test_assign_subject_teacher_success_and_audit(self):
+        cs = TeacherAssignmentService.assign_subject_teacher(
+            class_subject_id=self.mapping_math_a.pk,
+            teacher_id=self.teacher1.pk,
+            actor=self.admin,
+            reason="Assigned Rohan Sharma to teach Math 10-A"
+        )
+        self.assertEqual(cs.teacher, self.teacher1)
+
+        log = AuditLog.objects.filter(entity_type='ClassSubject', entity_id=str(cs.pk), action=AuditAction.UPDATE).first()
+        self.assertIsNotNone(log)
+
+    def test_bulk_assign_subject_teacher(self):
+        # Assign teacher 2 to Math in both Section A and Section B
+        count = TeacherAssignmentService.bulk_assign_subject_teacher(
+            class_subject_ids=[self.mapping_math_a.pk, self.mapping_math_b.pk],
+            teacher_id=self.teacher2.pk,
+            actor=self.admin
+        )
+        self.assertEqual(count, 2)
+        self.mapping_math_a.refresh_from_db()
+        self.mapping_math_b.refresh_from_db()
+        self.assertEqual(self.mapping_math_a.teacher, self.teacher2)
+        self.assertEqual(self.mapping_math_b.teacher, self.teacher2)
+
+    def test_remove_subject_teacher(self):
+        TeacherAssignmentService.assign_subject_teacher(class_subject_id=self.mapping_math_a.pk, teacher_id=self.teacher1.pk, actor=self.admin)
+        cs = TeacherAssignmentService.remove_subject_teacher(class_subject_id=self.mapping_math_a.pk, actor=self.admin)
+        self.assertIsNone(cs.teacher)
+
+    def test_get_faculty_workload_summary(self):
+        # Assign teacher 1 as class teacher of 10-A and subject teacher of Math & Science
+        TeacherAssignmentService.assign_class_teacher(section_id=self.sec10_a.pk, teacher_id=self.teacher1.pk, actor=self.admin)
+        TeacherAssignmentService.assign_subject_teacher(class_subject_id=self.mapping_math_a.pk, teacher_id=self.teacher1.pk, actor=self.admin)
+        TeacherAssignmentService.assign_subject_teacher(class_subject_id=self.mapping_sci_a.pk, teacher_id=self.teacher1.pk, actor=self.admin)
+
+        summary = TeacherAssignmentService.get_faculty_workload_summary()
+        t1_summary = next((w for w in summary if w['teacher'].pk == self.teacher1.pk), None)
+        self.assertIsNotNone(t1_summary)
+        self.assertEqual(len(t1_summary['class_teacher_sections']), 1)
+        self.assertEqual(t1_summary['total_subjects'], 2)
+        self.assertIn('Class 10', t1_summary['distinct_classes'])
+
+
+class TeacherAssignmentWebViewsTests(TestCase):
+    """
+    Integration tests for Teacher Assignment dashboard web views.
+    """
+
+    def setUp(self):
+        call_command('sync_permissions', verbosity=0)
+        self.superuser = User.objects.create_superuser(
+            username='admin_ta_web',
+            email='admin_ta_web@example.com',
+            password='Password123!'
+        )
+        self.teacher = User.objects.create_user(username='t_gupta', first_name='Amit', last_name='Gupta', is_staff=True)
+
+        self.c10 = SchoolClassService.create_class(name='Class 10', code='CL-10', order=10, actor=self.superuser)
+        self.sec10_a = SectionService.create_section(school_class_id=self.c10.pk, name='A', actor=self.superuser)
+        self.sub = SubjectService.create_subject(name='Computer Science', code='CS-10', actor=self.superuser)
+        self.mapping = ClassSubjectService.create_mapping(section_id=self.sec10_a.pk, subject_id=self.sub.pk, actor=self.superuser)
+
+        self.client.force_login(self.superuser)
+
+    def test_anonymous_redirected_to_login(self):
+        self.client.logout()
+        response = self.client.get(reverse('academics-teacher-assignments-list'))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/login/', response.url)
+
+    def test_superuser_has_full_access(self):
+        response = self.client.get(reverse('academics-teacher-assignments-list'))
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'dashboard/academics/teacher_assignments.html')
+        self.assertTrue(response.context['can_manage'])
+
+    def test_assign_class_teacher_post(self):
+        post_data = {
+            'action': 'assign_class_teacher',
+            'section_id': self.sec10_a.pk,
+            'teacher_id': self.teacher.pk,
+            'reason': 'Assigned Amit Gupta to 10-A',
+        }
+        response = self.client.post(reverse('academics-teacher-assignments-list'), data=post_data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.sec10_a.refresh_from_db()
+        self.assertEqual(self.sec10_a.class_teacher, self.teacher)
+
+    def test_remove_class_teacher_post(self):
+        self.sec10_a.class_teacher = self.teacher
+        self.sec10_a.save()
+        post_data = {
+            'action': 'remove_class_teacher',
+            'section_id': self.sec10_a.pk,
+        }
+        response = self.client.post(reverse('academics-teacher-assignments-list'), data=post_data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.sec10_a.refresh_from_db()
+        self.assertIsNone(self.sec10_a.class_teacher)
+
+    def test_assign_subject_teacher_post(self):
+        post_data = {
+            'action': 'assign_subject_teacher',
+            'class_subject_id': self.mapping.pk,
+            'teacher_id': self.teacher.pk,
+        }
+        response = self.client.post(reverse('academics-teacher-assignments-list'), data=post_data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.mapping.refresh_from_db()
+        self.assertEqual(self.mapping.teacher, self.teacher)
+
+    def test_bulk_assign_subject_teacher_post(self):
+        post_data = {
+            'action': 'bulk_assign_subject_teacher',
+            'class_subject_ids': [self.mapping.pk],
+            'teacher_id': self.teacher.pk,
+        }
+        response = self.client.post(reverse('academics-teacher-assignments-list'), data=post_data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.mapping.refresh_from_db()
+        self.assertEqual(self.mapping.teacher, self.teacher)
+
+    def test_remove_subject_teacher_post(self):
+        self.mapping.teacher = self.teacher
+        self.mapping.save()
+        post_data = {
+            'action': 'remove_subject_teacher',
+            'class_subject_id': self.mapping.pk,
+        }
+        response = self.client.post(reverse('academics-teacher-assignments-list'), data=post_data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.mapping.refresh_from_db()
+        self.assertIsNone(self.mapping.teacher)
+
+    def test_tabs_rendering(self):
+        for tab_name in ('class_teachers', 'subject_teachers', 'workload'):
+            response = self.client.get(f"{reverse('academics-teacher-assignments-list')}?tab={tab_name}")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.context['active_tab'], tab_name)
+
+    def test_scoped_teacher_appears_in_web_view_context(self):
+        # Create non-staff teacher (e.g. scoped teacher created from dashboard)
+        scoped_teacher = User.objects.create_user(
+            username='divya_web',
+            email='divya_web@school.edu',
+            first_name='Divya',
+            last_name='Singh',
+            user_type=UserType.TEACHER,
+            is_staff=False,
+        )
+        response = self.client.get(reverse('academics-teacher-assignments-list'))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(scoped_teacher, response.context['all_teachers'])
+        # Also test workload tab includes scoped teacher
+        response_workload = self.client.get(f"{reverse('academics-teacher-assignments-list')}?tab=workload")
+        self.assertEqual(response_workload.status_code, 200)
+        workload_teachers = [w['teacher'] for w in response_workload.context['faculty_workload_list']]
+        self.assertIn(scoped_teacher, workload_teachers)
+
+
+class TeacherAssignmentAPITests(TestCase):
+    """
+    Unit & Integration tests for Teacher Assignment DRF REST API endpoints (/api/v1/academics/...).
+    """
+
+    def setUp(self):
+        call_command('sync_permissions', verbosity=0)
+        self.superuser = User.objects.create_superuser(
+            username='admin_ta_api',
+            email='admin_ta_api@example.com',
+            password='Password123!'
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.superuser)
+
+        self.teacher = User.objects.create_user(
+            username='t_neha',
+            first_name='Neha',
+            last_name='Kapoor',
+            email='neha@school.edu',
+            user_type=UserType.TEACHER,
+            is_staff=False
+        )
+
+        self.c10 = SchoolClassService.create_class(name='Class 10', code='CL-10', order=10, actor=self.superuser)
+        self.sec10_a = SectionService.create_section(school_class_id=self.c10.pk, name='A', actor=self.superuser)
+        self.sub_sci = SubjectService.create_subject(name='Physics', code='PHY-10', actor=self.superuser)
+        self.mapping = ClassSubjectService.create_mapping(section_id=self.sec10_a.pk, subject_id=self.sub_sci.pk, actor=self.superuser)
+
+    def test_assign_class_teacher_api(self):
+        url = f"/api/v1/academics/sections/{self.sec10_a.pk}/assign-class-teacher/"
+        response = self.client.post(url, {'teacher_id': self.teacher.pk})
+        self.assertEqual(response.status_code, 200)
+        self.sec10_a.refresh_from_db()
+        self.assertEqual(self.sec10_a.class_teacher, self.teacher)
+
+    def test_remove_class_teacher_api(self):
+        self.sec10_a.class_teacher = self.teacher
+        self.sec10_a.save()
+        url = f"/api/v1/academics/sections/{self.sec10_a.pk}/remove-class-teacher/"
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 200)
+        self.sec10_a.refresh_from_db()
+        self.assertIsNone(self.sec10_a.class_teacher)
+
+    def test_assign_subject_teacher_api(self):
+        url = f"/api/v1/academics/class-subjects/{self.mapping.pk}/assign-teacher/"
+        response = self.client.post(url, {'teacher_id': self.teacher.pk})
+        self.assertEqual(response.status_code, 200)
+        self.mapping.refresh_from_db()
+        self.assertEqual(self.mapping.teacher, self.teacher)
+
+    def test_remove_subject_teacher_api(self):
+        self.mapping.teacher = self.teacher
+        self.mapping.save()
+        url = f"/api/v1/academics/class-subjects/{self.mapping.pk}/remove-teacher/"
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 200)
+        self.mapping.refresh_from_db()
+        self.assertIsNone(self.mapping.teacher)
+
+    def test_bulk_assign_subject_teacher_api(self):
+        url = "/api/v1/academics/class-subjects/bulk-assign-teacher/"
+        response = self.client.post(url, {
+            'class_subjects': [self.mapping.pk],
+            'teacher_id': self.teacher.pk,
+        }, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['assigned_count'], 1)
+        self.mapping.refresh_from_db()
+        self.assertEqual(self.mapping.teacher, self.teacher)
+
+    def test_faculty_workload_api(self):
+        url = "/api/v1/academics/class-subjects/faculty-workload/"
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIsInstance(response.data, list)
+        teacher_entry = [w for w in response.data if w['teacher_id'] == self.teacher.pk]
+        self.assertEqual(len(teacher_entry), 1)
+
+    def test_eligible_faculty_api(self):
+        url = "/api/v1/academics/class-subjects/eligible-faculty/"
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIsInstance(response.data, list)
+        faculty_ids = [f['id'] for f in response.data]
+        self.assertIn(self.teacher.pk, faculty_ids)
+
+
+# ==============================================================================
+# Phase 4: Timetable & Scheduling Tests
+# ==============================================================================
+
+class TimetablePeriodServiceTests(TestCase):
+    """
+    Unit tests for TimetablePeriodService (Bell schedule, time validation, overlap detection).
+    """
+
+    def setUp(self):
+        self.admin = User.objects.create_superuser(
+            username='admin_period_svc',
+            email='admin_p_svc@example.com',
+            password='Password123!'
+        )
+
+    def test_create_period_success_and_audit(self):
+        p = TimetablePeriodService.create_period(
+            period_number=1,
+            name="Period 1",
+            start_time="08:30:00",
+            end_time="09:15:00",
+            is_break=False,
+            actor=self.admin,
+            reason="Morning initial period"
+        )
+        self.assertEqual(p.period_number, 1)
+        self.assertEqual(p.name, "Period 1")
+        self.assertFalse(p.is_break)
+
+        log = AuditLog.objects.filter(entity_type='TimetablePeriod', entity_id=str(p.pk), action=AuditAction.CREATE).first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.actor, self.admin)
+
+    def test_create_period_end_before_start_fails(self):
+        with self.assertRaises(ValidationError) as ctx:
+            TimetablePeriodService.create_period(
+                period_number=1,
+                name="Invalid Period",
+                start_time="10:00:00",
+                end_time="09:00:00",
+                actor=self.admin
+            )
+        self.assertIn('end_time', ctx.exception.message_dict)
+
+    def test_create_period_time_overlap_fails(self):
+        TimetablePeriodService.create_period(
+            period_number=1,
+            name="Period 1",
+            start_time="08:30:00",
+            end_time="09:15:00",
+            actor=self.admin
+        )
+        # Overlapping period (09:00 to 09:45 overlaps with 08:30 to 09:15)
+        with self.assertRaises(ValidationError) as ctx:
+            TimetablePeriodService.create_period(
+                period_number=2,
+                name="Period 2",
+                start_time="09:00:00",
+                end_time="09:45:00",
+                actor=self.admin
+            )
+        self.assertIn('start_time', ctx.exception.message_dict)
+
+    def test_create_period_duplicate_number_fails(self):
+        TimetablePeriodService.create_period(
+            period_number=1,
+            name="Period 1",
+            start_time="08:30:00",
+            end_time="09:15:00",
+            actor=self.admin
+        )
+        with self.assertRaises(ValidationError) as ctx:
+            TimetablePeriodService.create_period(
+                period_number=1,
+                name="Period 1 Duplicate",
+                start_time="09:20:00",
+                end_time="10:05:00",
+                actor=self.admin
+            )
+        self.assertIn('period_number', ctx.exception.message_dict)
+
+    def test_update_period_success_and_audit(self):
+        p = TimetablePeriodService.create_period(
+            period_number=1,
+            name="Period 1",
+            start_time="08:30:00",
+            end_time="09:15:00",
+            actor=self.admin
+        )
+        updated = TimetablePeriodService.update_period(
+            period_id=p.pk,
+            name="Assembly / Period 1",
+            is_break=True,
+            actor=self.admin,
+            reason="Combined session"
+        )
+        self.assertEqual(updated.name, "Assembly / Period 1")
+        self.assertTrue(updated.is_break)
+
+        log = AuditLog.objects.filter(entity_type='TimetablePeriod', entity_id=str(p.pk), action=AuditAction.UPDATE).first()
+        self.assertIsNotNone(log)
+
+    def test_bulk_create_cbse_standard_periods(self):
+        periods = TimetablePeriodService.bulk_create_cbse_standard_periods(actor=self.admin)
+        self.assertEqual(len(periods), 11)
+        # Should fail if called again
+        with self.assertRaises(BusinessConflictError):
+            TimetablePeriodService.bulk_create_cbse_standard_periods(actor=self.admin)
+
+
+class TimetableServiceTests(TestCase):
+    """
+    Unit tests for TimetableService & Collision Detection Engine (Section, Teacher, Room clashes).
+    """
+
+    def setUp(self):
+        self.admin = User.objects.create_superuser(
+            username='admin_tt_svc',
+            email='admin_tt_svc@example.com',
+            password='Password123!'
+        )
+        self.academic_year = AcademicYearService.create_academic_year(
+            name="2026-2027",
+            start_date_val="2026-04-01",
+            end_date_val="2027-03-31",
+            is_current=True,
+            is_active=True,
+            actor=self.admin
+        )
+
+        # Teachers
+        self.teacher_math = User.objects.create_user(
+            username='t_math', email='t_math@school.edu', first_name='Ramanujan', user_type=UserType.TEACHER, is_staff=True
+        )
+        self.teacher_sci = User.objects.create_user(
+            username='t_sci', email='t_sci@school.edu', first_name='Curie', user_type=UserType.TEACHER, is_staff=True
+        )
+
+        # Classes & Sections
+        self.c10 = SchoolClassService.create_class(name='Class 10', code='CL-10', order=10, actor=self.admin)
+        self.sec10_a = SectionService.create_section(school_class_id=self.c10.pk, name='A', room_number='Room 101', actor=self.admin)
+        self.sec10_b = SectionService.create_section(school_class_id=self.c10.pk, name='B', room_number='Room 102', actor=self.admin)
+
+        # Subjects & Mappings
+        self.sub_math = SubjectService.create_subject(name='Mathematics', code='M-10', actor=self.admin)
+        self.sub_sci = SubjectService.create_subject(name='Science', code='S-10', actor=self.admin)
+
+        self.map_math_a = ClassSubjectService.create_mapping(section_id=self.sec10_a.pk, subject_id=self.sub_math.pk, actor=self.admin)
+        self.map_sci_a = ClassSubjectService.create_mapping(section_id=self.sec10_a.pk, subject_id=self.sub_sci.pk, actor=self.admin)
+        self.map_math_b = ClassSubjectService.create_mapping(section_id=self.sec10_b.pk, subject_id=self.sub_math.pk, actor=self.admin)
+
+        TeacherAssignmentService.assign_subject_teacher(self.map_math_a.pk, self.teacher_math.pk, actor=self.admin)
+        TeacherAssignmentService.assign_subject_teacher(self.map_math_b.pk, self.teacher_math.pk, actor=self.admin)
+        TeacherAssignmentService.assign_subject_teacher(self.map_sci_a.pk, self.teacher_sci.pk, actor=self.admin)
+
+        # Periods
+        self.period_1 = TimetablePeriodService.create_period(period_number=1, name="Period 1", start_time="08:30", end_time="09:15", is_break=False, actor=self.admin)
+        self.period_2 = TimetablePeriodService.create_period(period_number=2, name="Period 2", start_time="09:15", end_time="10:00", is_break=False, actor=self.admin)
+        self.break_period = TimetablePeriodService.create_period(period_number=3, name="Recess", start_time="10:00", end_time="10:30", is_break=True, actor=self.admin)
+
+    def test_create_slot_success_and_audit(self):
+        slot = TimetableService.create_slot(
+            day_of_week=1,  # Monday
+            period_id=self.period_1.pk,
+            class_subject_id=self.map_math_a.pk,
+            room="Room 101",
+            actor=self.admin
+        )
+        self.assertEqual(slot.day_of_week, 1)
+        self.assertEqual(slot.period, self.period_1)
+        self.assertEqual(slot.class_subject, self.map_math_a)
+        self.assertEqual(slot.room, "Room 101")
+
+        log = AuditLog.objects.filter(entity_type='TimetableSlot', entity_id=str(slot.pk), action=AuditAction.CREATE).first()
+        self.assertIsNotNone(log)
+
+    def test_schedule_during_break_period_fails(self):
+        with self.assertRaises(ValidationError) as ctx:
+            TimetableService.create_slot(
+                day_of_week=1,
+                period_id=self.break_period.pk,
+                class_subject_id=self.map_math_a.pk,
+                actor=self.admin
+            )
+        self.assertIn('period', ctx.exception.message_dict)
+
+    def test_section_collision_prevention(self):
+        # 10-A has Math on Monday Period 1
+        TimetableService.create_slot(
+            day_of_week=1,
+            period_id=self.period_1.pk,
+            class_subject_id=self.map_math_a.pk,
+            actor=self.admin
+        )
+        # Attempting to also schedule Science for 10-A on Monday Period 1 must raise BusinessConflictError
+        with self.assertRaises(BusinessConflictError) as ctx:
+            TimetableService.create_slot(
+                day_of_week=1,
+                period_id=self.period_1.pk,
+                class_subject_id=self.map_sci_a.pk,
+                actor=self.admin
+            )
+        self.assertIn("already has", str(ctx.exception))
+
+    def test_teacher_collision_prevention(self):
+        # Teacher Ramanujan teaches 10-A on Monday Period 1
+        TimetableService.create_slot(
+            day_of_week=1,
+            period_id=self.period_1.pk,
+            class_subject_id=self.map_math_a.pk,
+            room="Room 101",
+            actor=self.admin
+        )
+        # Attempting to assign Ramanujan to 10-B also on Monday Period 1 must fail
+        with self.assertRaises(BusinessConflictError) as ctx:
+            TimetableService.create_slot(
+                day_of_week=1,
+                period_id=self.period_1.pk,
+                class_subject_id=self.map_math_b.pk,
+                room="Room 102",
+                actor=self.admin
+            )
+        self.assertIn("already assigned to teach", str(ctx.exception))
+
+    def test_room_collision_prevention(self):
+        # 10-A is in Room 101 on Monday Period 1
+        TimetableService.create_slot(
+            day_of_week=1,
+            period_id=self.period_1.pk,
+            class_subject_id=self.map_sci_a.pk,
+            room="Room 101",
+            actor=self.admin
+        )
+        # 10-B with different teacher also booking Room 101 at the same period must fail
+        with self.assertRaises(BusinessConflictError) as ctx:
+            TimetableService.create_slot(
+                day_of_week=1,
+                period_id=self.period_1.pk,
+                class_subject_id=self.map_math_b.pk,
+                room="Room 101",
+                actor=self.admin
+            )
+        self.assertIn("already booked", str(ctx.exception))
+
+    def test_update_slot_collision_exclusion(self):
+        slot = TimetableService.create_slot(
+            day_of_week=1,
+            period_id=self.period_1.pk,
+            class_subject_id=self.map_math_a.pk,
+            room="Room 101",
+            actor=self.admin
+        )
+        updated = TimetableService.update_slot(
+            slot_id=slot.pk,
+            room="Lab 1",
+            actor=self.admin
+        )
+        self.assertEqual(updated.room, "Lab 1")
+
+    def test_delete_period_with_slots_fails(self):
+        TimetableService.create_slot(
+            day_of_week=1,
+            period_id=self.period_1.pk,
+            class_subject_id=self.map_math_a.pk,
+            actor=self.admin
+        )
+        with self.assertRaises(BusinessConflictError):
+            TimetablePeriodService.delete_period(self.period_1.pk, actor=self.admin)
+
+    def test_get_section_timetable_matrix(self):
+        TimetableService.create_slot(
+            day_of_week=1,
+            period_id=self.period_1.pk,
+            class_subject_id=self.map_math_a.pk,
+            actor=self.admin
+        )
+        matrix = TimetableService.get_section_timetable_matrix(self.sec10_a.pk)
+        self.assertEqual(matrix['total_scheduled'], 1)
+        self.assertIn('Mathematics', matrix['subject_counts'])
+        self.assertEqual(matrix['subject_counts']['Mathematics'], 1)
+
+    def test_get_teacher_timetable_matrix(self):
+        TimetableService.create_slot(
+            day_of_week=1,
+            period_id=self.period_1.pk,
+            class_subject_id=self.map_math_a.pk,
+            actor=self.admin
+        )
+        matrix = TimetableService.get_teacher_timetable_matrix(self.teacher_math.pk)
+        self.assertEqual(matrix['total_scheduled'], 1)
+        self.assertIn(str(self.sec10_a), matrix['sections_covered'])
+
+
+class TimetableWebViewsTests(TestCase):
+    """
+    Unit & Integration tests for Timetable dashboard web views and modal workflows.
+    """
+
+    def setUp(self):
+        call_command('sync_permissions', verbosity=0)
+        self.superuser = User.objects.create_superuser(
+            username='admin_tt_web',
+            email='admin_tt_web@example.com',
+            password='Password123!'
+        )
+        self.academic_year = AcademicYearService.create_academic_year(
+            name="2026-2027",
+            start_date_val="2026-04-01",
+            end_date_val="2027-03-31",
+            is_current=True,
+            is_active=True,
+            actor=self.superuser
+        )
+
+        self.c10 = SchoolClassService.create_class(name='Class 10', code='CL-10', order=10, actor=self.superuser)
+        self.sec = SectionService.create_section(school_class_id=self.c10.pk, name='A', actor=self.superuser)
+        self.sub = SubjectService.create_subject(name='English', code='ENG-10', actor=self.superuser)
+        self.map = ClassSubjectService.create_mapping(section_id=self.sec.pk, subject_id=self.sub.pk, actor=self.superuser)
+
+        self.period = TimetablePeriodService.create_period(
+            period_number=1, name="Period 1", start_time="08:30", end_time="09:15", is_break=False, actor=self.superuser
+        )
+
+        self.client.force_login(self.superuser)
+
+    def test_anonymous_redirected_to_login(self):
+        self.client.logout()
+        response = self.client.get(reverse('academics-timetable-list'))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/login/', response.url)
+
+    def test_superuser_has_full_access(self):
+        response = self.client.get(reverse('academics-timetable-list'))
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'dashboard/academics/timetable.html')
+        self.assertTrue(response.context['can_manage'])
+
+    def test_create_slot_post_action(self):
+        post_data = {
+            'action': 'create_slot',
+            'day_of_week': 1,
+            'period_id': self.period.pk,
+            'class_subject_id': self.map.pk,
+            'room': 'Room 101',
+            'section_id': self.sec.pk,
+        }
+        response = self.client.post(reverse('academics-timetable-list'), data=post_data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(TimetableSlot.objects.filter(class_subject=self.map, day_of_week=1).exists())
+
+    def test_delete_slot_post_action(self):
+        slot = TimetableService.create_slot(
+            day_of_week=1,
+            period_id=self.period.pk,
+            class_subject_id=self.map.pk,
+            actor=self.superuser
+        )
+        post_data = {
+            'action': 'delete_slot',
+            'slot_id': slot.pk,
+            'section_id': self.sec.pk,
+        }
+        response = self.client.post(reverse('academics-timetable-list'), data=post_data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(TimetableSlot.objects.filter(pk=slot.pk).exists())
+
+    def test_tabs_rendering(self):
+        for tab_name in ('section_matrix', 'teacher_matrix', 'periods'):
+            response = self.client.get(f"{reverse('academics-timetable-list')}?tab={tab_name}")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.context['active_tab'], tab_name)
+
+
+class TimetableAPITests(TestCase):
+    """
+    Unit & Integration tests for Timetable DRF REST API endpoints (/api/v1/academics/periods/, /api/v1/academics/timetable-slots/).
+    """
+
+    def setUp(self):
+        call_command('sync_permissions', verbosity=0)
+        self.superuser = User.objects.create_superuser(
+            username='admin_tt_api',
+            email='admin_tt_api@example.com',
+            password='Password123!'
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.superuser)
+
+        self.academic_year = AcademicYearService.create_academic_year(
+            name="2026-2027",
+            start_date_val="2026-04-01",
+            end_date_val="2027-03-31",
+            is_current=True,
+            is_active=True,
+            actor=self.superuser
+        )
+
+        self.teacher = User.objects.create_user(
+            username='t_hindi', email='t_hindi@school.edu', first_name='Premchand', user_type=UserType.TEACHER, is_staff=True
+        )
+
+        self.c10 = SchoolClassService.create_class(name='Class 10', code='CL-10', order=10, actor=self.superuser)
+        self.sec = SectionService.create_section(school_class_id=self.c10.pk, name='A', actor=self.superuser)
+        self.sub = SubjectService.create_subject(name='Hindi', code='HIN-10', actor=self.superuser)
+        self.map = ClassSubjectService.create_mapping(section_id=self.sec.pk, subject_id=self.sub.pk, actor=self.superuser)
+        TeacherAssignmentService.assign_subject_teacher(self.map.pk, self.teacher.pk, actor=self.superuser)
+
+        self.period = TimetablePeriodService.create_period(
+            period_number=1, name="Period 1", start_time="08:30", end_time="09:15", is_break=False, actor=self.superuser
+        )
+
+    def test_period_viewset_list(self):
+        url = "/api/v1/academics/periods/"
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_slot_viewset_create_and_conflict_check(self):
+        url = "/api/v1/academics/timetable-slots/"
+        post_data = {
+            'academic_year': self.academic_year.pk,
+            'day_of_week': 1,
+            'period': self.period.pk,
+            'class_subject': self.map.pk,
+            'room': 'Room 101'
+        }
+        response = self.client.post(url, post_data)
+        self.assertEqual(response.status_code, 201)
+
+        # Attempting duplicate slot on same section/day/period must fail with 400
+        response_dup = self.client.post(url, post_data)
+        self.assertEqual(response_dup.status_code, 400)
+
+    def test_section_matrix_api(self):
+        # Create a slot first
+        TimetableService.create_slot(
+            day_of_week=1,
+            period_id=self.period.pk,
+            class_subject_id=self.map.pk,
+            actor=self.superuser
+        )
+        url = f"/api/v1/academics/timetable-slots/section-matrix/?section_id={self.sec.pk}"
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('grid', response.data)
+        self.assertEqual(response.data['total_scheduled'], 1)
+
+    def test_teacher_matrix_api(self):
+        TimetableService.create_slot(
+            day_of_week=1,
+            period_id=self.period.pk,
+            class_subject_id=self.map.pk,
+            actor=self.superuser
+        )
+        url = f"/api/v1/academics/timetable-slots/teacher-matrix/?teacher_id={self.teacher.pk}"
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('grid', response.data)
+        self.assertEqual(response.data['total_scheduled'], 1)
+
+
+class RoomModelAndServiceTests(TestCase):
+    def setUp(self):
+        call_command('sync_permissions')
+        self.admin = User.objects.create_superuser(
+            username='admin_rooms',
+            email='admin_rooms@school.edu',
+            password='Password123!',
+            user_type=UserType.ADMIN
+        )
+        self.current_year = AcademicYearService.create_academic_year(
+            name="2026-2027",
+            start_date_val="2026-04-01",
+            end_date_val="2027-03-31",
+            is_current=True,
+            is_active=True,
+            actor=self.admin
+        )
+        self.c10 = SchoolClassService.create_class(name="Class 10", code="CL-10", order=10, actor=self.admin)
+        self.sec10_a = SectionService.create_section(
+            school_class_id=self.c10.pk,
+            name="A",
+            capacity=40,
+            room_number="Room 101",
+            actor=self.admin
+        )
+        self.sub_math = SubjectService.create_subject(name="Mathematics", code="MATH-10", actor=self.admin)
+        self.map_math = ClassSubjectService.create_mapping(section_id=self.sec10_a.pk, subject_id=self.sub_math.pk, actor=self.admin)
+        self.period_1 = TimetablePeriodService.create_period(period_number=1, name="Period 1", start_time="08:30", end_time="09:15", is_break=False, actor=self.admin)
+        self.period_2 = TimetablePeriodService.create_period(period_number=2, name="Period 2", start_time="09:15", end_time="10:00", is_break=False, actor=self.admin)
+
+    def test_create_room_success(self):
+        room = RoomService.create_room(
+            room_number="Room 101",
+            room_type=RoomType.CLASSROOM,
+            capacity=45,
+            name="Primary Section 10-A Classroom",
+            floor="Ground Floor",
+            description="Equipped with smart board",
+            is_active=True,
+            actor=self.admin
+        )
+        self.assertEqual(room.room_number, "Room 101")
+        self.assertEqual(room.capacity, 45)
+        self.assertEqual(room.room_type, RoomType.CLASSROOM)
+        self.assertTrue(room.is_active)
+
+        log = AuditLog.objects.filter(entity_type='Room', entity_id=str(room.pk), action=AuditAction.CREATE).first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.changes['room_number'], "Room 101")
+
+    def test_duplicate_room_number_rejected_case_insensitive(self):
+        RoomService.create_room(room_number="Lab 1", room_type=RoomType.SCIENCE_LAB, capacity=30, actor=self.admin)
+        with self.assertRaises(BusinessConflictError):
+            RoomService.create_room(room_number="lab 1", room_type=RoomType.SCIENCE_LAB, capacity=25, actor=self.admin)
+
+    def test_invalid_capacity_rejected(self):
+        with self.assertRaises(ValidationError) as ctx:
+            RoomService.create_room(room_number="Room 99", capacity=0, actor=self.admin)
+        self.assertIn('capacity', ctx.exception.message_dict)
+
+    def test_update_room(self):
+        room = RoomService.create_room(room_number="Room 201", capacity=35, actor=self.admin)
+        updated = RoomService.update_room(
+            room_id=room.pk,
+            capacity=40,
+            name="Updated Name",
+            actor=self.admin
+        )
+        self.assertEqual(updated.capacity, 40)
+        self.assertEqual(updated.name, "Updated Name")
+
+        log = AuditLog.objects.filter(entity_type='Room', entity_id=str(room.pk), action=AuditAction.UPDATE).first()
+        self.assertIsNotNone(log)
+        self.assertIn('capacity', log.changes)
+
+    def test_toggle_room_status(self):
+        room = RoomService.create_room(room_number="Room 301", is_active=True, actor=self.admin)
+        deactivated = RoomService.toggle_room_status(room_id=room.pk, is_active=False, actor=self.admin)
+        self.assertFalse(deactivated.is_active)
+        reactivated = RoomService.toggle_room_status(room_id=room.pk, is_active=True, actor=self.admin)
+        self.assertTrue(reactivated.is_active)
+
+    def test_inactive_room_cannot_be_scheduled(self):
+        room = RoomService.create_room(room_number="Room 401", is_active=False, actor=self.admin)
+        with self.assertRaises(ValidationError) as ctx:
+            TimetableService.create_slot(
+                day_of_week=1,
+                period_id=self.period_1.pk,
+                class_subject_id=self.map_math.pk,
+                room_id=room.pk,
+                actor=self.admin
+            )
+        self.assertIn('room', ctx.exception.message_dict)
+
+    def test_delete_room_with_slots_rejected(self):
+        room = RoomService.create_room(room_number="Room 501", is_active=True, actor=self.admin)
+        slot = TimetableService.create_slot(
+            day_of_week=1,
+            period_id=self.period_1.pk,
+            class_subject_id=self.map_math.pk,
+            room_id=room.pk,
+            actor=self.admin
+        )
+        with self.assertRaises(BusinessConflictError):
+            RoomService.delete_room(room_id=room.pk, actor=self.admin)
+
+    def test_delete_room_with_section_rejected(self):
+        room = RoomService.create_room(room_number="Room 101", is_active=True, actor=self.admin)
+        with self.assertRaises(BusinessConflictError):
+            RoomService.delete_room(room_id=room.pk, actor=self.admin)
+
+    def test_delete_unreferenced_room_success(self):
+        room = RoomService.create_room(room_number="Room 999", is_active=True, actor=self.admin)
+        res = RoomService.delete_room(room_id=room.pk, actor=self.admin)
+        self.assertTrue(res)
+        self.assertFalse(Room.objects.filter(pk=room.pk).exists())
+
+    def test_room_collision_prevention_managed_and_text(self):
+        room = RoomService.create_room(room_number="Room 101", is_active=True, actor=self.admin)
+        TimetableService.create_slot(
+            day_of_week=1,
+            period_id=self.period_1.pk,
+            class_subject_id=self.map_math.pk,
+            room_id=room.pk,
+            actor=self.admin
+        )
+
+        sec10_b = SectionService.create_section(school_class_id=self.c10.pk, name="B", actor=self.admin)
+        sub_sci = SubjectService.create_subject(name="Science", code="SCI-10", actor=self.admin)
+        map_sci = ClassSubjectService.create_mapping(section_id=sec10_b.pk, subject_id=sub_sci.pk, actor=self.admin)
+
+        with self.assertRaises(BusinessConflictError):
+            TimetableService.create_slot(
+                day_of_week=1,
+                period_id=self.period_1.pk,
+                class_subject_id=map_sci.pk,
+                room="room 101",
+                actor=self.admin
+            )
+
+
+class RoomAPITests(TestCase):
+    def setUp(self):
+        call_command('sync_permissions')
+        self.superuser = User.objects.create_superuser(
+            username='api_super_rooms',
+            email='api_super_rooms@school.edu',
+            password='Password123!',
+            user_type=UserType.ADMIN
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.superuser)
+
+    def test_create_room_response_structure_and_values(self):
+        url = "/api/v1/academics/rooms/"
+        post_data = {
+            "room_number": "Auditorium-1",
+            "name": "Main Auditorium",
+            "room_type": "AUDITORIUM",
+            "capacity": 250,
+            "floor": "Floor 1",
+            "description": "Main campus auditorium with AV facilities.",
+            "is_active": True,
+        }
+        res_create = self.client.post(url, post_data)
+        self.assertEqual(res_create.status_code, 201)
+
+        # Verify response contains all required fields
+        self.assertIn('id', res_create.data)
+        self.assertIsNotNone(res_create.data['id'])
+        self.assertEqual(res_create.data['room_number'], "Auditorium-1")
+        self.assertEqual(res_create.data['name'], "Main Auditorium")
+        self.assertEqual(res_create.data['room_type'], "AUDITORIUM")
+        self.assertEqual(res_create.data['room_type_display'], "Auditorium / Hall")
+        self.assertEqual(res_create.data['capacity'], 250)
+        self.assertEqual(res_create.data['floor'], "Floor 1")
+        self.assertEqual(res_create.data['description'], "Main campus auditorium with AV facilities.")
+        self.assertTrue(res_create.data['is_active'])
+        self.assertIn('created_at', res_create.data)
+        self.assertIn('updated_at', res_create.data)
+        self.assertIsNotNone(res_create.data['created_at'])
+        self.assertIsNotNone(res_create.data['updated_at'])
+
+        # Verify DB values match API response
+        db_room = Room.objects.get(pk=res_create.data['id'])
+        self.assertEqual(db_room.room_number, "Auditorium-1")
+        self.assertEqual(db_room.capacity, 250)
+        self.assertEqual(db_room.room_type, "AUDITORIUM")
+        self.assertTrue(db_room.is_active)
+
+    def test_update_room_put_response(self):
+        room = RoomService.create_room(
+            room_number="Room 101",
+            room_type=RoomType.CLASSROOM,
+            capacity=40,
+            name="General Class 101",
+            floor="Ground Floor",
+            actor=self.superuser
+        )
+        url = f"/api/v1/academics/rooms/{room.pk}/"
+        put_data = {
+            "room_number": "Room 101-Renovated",
+            "name": "Upgraded Class 101",
+            "room_type": "SCIENCE_LAB",
+            "capacity": 55,
+            "floor": "Ground Floor West",
+            "description": "Now converted to Science Lab",
+            "is_active": True,
+        }
+        res_update = self.client.put(url, put_data)
+        self.assertEqual(res_update.status_code, 200)
+
+        # Verify response has updated values
+        self.assertEqual(res_update.data['id'], room.pk)
+        self.assertEqual(res_update.data['room_number'], "Room 101-Renovated")
+        self.assertEqual(res_update.data['name'], "Upgraded Class 101")
+        self.assertEqual(res_update.data['room_type'], "SCIENCE_LAB")
+        self.assertEqual(res_update.data['room_type_display'], "Science Laboratory")
+        self.assertEqual(res_update.data['capacity'], 55)
+        self.assertEqual(res_update.data['floor'], "Ground Floor West")
+        self.assertEqual(res_update.data['description'], "Now converted to Science Lab")
+        self.assertIn('updated_at', res_update.data)
+
+        # Verify database matches
+        room.refresh_from_db()
+        self.assertEqual(room.room_number, "Room 101-Renovated")
+        self.assertEqual(room.name, "Upgraded Class 101")
+        self.assertEqual(room.room_type, "SCIENCE_LAB")
+        self.assertEqual(room.capacity, 55)
+
+    def test_partial_update_room_patch_response(self):
+        room = RoomService.create_room(
+            room_number="Room 202",
+            room_type=RoomType.CLASSROOM,
+            capacity=35,
+            name="Junior Section Room",
+            actor=self.superuser
+        )
+        url = f"/api/v1/academics/rooms/{room.pk}/"
+        patch_data = {"capacity": 48}
+        res_patch = self.client.patch(url, patch_data)
+        self.assertEqual(res_patch.status_code, 200)
+
+        self.assertEqual(res_patch.data['id'], room.pk)
+        self.assertEqual(res_patch.data['capacity'], 48)
+        self.assertEqual(res_patch.data['room_number'], "Room 202")
+        self.assertEqual(res_patch.data['name'], "Junior Section Room")
+
+        room.refresh_from_db()
+        self.assertEqual(room.capacity, 48)
+        self.assertEqual(room.room_number, "Room 202")
+
+    def test_toggle_room_status_api(self):
+        room = RoomService.create_room(room_number="Room 102", is_active=True, actor=self.superuser)
+        url = f"/api/v1/academics/rooms/{room.pk}/toggle-status/"
+
+        # Deactivate
+        res_deact = self.client.post(url, {"is_active": False}, format='json')
+        self.assertEqual(res_deact.status_code, 200)
+        self.assertFalse(res_deact.data['is_active'])
+        room.refresh_from_db()
+        self.assertFalse(room.is_active)
+
+        # Reactivate
+        res_act = self.client.post(url, {"is_active": True}, format='json')
+        self.assertEqual(res_act.status_code, 200)
+        self.assertTrue(res_act.data['is_active'])
+        room.refresh_from_db()
+        self.assertTrue(room.is_active)
+
+
+class RoomRBACAPITests(TestCase):
+    def setUp(self):
+        call_command('sync_permissions')
+
+        # Create roles
+        perm_view = Permission.objects.get(codename='academics.room.view')
+        perm_manage = Permission.objects.get(codename='academics.room.manage')
+        perm_class_view = Permission.objects.get(codename='academics.class.view')
+        perm_class_manage = Permission.objects.get(codename='academics.class.manage')
+
+        view_role = Role.objects.create(name='Room Viewer Role', code='ROLE_ROOM_VIEWER')
+        view_role.permissions.add(perm_view)
+
+        manage_role = Role.objects.create(name='Room Manager Role', code='ROLE_ROOM_MANAGER')
+        manage_role.permissions.add(perm_manage)
+
+        full_role = Role.objects.create(name='Room Full Role', code='ROLE_ROOM_FULL')
+        full_role.permissions.add(perm_view, perm_manage)
+
+        unrelated_role = Role.objects.create(name='Class Manager Role', code='ROLE_CLASS_MANAGER')
+        unrelated_role.permissions.add(perm_class_view, perm_class_manage)
+
+        # Users
+        self.view_user = User.objects.create_user(
+            username='room_view_only',
+            email='view_only@school.edu',
+            password='Password123!',
+            user_type=UserType.STAFF
+        )
+        UserRoleAssignment.objects.create(
+            user=self.view_user, role=view_role, scope_type=ScopeType.GLOBAL, is_active=True
+        )
+
+        self.manage_user = User.objects.create_user(
+            username='room_manage_only',
+            email='manage_only@school.edu',
+            password='Password123!',
+            user_type=UserType.STAFF
+        )
+        UserRoleAssignment.objects.create(
+            user=self.manage_user, role=manage_role, scope_type=ScopeType.GLOBAL, is_active=True
+        )
+
+        self.full_user = User.objects.create_user(
+            username='room_full_access',
+            email='full_access@school.edu',
+            password='Password123!',
+            user_type=UserType.STAFF
+        )
+        UserRoleAssignment.objects.create(
+            user=self.full_user, role=full_role, scope_type=ScopeType.GLOBAL, is_active=True
+        )
+
+        self.unrelated_user = User.objects.create_user(
+            username='room_unrelated_perm',
+            email='unrelated@school.edu',
+            password='Password123!',
+            user_type=UserType.STAFF
+        )
+        UserRoleAssignment.objects.create(
+            user=self.unrelated_user, role=unrelated_role, scope_type=ScopeType.GLOBAL, is_active=True
+        )
+
+        self.no_perm_user = User.objects.create_user(
+            username='room_no_perm',
+            email='no_perm@school.edu',
+            password='Password123!',
+            user_type=UserType.STAFF
+        )
+
+        self.inactive_user = User.objects.create_user(
+            username='room_inactive_user',
+            email='inactive@school.edu',
+            password='Password123!',
+            user_type=UserType.STAFF,
+            is_active=False
+        )
+        UserRoleAssignment.objects.create(
+            user=self.inactive_user, role=full_role, scope_type=ScopeType.GLOBAL, is_active=True
+        )
+
+        self.superuser = User.objects.create_superuser(
+            username='room_superuser',
+            email='superuser@school.edu',
+            password='Password123!',
+            user_type=UserType.ADMIN
+        )
+
+        self.client = APIClient()
+        self.room = RoomService.create_room(
+            room_number="Room 301",
+            room_type=RoomType.CLASSROOM,
+            capacity=40,
+            actor=self.superuser
+        )
+
+    def test_view_only_user_can_list_and_retrieve_rooms(self):
+        self.client.force_authenticate(user=self.view_user)
+        res_list = self.client.get("/api/v1/academics/rooms/")
+        self.assertEqual(res_list.status_code, 200)
+
+        res_detail = self.client.get(f"/api/v1/academics/rooms/{self.room.pk}/")
+        self.assertEqual(res_detail.status_code, 200)
+        self.assertEqual(res_detail.data['id'], self.room.pk)
+
+    def test_view_only_user_cannot_mutate_rooms(self):
+        self.client.force_authenticate(user=self.view_user)
+
+        # Create
+        res_create = self.client.post("/api/v1/academics/rooms/", {
+            "room_number": "Room 999", "room_type": "CLASSROOM", "capacity": 30
+        })
+        self.assertEqual(res_create.status_code, 403)
+
+        # Update
+        res_update = self.client.put(f"/api/v1/academics/rooms/{self.room.pk}/", {
+            "room_number": "Room 301-Mutated", "room_type": "CLASSROOM", "capacity": 50
+        })
+        self.assertEqual(res_update.status_code, 403)
+
+        # Partial update
+        res_patch = self.client.patch(f"/api/v1/academics/rooms/{self.room.pk}/", {"capacity": 55})
+        self.assertEqual(res_patch.status_code, 403)
+
+        # Toggle status
+        res_toggle = self.client.post(f"/api/v1/academics/rooms/{self.room.pk}/toggle-status/", {"is_active": False})
+        self.assertEqual(res_toggle.status_code, 403)
+
+        # Delete
+        res_delete = self.client.delete(f"/api/v1/academics/rooms/{self.room.pk}/")
+        self.assertEqual(res_delete.status_code, 403)
+
+        # Verify DB unmutated
+        self.room.refresh_from_db()
+        self.assertEqual(self.room.capacity, 40)
+        self.assertTrue(self.room.is_active)
+
+    def test_manage_only_user_cannot_read_rooms(self):
+        self.client.force_authenticate(user=self.manage_user)
+
+        res_list = self.client.get("/api/v1/academics/rooms/")
+        self.assertEqual(res_list.status_code, 403)
+
+        res_detail = self.client.get(f"/api/v1/academics/rooms/{self.room.pk}/")
+        self.assertEqual(res_detail.status_code, 403)
+
+    def test_manage_only_user_can_create_update_toggle_delete_rooms(self):
+        self.client.force_authenticate(user=self.manage_user)
+
+        # Create
+        res_create = self.client.post("/api/v1/academics/rooms/", {
+            "room_number": "Room 302-Manage",
+            "room_type": "CLASSROOM",
+            "capacity": 32,
+            "is_active": True
+        })
+        self.assertEqual(res_create.status_code, 201)
+        created_id = res_create.data['id']
+
+        # Update
+        res_update = self.client.put(f"/api/v1/academics/rooms/{created_id}/", {
+            "room_number": "Room 302-Managed-Updated",
+            "room_type": "CLASSROOM",
+            "capacity": 42,
+            "is_active": True
+        })
+        self.assertEqual(res_update.status_code, 200)
+
+        # Partial update
+        res_patch = self.client.patch(f"/api/v1/academics/rooms/{created_id}/", {"capacity": 45})
+        self.assertEqual(res_patch.status_code, 200)
+
+        # Toggle status
+        res_toggle = self.client.post(f"/api/v1/academics/rooms/{created_id}/toggle-status/", {"is_active": False})
+        self.assertEqual(res_toggle.status_code, 200)
+
+        # Delete
+        res_delete = self.client.delete(f"/api/v1/academics/rooms/{created_id}/")
+        self.assertEqual(res_delete.status_code, 204)
+        self.assertFalse(Room.objects.filter(pk=created_id).exists())
+
+    def test_full_access_user_can_perform_all_operations(self):
+        self.client.force_authenticate(user=self.full_user)
+
+        # List
+        res_list = self.client.get("/api/v1/academics/rooms/")
+        self.assertEqual(res_list.status_code, 200)
+
+        # Create
+        res_create = self.client.post("/api/v1/academics/rooms/", {
+            "room_number": "Room 401-Full",
+            "room_type": "COMPUTER_LAB",
+            "capacity": 30
+        })
+        self.assertEqual(res_create.status_code, 201)
+        created_id = res_create.data['id']
+
+        # Retrieve
+        res_get = self.client.get(f"/api/v1/academics/rooms/{created_id}/")
+        self.assertEqual(res_get.status_code, 200)
+
+        # Update
+        res_update = self.client.put(f"/api/v1/academics/rooms/{created_id}/", {
+            "room_number": "Room 401-Updated",
+            "room_type": "COMPUTER_LAB",
+            "capacity": 35
+        })
+        self.assertEqual(res_update.status_code, 200)
+
+        # Partial update
+        res_patch = self.client.patch(f"/api/v1/academics/rooms/{created_id}/", {"capacity": 38})
+        self.assertEqual(res_patch.status_code, 200)
+
+        # Toggle status
+        res_toggle = self.client.post(f"/api/v1/academics/rooms/{created_id}/toggle-status/", {"is_active": False})
+        self.assertEqual(res_toggle.status_code, 200)
+
+        # Delete
+        res_delete = self.client.delete(f"/api/v1/academics/rooms/{created_id}/")
+        self.assertEqual(res_delete.status_code, 204)
+
+    def test_unrelated_academics_permission_user_denied(self):
+        self.client.force_authenticate(user=self.unrelated_user)
+
+        self.assertEqual(self.client.get("/api/v1/academics/rooms/").status_code, 403)
+        self.assertEqual(self.client.get(f"/api/v1/academics/rooms/{self.room.pk}/").status_code, 403)
+        self.assertEqual(self.client.post("/api/v1/academics/rooms/", {"room_number": "R-1"}).status_code, 403)
+        self.assertEqual(self.client.put(f"/api/v1/academics/rooms/{self.room.pk}/", {"room_number": "R-1"}).status_code, 403)
+        self.assertEqual(self.client.patch(f"/api/v1/academics/rooms/{self.room.pk}/", {"capacity": 50}).status_code, 403)
+        self.assertEqual(self.client.post(f"/api/v1/academics/rooms/{self.room.pk}/toggle-status/").status_code, 403)
+        self.assertEqual(self.client.delete(f"/api/v1/academics/rooms/{self.room.pk}/").status_code, 403)
+
+    def test_unauthenticated_user_denied(self):
+        anon_client = APIClient()
+
+        self.assertIn(anon_client.get("/api/v1/academics/rooms/").status_code, (401, 403))
+        self.assertIn(anon_client.get(f"/api/v1/academics/rooms/{self.room.pk}/").status_code, (401, 403))
+        self.assertIn(anon_client.post("/api/v1/academics/rooms/", {"room_number": "R-Anon"}).status_code, (401, 403))
+        self.assertIn(anon_client.put(f"/api/v1/academics/rooms/{self.room.pk}/", {"room_number": "R-Anon"}).status_code, (401, 403))
+        self.assertIn(anon_client.patch(f"/api/v1/academics/rooms/{self.room.pk}/", {"capacity": 50}).status_code, (401, 403))
+        self.assertIn(anon_client.post(f"/api/v1/academics/rooms/{self.room.pk}/toggle-status/").status_code, (401, 403))
+        self.assertIn(anon_client.delete(f"/api/v1/academics/rooms/{self.room.pk}/").status_code, (401, 403))
+
+    def test_inactive_user_denied(self):
+        self.client.force_authenticate(user=self.inactive_user)
+
+        self.assertEqual(self.client.get("/api/v1/academics/rooms/").status_code, 403)
+        self.assertEqual(self.client.get(f"/api/v1/academics/rooms/{self.room.pk}/").status_code, 403)
+        self.assertEqual(self.client.post("/api/v1/academics/rooms/", {"room_number": "R-Inact"}).status_code, 403)
+        self.assertEqual(self.client.put(f"/api/v1/academics/rooms/{self.room.pk}/", {"room_number": "R-Inact"}).status_code, 403)
+        self.assertEqual(self.client.patch(f"/api/v1/academics/rooms/{self.room.pk}/", {"capacity": 50}).status_code, 403)
+        self.assertEqual(self.client.post(f"/api/v1/academics/rooms/{self.room.pk}/toggle-status/").status_code, 403)
+        self.assertEqual(self.client.delete(f"/api/v1/academics/rooms/{self.room.pk}/").status_code, 403)
+
+    def test_superuser_permanent_full_access(self):
+        self.client.force_authenticate(user=self.superuser)
+
+        self.assertEqual(self.client.get("/api/v1/academics/rooms/").status_code, 200)
+        self.assertEqual(self.client.get(f"/api/v1/academics/rooms/{self.room.pk}/").status_code, 200)
+
+        res_create = self.client.post("/api/v1/academics/rooms/", {
+            "room_number": "Room Super", "room_type": "CLASSROOM", "capacity": 30
+        })
+        self.assertEqual(res_create.status_code, 201)
+        s_id = res_create.data['id']
+
+        self.assertEqual(self.client.put(f"/api/v1/academics/rooms/{s_id}/", {
+            "room_number": "Room Super-U", "room_type": "CLASSROOM", "capacity": 35
+        }).status_code, 200)
+        self.assertEqual(self.client.patch(f"/api/v1/academics/rooms/{s_id}/", {"capacity": 40}).status_code, 200)
+        self.assertEqual(self.client.post(f"/api/v1/academics/rooms/{s_id}/toggle-status/").status_code, 200)
+        self.assertEqual(self.client.delete(f"/api/v1/academics/rooms/{s_id}/").status_code, 204)
+
+
+class RoomRegressionAPITests(TestCase):
+    def setUp(self):
+        call_command('sync_permissions')
+        self.superuser = User.objects.create_superuser(
+            username='room_reg_super',
+            email='room_reg@school.edu',
+            password='Password123!',
+            user_type=UserType.ADMIN
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.superuser)
+        self.room = RoomService.create_room(
+            room_number="Room 501",
+            room_type=RoomType.CLASSROOM,
+            capacity=40,
+            actor=self.superuser
+        )
+
+    def test_service_validation_errors_handled_cleanly(self):
+        # Capacity <= 0
+        res_cap = self.client.post("/api/v1/academics/rooms/", {
+            "room_number": "Room BadCap", "room_type": "CLASSROOM", "capacity": 0
+        })
+        self.assertEqual(res_cap.status_code, 400)
+
+        # Invalid room type
+        res_type = self.client.post("/api/v1/academics/rooms/", {
+            "room_number": "Room BadType", "room_type": "INVALID_TYPE", "capacity": 30
+        })
+        self.assertEqual(res_type.status_code, 400)
+
+        # Duplicate room number
+        res_dup = self.client.post("/api/v1/academics/rooms/", {
+            "room_number": "Room 501", "room_type": "CLASSROOM", "capacity": 30
+        })
+        self.assertIn(res_dup.status_code, (400, 409))
+
+    def test_audit_logging_generated_for_room_operations(self):
+        res = self.client.post("/api/v1/academics/rooms/", {
+            "room_number": "Room Audit-Test", "room_type": "CLASSROOM", "capacity": 30
+        })
+        self.assertEqual(res.status_code, 201)
+        created_id = str(res.data['id'])
+        self.assertTrue(
+            AuditLog.objects.filter(entity_type='Room', action=AuditAction.CREATE, entity_id=created_id).exists()
+        )
+
+        res_patch = self.client.patch(f"/api/v1/academics/rooms/{created_id}/", {"capacity": 35})
+        self.assertEqual(res_patch.status_code, 200)
+        self.assertTrue(
+            AuditLog.objects.filter(entity_type='Room', action=AuditAction.UPDATE, entity_id=created_id).exists()
+        )
+
+    def test_delete_room_protection_when_referenced_in_section(self):
+        school_class = SchoolClass.objects.create(name="Class 10-Reg", code="10-REG", order=10)
+        section = Section.objects.create(
+            school_class=school_class,
+            name="A",
+            capacity=40,
+            room_ref=self.room,
+            room_number=self.room.room_number
+        )
+        res_del = self.client.delete(f"/api/v1/academics/rooms/{self.room.pk}/")
+        self.assertEqual(res_del.status_code, 409)
+        self.assertTrue(Room.objects.filter(pk=self.room.pk).exists())
+
+    def test_delete_room_protection_when_referenced_in_timetable(self):
+        from datetime import date
+        academic_year = AcademicYear.objects.create(
+            name="2027-2028",
+            start_date=date(2027, 4, 1),
+            end_date=date(2028, 3, 31)
+        )
+        school_class = SchoolClass.objects.create(name="Class 9-Reg", code="9-REG", order=9)
+        section = Section.objects.create(school_class=school_class, name="B", capacity=30)
+        subject = Subject.objects.create(name="Physics-Reg", code="PHY-REG")
+        class_subject = ClassSubject.objects.create(
+            section=section,
+            subject=subject,
+            academic_year=academic_year
+        )
+        period = TimetablePeriod.objects.create(
+            period_number=1,
+            name="Period 1-Reg",
+            start_time="08:00:00",
+            end_time="08:45:00"
+        )
+        slot = TimetableSlot.objects.create(
+            academic_year=academic_year,
+            day_of_week=1,
+            period=period,
+            class_subject=class_subject,
+            room_ref=self.room,
+            room=self.room.room_number
+        )
+        res_del = self.client.delete(f"/api/v1/academics/rooms/{self.room.pk}/")
+        self.assertEqual(res_del.status_code, 409)
+        self.assertTrue(Room.objects.filter(pk=self.room.pk).exists())
+
+
+class RoomWebViewsTests(TestCase):
+    def setUp(self):
+        call_command('sync_permissions')
+        self.superuser = User.objects.create_superuser(
+            username='web_admin_rooms',
+            email='web_admin_rooms@school.edu',
+            password='Password123!',
+            user_type=UserType.ADMIN
+        )
+        self.client.login(username='web_admin_rooms', password='Password123!')
+
+    def test_rooms_tab_renders(self):
+        RoomService.create_room(room_number="Lab-1", room_type=RoomType.COMPUTER_LAB, capacity=25, actor=self.superuser)
+        url = reverse('academics-timetable-list') + '?tab=rooms'
+        res = self.client.get(url)
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "Lab-1")
+        self.assertContains(res, "Computer Lab")
+
+    def test_create_and_delete_room_web_action(self):
+        url = reverse('academics-timetable-list')
+        post_data = {
+            'action': 'create_room',
+            'room_number': 'Room 105',
+            'name': 'Classroom 105',
+            'room_type': 'CLASSROOM',
+            'capacity': '35',
+            'floor': 'Floor 2',
+            'is_active': 'on'
+        }
+        res = self.client.post(url, post_data)
+        self.assertEqual(res.status_code, 302)
+        room = Room.objects.filter(room_number='Room 105').first()
+        self.assertIsNotNone(room)
+
+        del_data = {
+            'action': 'delete_room',
+            'room_id': room.pk
+        }
+        res_del = self.client.post(url, del_data)
+        self.assertEqual(res_del.status_code, 302)
+        self.assertFalse(Room.objects.filter(pk=room.pk).exists())
+
+
+
+
 

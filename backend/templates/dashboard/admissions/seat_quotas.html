@@ -1,0 +1,254 @@
+{% extends 'dashboard/base.html' %}
+
+{% block admin %}
+<div class="container-fluid px-0">
+    <!-- Header with Title & Action Button -->
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
+        <div>
+            <nav aria-label="breadcrumb">
+                <ol class="breadcrumb mb-1">
+                    <li class="breadcrumb-item"><a href="{% url 'admissions-applications-list' %}" class="text-decoration-none text-muted">Admissions</a></li>
+                    <li class="breadcrumb-item active" aria-current="page">Seat Quotas & Waitlist</li>
+                </ol>
+            </nav>
+            <h3 class="fw-bold mb-1 text-dark">Seat Quotas & Waitlist Capacity</h3>
+            <p class="text-muted mb-0 small">Define class intake limits, monitor seat availability, and manage waitlist thresholds for each academic session.</p>
+        </div>
+        <div class="d-flex align-items-center gap-2">
+            <form method="GET" class="d-flex align-items-center gap-2">
+                <label for="yearSelect" class="text-muted small fw-medium mb-0">Session:</label>
+                <select id="yearSelect" name="year" class="form-select form-select-sm shadow-sm" onchange="this.form.submit()">
+                    {% for ay in academic_years %}
+                    <option value="{{ ay.pk }}" {% if selected_year and selected_year.pk == ay.pk %}selected{% endif %}>
+                        {{ ay.name }} {% if ay.is_current %}(Current){% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </form>
+            {% if can_manage %}
+            <button type="button" class="btn btn-primary btn-sm shadow-sm" data-bs-toggle="modal" data-bs-target="#saveQuotaModal" onclick="prepareCreateQuota()">
+                <i class="ti ti-plus me-1"></i> Configure Quota
+            </button>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Alerts -->
+    {% if messages %}
+    <div class="mb-3">
+        {% for message in messages %}
+        <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show shadow-sm" role="alert">
+            <i class="ti ti-info-circle me-1"></i> {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Quotas Table / Cards -->
+    <div class="card border-0 shadow-sm">
+        <div class="card-header bg-white border-bottom py-3 d-flex align-items-center justify-content-between">
+            <h5 class="fw-bold mb-0 text-dark">Class Intake & Availability — {{ selected_year.name }}</h5>
+            <span class="badge bg-light text-secondary border">{{ quotas|length }} Classes Configured</span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th class="ps-3">Class</th>
+                        <th class="text-center">Total Capacity</th>
+                        <th class="text-center">Enrolled / Approved</th>
+                        <th class="text-center">Available Seats</th>
+                        <th class="text-center">Waitlist Limit</th>
+                        <th class="text-center">Current Waitlist</th>
+                        <th style="min-width: 150px;">Occupancy</th>
+                        {% if can_manage %}
+                        <th class="text-end pe-3">Actions</th>
+                        {% endif %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in quotas %}
+                    <tr>
+                        <td class="ps-3 fw-bold text-dark">
+                            <i class="ti ti-school text-primary me-1"></i> {{ item.quota.class_name }}
+                        </td>
+                        <td class="text-center fw-semibold">{{ item.quota.total_seats }}</td>
+                        <td class="text-center">
+                            <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-1">
+                                {{ item.filled_seats }}
+                            </span>
+                        </td>
+                        <td class="text-center">
+                            {% if item.available_seats > 0 %}
+                            <span class="badge bg-primary-subtle text-primary border border-primary-subtle px-2 py-1">
+                                {{ item.available_seats }} seats
+                            </span>
+                            {% else %}
+                            <span class="badge bg-danger-subtle text-danger border border-danger-subtle px-2 py-1">
+                                Full
+                            </span>
+                            {% endif %}
+                        </td>
+                        <td class="text-center text-muted">{{ item.quota.waitlist_limit }}</td>
+                        <td class="text-center">
+                            {% if item.waitlisted > 0 %}
+                            <span class="badge bg-warning-subtle text-warning border border-warning-subtle px-2 py-1">
+                                {{ item.waitlisted }}
+                            </span>
+                            {% else %}
+                            <span class="text-muted small">0</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% widthratio item.filled_seats item.quota.total_seats 100 as pct %}
+                            <div class="d-flex align-items-center gap-2">
+                                <div class="progress flex-grow-1" style="height: 6px;">
+                                    <div class="progress-bar {% if item.available_seats == 0 %}bg-danger{% elif pct > 80 %}bg-warning{% else %}bg-primary{% endif %}"
+                                         role="progressbar" style="width: {{ pct|default:0 }}%;" aria-valuenow="{{ pct|default:0 }}" aria-valuemin="0" aria-valuemax="100">
+                                    </div>
+                                </div>
+                                <span class="text-muted small" style="min-width: 32px;">{{ pct|default:0 }}%</span>
+                            </div>
+                        </td>
+                        {% if can_manage %}
+                        <td class="text-end pe-3">
+                            <div class="btn-group">
+                                <button type="button" class="btn btn-sm btn-outline-secondary"
+                                        title="Edit Quota"
+                                        onclick="prepareEditQuota('{{ item.quota.class_name }}', {{ item.quota.total_seats }}, {{ item.quota.waitlist_limit }})">
+                                    <i class="ti ti-edit"></i>
+                                </button>
+                                <button type="button" class="btn btn-sm btn-outline-danger"
+                                        title="Delete Quota"
+                                        onclick="confirmDeleteQuota({{ item.quota.pk }}, '{{ item.quota.class_name }}')">
+                                    <i class="ti ti-trash"></i>
+                                </button>
+                            </div>
+                        </td>
+                        {% endif %}
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="{% if can_manage %}8{% else %}7{% endif %}" class="text-center py-5">
+                            <div class="text-muted">
+                                <i class="ti ti-layout-grid-add fs-2 mb-2 d-block"></i>
+                                <h6 class="fw-semibold">No Seat Quotas Configured</h6>
+                                <p class="small mb-3">No class-wise capacity defined for academic year {{ selected_year.name }}.</p>
+                                {% if can_manage %}
+                                <button type="button" class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#saveQuotaModal" onclick="prepareCreateQuota()">
+                                    <i class="ti ti-plus me-1"></i> Configure First Quota
+                                </button>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Save / Configure Seat Quota -->
+{% if can_manage %}
+<div class="modal fade" id="saveQuotaModal" tabindex="-1" aria-labelledby="saveQuotaModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <form method="POST">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="save_quota">
+                <div class="modal-header bg-light">
+                    <h5 class="modal-title fw-bold" id="saveQuotaModalLabel">Configure Class Seat Quota</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold small text-muted">Academic Session</label>
+                        <input type="text" class="form-control" value="{{ selected_year.name }}" disabled>
+                    </div>
+                    <div class="mb-3">
+                        <label for="quotaClassName" class="form-label fw-semibold small text-muted">Class Name <span class="text-danger">*</span></label>
+                        {% if classes %}
+                        <select name="class_name" id="quotaClassName" class="form-select" required>
+                            <option value="">-- Select Class --</option>
+                            {% for c in classes %}
+                            <option value="{{ c.name }}">{{ c.name }}</option>
+                            {% endfor %}
+                        </select>
+                        {% else %}
+                        <input type="text" name="class_name" id="quotaClassName" class="form-control" placeholder="e.g. Class 1, Nursery" required>
+                        {% endif %}
+                    </div>
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label for="quotaTotalSeats" class="form-label fw-semibold small text-muted">Total Seat Capacity <span class="text-danger">*</span></label>
+                            <input type="number" name="total_seats" id="quotaTotalSeats" class="form-control" min="1" max="1000" value="40" required>
+                            <div class="form-text small">Maximum admitted students.</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="quotaWaitlistLimit" class="form-label fw-semibold small text-muted">Waitlist Threshold <span class="text-danger">*</span></label>
+                            <input type="number" name="waitlist_limit" id="quotaWaitlistLimit" class="form-control" min="0" max="500" value="10" required>
+                            <div class="form-text small">Max waitlisted applications.</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light">
+                    <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary px-4">Save Quota</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Delete Confirmation -->
+<div class="modal fade" id="deleteQuotaModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content border-0 shadow">
+            <form method="POST">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="delete_quota">
+                <input type="hidden" name="quota_id" id="deleteQuotaId" value="">
+                <div class="modal-body text-center p-4">
+                    <i class="ti ti-alert-triangle text-danger fs-1 mb-2 d-block"></i>
+                    <h5 class="fw-bold mb-2">Delete Seat Quota?</h5>
+                    <p class="text-muted small mb-3">Are you sure you want to delete the seat quota for <strong id="deleteClassName"></strong>?</p>
+                    <div class="d-flex justify-content-center gap-2">
+                        <button type="button" class="btn btn-light btn-sm" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-danger btn-sm px-3">Delete</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<script>
+function prepareCreateQuota() {
+    document.getElementById('saveQuotaModalLabel').innerText = 'Configure Class Seat Quota';
+    const classSelect = document.getElementById('quotaClassName');
+    if (classSelect) classSelect.value = '';
+    document.getElementById('quotaTotalSeats').value = 40;
+    document.getElementById('quotaWaitlistLimit').value = 10;
+}
+
+function prepareEditQuota(className, totalSeats, waitlistLimit) {
+    document.getElementById('saveQuotaModalLabel').innerText = 'Edit Seat Quota — ' + className;
+    const classSelect = document.getElementById('quotaClassName');
+    if (classSelect) classSelect.value = className;
+    document.getElementById('quotaTotalSeats').value = totalSeats;
+    document.getElementById('quotaWaitlistLimit').value = waitlistLimit;
+    const modal = new bootstrap.Modal(document.getElementById('saveQuotaModal'));
+    modal.show();
+}
+
+function confirmDeleteQuota(quotaId, className) {
+    document.getElementById('deleteQuotaId').value = quotaId;
+    document.getElementById('deleteClassName').innerText = className;
+    const modal = new bootstrap.Modal(document.getElementById('deleteQuotaModal'));
+    modal.show();
+}
+</script>
+{% endblock %}

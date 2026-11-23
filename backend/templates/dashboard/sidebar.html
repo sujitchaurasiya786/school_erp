@@ -36,43 +36,51 @@
              Active Modules: Admissions, Students
              =============================================================== -->
         {% if request.user.is_superuser or request.user|has_any_perm:'admissions.application.view,students.profile.view,students.promotion.approve,students.tc.issue' %}
-        <li class="pc-item pc-hasmenu" role="none">
+        <li class="pc-item pc-hasmenu {% nav_group_active 'admissions-applications-list,admissions-application-detail,admissions-quotas-list' '/dashboard/admissions/' %}" role="none">
           <a href="#!" class="pc-link" role="menuitem" aria-expanded="false">
             <span class="pc-micon"><i class="ti ti-school" aria-hidden="true"></i></span>
             <span class="pc-mtext">Student Management</span>
             <span class="pc-arrow"><i class="ti ti-chevron-right" aria-hidden="true"></i></span>
           </a>
           <ul class="pc-submenu" role="menu">
-            <li class="pc-item" role="none">
-              <a class="pc-link" href="#!" role="menuitem">
-                <i class="ti ti-user-plus me-2" aria-hidden="true"></i> Admission
+            {% if request.user.is_superuser or request.user|has_perm:'admissions.application.view' %}
+            <li class="pc-item {% nav_active 'admissions-applications-list' %}" role="none">
+              <a class="pc-link" href="{% url 'admissions-applications-list' %}" role="menuitem">
+                <i class="ti ti-user-plus me-2" aria-hidden="true"></i> Admissions & Applications
               </a>
             </li>
-            <li class="pc-item" role="none">
-              <a class="pc-link" href="#!" role="menuitem">
+            <li class="pc-item {% nav_active 'admissions-quotas-list' %}" role="none">
+              <a class="pc-link" href="{% url 'admissions-quotas-list' %}" role="menuitem">
+                <i class="ti ti-chart-pie me-2" aria-hidden="true"></i> Seat Quotas & Waitlist
+              </a>
+            </li>
+            {% endif %}
+            {% if request.user.is_superuser or request.user|has_perm:'students.profile.view' %}
+            <li class="pc-item {% nav_active 'students-student-list,students-student-detail,students-student-create' %}" role="none">
+              <a class="pc-link" href="{% url 'students-student-list' %}" role="menuitem">
                 <i class="ti ti-users me-2" aria-hidden="true"></i> Student Directory
               </a>
             </li>
-            <li class="pc-item" role="none">
-              <a class="pc-link" href="#!" role="menuitem">
+            <li class="pc-item {% nav_active 'students-guardians-list' %}" role="none">
+              <a class="pc-link" href="{% url 'students-guardians-list' %}" role="menuitem">
                 <i class="ti ti-user-check me-2" aria-hidden="true"></i> Guardians
               </a>
             </li>
-            <li class="pc-item" role="none">
-              <a class="pc-link" href="#!" role="menuitem">
-                <i class="ti ti-id me-2" aria-hidden="true"></i> Class Enrollments
+            {% endif %}
+            {% if request.user.is_superuser or request.user|has_perm:'students.promotion.approve' %}
+            <li class="pc-item {% nav_active 'students-class-promotion' %}" role="none">
+              <a class="pc-link" href="{% url 'students-class-promotion' %}" role="menuitem">
+                <i class="ti ti-arrow-up-circle me-2" aria-hidden="true"></i> Class Promotion
               </a>
             </li>
-            <li class="pc-item" role="none">
-              <a class="pc-link" href="#!" role="menuitem">
-                <i class="ti ti-arrow-up-circle me-2" aria-hidden="true"></i> Promotion
+            {% endif %}
+            {% if request.user.is_superuser or request.user|has_perm:'students.profile.view' %}
+            <li class="pc-item {% nav_active 'students-certificates-list' %}" role="none">
+              <a class="pc-link" href="{% url 'students-certificates-list' %}" role="menuitem">
+                <i class="ti ti-certificate me-2" aria-hidden="true"></i> Certificates (TC & Bonafide)
               </a>
             </li>
-            <li class="pc-item" role="none">
-              <a class="pc-link" href="#!" role="menuitem">
-                <i class="ti ti-certificate me-2" aria-hidden="true"></i> Certificates
-              </a>
-            </li>
+            {% endif %}
           </ul>
         </li>
         {% endif %}
@@ -81,8 +89,8 @@
              2. Academics (SRS §3.3)
              Active Module: Academics
              =============================================================== -->
-        {% if request.user.is_superuser or request.user|has_any_perm:'academics.year.view,academics.class.view,academics.section.view,academics.stream.view,academics.subjects.view,academics.subjects.manage,academics.class_subject.view,academics.class_subject.manage,academics.timetable.view,school_config.profile.view' %}
-        <li class="pc-item pc-hasmenu {% nav_group_active 'academics-years-list,academics-classes-list,academics-sections-list,academics-streams-list,academics-subjects-list,academics-class-subjects-list' '/dashboard/academics/' %}" role="none">
+        {% if request.user.is_superuser or request.user|has_any_perm:'academics.year.view,academics.class.view,academics.section.view,academics.stream.view,academics.subjects.view,academics.subjects.manage,academics.class_subject.view,academics.class_subject.manage,academics.assignment.view,academics.assignment.manage,academics.timetable.view,school_config.profile.view' %}
+        <li class="pc-item pc-hasmenu {% nav_group_active 'academics-years-list,academics-classes-list,academics-sections-list,academics-streams-list,academics-subjects-list,academics-class-subjects-list,academics-teacher-assignments-list,academics-timetable-list' '/dashboard/academics/' %}" role="none">
           <a href="#!" class="pc-link" role="menuitem" aria-expanded="false">
             <span class="pc-micon"><i class="ti ti-book" aria-hidden="true"></i></span>
             <span class="pc-mtext">Academics</span>
@@ -119,13 +127,13 @@
                 <i class="ti ti-link me-2" aria-hidden="true"></i> Class–Subject Mapping
               </a>
             </li>
-            <li class="pc-item" role="none">
-              <a class="pc-link" href="#!" role="menuitem">
+            <li class="pc-item {% nav_active 'academics-teacher-assignments-list' %}" role="none">
+              <a class="pc-link" href="{% url 'academics-teacher-assignments-list' %}" role="menuitem">
                 <i class="ti ti-user-pin me-2" aria-hidden="true"></i> Teacher Assignments
               </a>
             </li>
-            <li class="pc-item" role="none">
-              <a class="pc-link" href="#!" role="menuitem">
+            <li class="pc-item {% nav_active 'academics-timetable-list' %}" role="none">
+              <a class="pc-link" href="{% url 'academics-timetable-list' %}" role="menuitem">
                 <i class="ti ti-clock me-2" aria-hidden="true"></i> Timetable
               </a>
             </li>
@@ -137,14 +145,28 @@
              3. Attendance (SRS §3.4)
              Active Module: Attendance
              =============================================================== -->
-        {% if request.user.is_superuser or request.user|has_any_perm:'attendance.record.view,attendance.record.mark,attendance.report.export' %}
-        <li class="pc-item pc-hasmenu" role="none">
+        {% if request.user.is_superuser or request.user|has_any_perm:'attendance.record.view,attendance.record.mark,attendance.report.export,attendance.calendar.view,attendance.holiday.view' %}
+        <li class="pc-item pc-hasmenu {% nav_group_active 'attendance-calendar,attendance-holidays' '/dashboard/attendance/' %}" role="none">
           <a href="#!" class="pc-link" role="menuitem" aria-expanded="false">
             <span class="pc-micon"><i class="ti ti-calendar-check" aria-hidden="true"></i></span>
             <span class="pc-mtext">Attendance</span>
             <span class="pc-arrow"><i class="ti ti-chevron-right" aria-hidden="true"></i></span>
           </a>
           <ul class="pc-submenu" role="menu">
+            {% if request.user.is_superuser or request.user|has_perm:'attendance.calendar.view' %}
+            <li class="pc-item {% nav_active 'attendance-calendar' %}" role="none">
+              <a class="pc-link" href="{% url 'attendance-calendar' %}" role="menuitem">
+                <i class="ti ti-calendar me-2" aria-hidden="true"></i> Working Days & Calendar
+              </a>
+            </li>
+            {% endif %}
+            {% if request.user.is_superuser or request.user|has_perm:'attendance.holiday.view' %}
+            <li class="pc-item {% nav_active 'attendance-holidays' %}" role="none">
+              <a class="pc-link" href="{% url 'attendance-holidays' %}" role="menuitem">
+                <i class="ti ti-calendar-off me-2" aria-hidden="true"></i> Holidays & Breaks
+              </a>
+            </li>
+            {% endif %}
             <li class="pc-item" role="none">
               <a class="pc-link" href="#!" role="menuitem">
                 <i class="ti ti-checklist me-2" aria-hidden="true"></i> Student Attendance
