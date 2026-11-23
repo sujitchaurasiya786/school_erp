@@ -30,6 +30,129 @@
     </div>
     {% endif %}
 
+    <!-- Tab Navigation: Roster vs Approvals -->
+    <ul class="nav nav-tabs mb-4 border-bottom">
+        <li class="nav-item">
+            <a class="nav-link {% if active_tab != 'approvals' %}active fw-bold text-primary{% else %}text-muted{% endif %}" href="?date={{ selected_date_str }}&tab=roster">
+                <i class="ti ti-clipboard-check me-1"></i> Staff Daily Roster
+            </a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link {% if active_tab == 'approvals' %}active fw-bold text-danger{% else %}text-muted{% endif %}" href="?date={{ selected_date_str }}&tab=approvals">
+                <i class="ti ti-user-check me-1"></i> Self-Attendance Approvals
+                {% if pending_approvals %}
+                <span class="badge bg-danger rounded-pill ms-1">{{ pending_approvals.count }}</span>
+                {% endif %}
+            </a>
+        </li>
+    </ul>
+
+    {% if active_tab == 'approvals' %}
+    <!-- APPROVALS TAB CONTENT -->
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-header bg-white border-bottom py-3 d-flex justify-content-between align-items-center">
+            <div>
+                <h5 class="card-title mb-0 fw-bold text-dark">
+                    <i class="ti ti-clock-check text-warning me-2"></i> Pending Self-Attendance Approvals
+                </h5>
+                <small class="text-muted">Requests submitted by teachers/staff with off-campus location or schedule deviation.</small>
+            </div>
+            <span class="badge bg-warning-subtle text-dark border border-warning-subtle px-3 py-2">
+                {{ pending_approvals.count }} Pending Review{{ pending_approvals.count|pluralize }}
+            </span>
+        </div>
+        <div class="card-body p-0">
+            {% if pending_approvals %}
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light text-muted small text-uppercase">
+                        <tr>
+                            <th class="ps-3" style="width: 50px;">Photo</th>
+                            <th>Staff Member</th>
+                            <th>Date & Time</th>
+                            <th>Distance & Geofence</th>
+                            <th>Reason / Deviation</th>
+                            <th style="min-width: 250px;" class="text-end pe-3">Review & Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for req in pending_approvals %}
+                        <tr>
+                            <td class="ps-3">
+                                {% if req.selfie_image %}
+                                <img src="{{ req.selfie_image }}" alt="Selfie" class="rounded-circle border shadow-sm" style="width: 48px; height: 48px; object-fit: cover;">
+                                {% else %}
+                                <div class="bg-light rounded-circle text-center border" style="width: 48px; height: 48px; line-height: 48px;">
+                                    <i class="ti ti-user text-muted"></i>
+                                </div>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <div class="fw-bold text-dark">{{ req.user.get_full_name|default:req.user.username }}</div>
+                                <small class="text-muted">{{ req.user.email }}</small>
+                                {% if req.staff_profile %}
+                                <span class="badge bg-light text-dark border font-monospace ms-1">{{ req.staff_profile.employee_id }}</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <div class="fw-semibold text-dark">{{ req.date|date:"M d, Y" }}</div>
+                                <small class="text-muted">
+                                    In: <strong>{{ req.check_in_time|time:"H:i A"|default:"-" }}</strong>
+                                    {% if req.check_out_time %} | Out: <strong>{{ req.check_out_time|time:"H:i A" }}</strong>{% endif %}
+                                </small>
+                            </td>
+                            <td>
+                                {% if req.distance_meters is not None %}
+                                <span class="badge {% if req.is_within_radius %}bg-success{% else %}bg-danger{% endif %} px-2 py-1">
+                                    {{ req.distance_meters }}m
+                                </span>
+                                <small class="text-muted d-block mt-1">
+                                    {% if req.is_within_radius %}Inside Campus{% else %}Outside Campus{% endif %}
+                                </small>
+                                {% else %}
+                                <span class="badge bg-secondary">No GPS data</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if req.is_late_check_in %}
+                                <span class="badge bg-danger-subtle text-danger border border-danger-subtle mb-1">Late Check-In</span>
+                                {% endif %}
+                                {% if req.is_early_check_out %}
+                                <span class="badge bg-warning-subtle text-warning border border-warning-subtle mb-1">Early Check-Out</span>
+                                {% endif %}
+                                <div class="p-2 bg-light rounded border small text-dark">
+                                    {{ req.exception_reason|default:"No reason provided." }}
+                                </div>
+                            </td>
+                            <td class="text-end pe-3">
+                                <form method="POST" class="d-flex align-items-center justify-content-end gap-2">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="attendance_id" value="{{ req.pk }}">
+                                    <input type="text" name="review_notes" class="form-control form-control-sm" placeholder="Review note..." style="max-width: 150px;">
+                                    <button type="submit" name="action" value="approve_self_attendance" class="btn btn-success btn-sm shadow-sm" title="Approve Attendance">
+                                        <i class="ti ti-check me-1"></i> Approve
+                                    </button>
+                                    <button type="submit" name="action" value="reject_self_attendance" class="btn btn-outline-danger btn-sm shadow-sm" title="Reject Attendance" onclick="return confirm('Are you sure you want to reject this attendance record?');">
+                                        <i class="ti ti-x me-1"></i> Reject
+                                    </button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="text-center py-5">
+                <i class="ti ti-circle-check fs-1 text-success d-block mb-2"></i>
+                <h6 class="fw-bold text-dark mb-1">All Caught Up!</h6>
+                <p class="text-muted small mb-0">There are no pending self-attendance exceptions awaiting review.</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% else %}
+    <!-- ROSTER TAB CONTENT (Filters & Daily Roster) -->
     <!-- Filter Card: Date, Department -->
     <div class="card border-0 shadow-sm mb-4">
         <div class="card-body p-3 p-md-4">
@@ -249,6 +372,7 @@
                 {% endif %}
             </div>
         </div>
+    {% endif %}
     {% endif %}
 </div>
 

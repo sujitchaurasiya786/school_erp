@@ -331,6 +331,7 @@
             <!-- TAB 2: TEACHER TIMETABLE MATRIX -->
             {% if active_tab == 'teacher_matrix' %}
             <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 mb-4 pb-3 border-bottom border-light">
+                {% if can_view_all_teachers %}
                 <form method="GET" action="{% url 'academics-timetable-list' %}" class="d-flex flex-wrap align-items-center gap-2">
                     <input type="hidden" name="tab" value="teacher_matrix">
                     <label class="form-label mb-0 fw-semibold text-muted small text-uppercase">Select Faculty Member:</label>
@@ -345,6 +346,16 @@
                     </select>
                     <noscript><button type="submit" class="btn btn-sm btn-primary">View Schedule</button></noscript>
                 </form>
+                {% else %}
+                <div class="d-flex align-items-center gap-2">
+                    <span class="badge bg-primary px-3 py-2 fs-6 rounded-pill">
+                        <i class="ti ti-calendar me-1"></i> My Weekly Teaching Schedule
+                    </span>
+                    {% if selected_teacher %}
+                    <span class="text-muted small fw-medium">({{ selected_teacher.get_full_name|default:selected_teacher.username }})</span>
+                    {% endif %}
+                </div>
+                {% endif %}
 
                 {% if selected_teacher %}
                 <div class="d-flex flex-wrap align-items-center gap-2">

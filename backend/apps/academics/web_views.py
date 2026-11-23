@@ -1369,6 +1369,19 @@ def timetable_view(request):
     all_teachers = TeacherAssignmentService.get_eligible_faculty_queryset()
     current_year = AcademicYearService.get_current_year()
 
+    # Check if user has admin/management privilege to inspect all faculty timetables
+    can_view_all_teachers = (
+        request.user.is_superuser
+        or can_manage
+        or request.user.user_type in ['ADMIN', 'PRINCIPAL']
+        or RBACService.has_permission(request.user, 'academics.timetable.manage')
+    )
+
+    # If teacher without admin privileges, default tab to teacher_matrix if no tab is provided
+    if not can_view_all_teachers and request.user.user_type == 'TEACHER':
+        if not request.GET.get('tab'):
+            active_tab = 'teacher_matrix'
+
     # Section Matrix
     selected_section_id = request.GET.get('section_id', '').strip()
     selected_section = None
@@ -1389,10 +1402,15 @@ def timetable_view(request):
     selected_teacher_id = request.GET.get('teacher_id', '').strip()
     selected_teacher = None
     teacher_matrix = None
-    if selected_teacher_id.isdigit():
-        selected_teacher = all_teachers.filter(pk=int(selected_teacher_id)).first()
-    elif all_teachers.exists() and active_tab == 'teacher_matrix':
-        selected_teacher = all_teachers.first()
+
+    if not can_view_all_teachers and request.user.user_type == 'TEACHER':
+        # Force the logged-in teacher to only view their own schedule
+        selected_teacher = request.user
+    else:
+        if selected_teacher_id.isdigit():
+            selected_teacher = all_teachers.filter(pk=int(selected_teacher_id)).first()
+        elif all_teachers.exists() and active_tab == 'teacher_matrix':
+            selected_teacher = all_teachers.first()
 
     if selected_teacher:
         teacher_matrix = TimetableService.get_teacher_timetable_matrix(selected_teacher.pk)
@@ -1439,5 +1457,6 @@ def timetable_view(request):
         'total_slots_count': total_slots_count,
         'can_manage': can_manage,
         'can_manage_room': can_manage_room,
+        'can_view_all_teachers': can_view_all_teachers,
     }
     return render(request, 'dashboard/academics/timetable.html', context)

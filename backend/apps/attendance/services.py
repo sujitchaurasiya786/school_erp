@@ -3,13 +3,16 @@ Calendar and Attendance Services.
 Provides centralized operational calendar resolution for Attendance and Academics.
 """
 from datetime import date, datetime, timedelta
+import math
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from apps.attendance.models import (
     Holiday, HolidayType, SaturdayRule, SpecialDayOverride,
     StudentDailyAttendance, AttendanceCorrectionRequest, StaffDailyAttendance, AttendanceStatus,
+    StaffApprovalStatus, CheckInMethod,
     WorkingDayConfig, WEEKDAY_CHOICES
 )
 from apps.audit.models import AuditAction
@@ -422,50 +425,58 @@ class StudentDailyAttendanceService:
         """
         if not user or not user.is_authenticated:
             return False
-        if user.is_superuser:
+        if getattr(user, 'is_superuser', False):
             return True
 
-        from apps.rbac.services import RBACService
-        # Check global permission first
-        if RBACService.has_permission(user, 'attendance.record.mark'):
-            from apps.rbac.models import UserRoleAssignment, ScopeType
-            global_assigns = UserRoleAssignment.objects.filter(
-                user=user,
-                scope_type=ScopeType.GLOBAL,
-                is_active=True,
-                role__permissions__codename='attendance.record.mark'
-            )
-            if global_assigns.exists():
-                return True
+        from apps.rbac.models import UserRoleAssignment, ScopeType
+        from apps.academics.models import SchoolClass, Section
 
-            # Check CLASS scope
-            if UserRoleAssignment.objects.filter(
-                user=user,
-                scope_type=ScopeType.CLASS,
-                scope_value__iexact=str(class_name or '').strip(),
-                is_active=True,
-                role__permissions__codename='attendance.record.mark'
-            ).exists():
-                return True
+        # 1. Check Global permission
+        global_assigns = UserRoleAssignment.objects.filter(
+            user=user,
+            scope_type=ScopeType.GLOBAL,
+            is_active=True,
+            role__permissions__codename='attendance.record.mark'
+        )
+        if global_assigns.exists():
+            return True
 
-            # Check SECTION scope
-            if UserRoleAssignment.objects.filter(
-                user=user,
-                scope_type=ScopeType.SECTION,
-                scope_value__iexact=str(section_name or '').strip(),
-                is_active=True,
-                role__permissions__codename='attendance.record.mark'
-            ).exists():
-                return True
-
-        # Check section's assigned class teacher
-        from apps.academics.models import Section
-        if Section.objects.filter(
+        # Resolve class & section models
+        c_obj = SchoolClass.objects.filter(name__iexact=str(class_name or '').strip()).first()
+        sec_obj = Section.objects.filter(
             school_class__name__iexact=str(class_name or '').strip(),
-            name__iexact=str(section_name or '').strip(),
-            class_teacher=user,
-            is_active=True
+            name__iexact=str(section_name or '').strip()
+        ).first()
+
+        # 2. Check CLASS scope by ID or name
+        class_ids = [str(class_name or '').strip()]
+        if c_obj:
+            class_ids.append(str(c_obj.pk))
+        if UserRoleAssignment.objects.filter(
+            user=user,
+            scope_type=ScopeType.CLASS,
+            scope_id__in=class_ids,
+            is_active=True,
+            role__permissions__codename='attendance.record.mark'
         ).exists():
+            return True
+
+        # 3. Check SECTION scope by ID or name
+        sec_ids = [str(section_name or '').strip()]
+        if sec_obj:
+            sec_ids.append(str(sec_obj.pk))
+            sec_ids.append(f"{class_name}-{section_name}")
+        if UserRoleAssignment.objects.filter(
+            user=user,
+            scope_type=ScopeType.SECTION,
+            scope_id__in=sec_ids,
+            is_active=True,
+            role__permissions__codename='attendance.record.mark'
+        ).exists():
+            return True
+
+        # 4. Check section's assigned class teacher
+        if sec_obj and sec_obj.class_teacher_id == user.pk:
             return True
 
         return False
@@ -981,6 +992,268 @@ class StaffDailyAttendanceService:
             request=request
         )
         return saved_ids
+
+    @staticmethod
+    def calculate_haversine_distance(lat1, lon1, lat2, lon2):
+        """
+        Calculates great-circle distance in meters between two lat/lon coordinates
+        using Haversine formula.
+        """
+        try:
+            R = 6371000.0  # Earth's radius in meters
+            phi1 = math.radians(float(lat1))
+            phi2 = math.radians(float(lat2))
+            delta_phi = math.radians(float(lat2) - float(lat1))
+            delta_lambda = math.radians(float(lon2) - float(lon1))
+
+            a = math.sin(delta_phi / 2.0) ** 2 + \
+                math.cos(phi1) * math.cos(phi2) * \
+                math.sin(delta_lambda / 2.0) ** 2
+            c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+            return round(R * c, 1)
+        except (ValueError, TypeError):
+            return None
+
+    @classmethod
+    def get_self_attendance_status(cls, user, target_date=None):
+        """
+        Returns today's self-attendance state, timing boundaries, campus coords, and allowed radius.
+        """
+        from apps.school_config.models import AcademicYear, SchoolProfile
+        today = CalendarService._coerce_date(target_date) if target_date else timezone.localdate()
+        school_profile = SchoolProfile.get_singleton()
+        current_ay = AcademicYear.objects.filter(is_current=True).first()
+        cal_status = CalendarService.get_day_status(current_ay, today) if current_ay else {'is_working': True, 'reason': 'Operational'}
+
+        record = StaffDailyAttendance.objects.filter(user=user, date=today).first()
+        now_time = timezone.localtime().time()
+
+        can_check_in = False
+        can_check_out = False
+        if not record:
+            can_check_in = True
+        elif not record.check_in_time:
+            can_check_in = True
+        elif record.check_in_time and not record.check_out_time:
+            can_check_out = True
+
+        return {
+            'date': today,
+            'user': user,
+            'school_profile': school_profile,
+            'calendar_status': cal_status,
+            'is_working': cal_status.get('is_working', True),
+            'record': record,
+            'now_time': now_time,
+            'can_check_in': can_check_in,
+            'can_check_out': can_check_out,
+            'is_checked_in': bool(record and record.check_in_time),
+            'is_checked_out': bool(record and record.check_out_time),
+        }
+
+    @classmethod
+    @transaction.atomic
+    def record_self_attendance(
+        cls,
+        user,
+        action_type,
+        latitude=None,
+        longitude=None,
+        selfie_base64="",
+        exception_reason="",
+        actor=None,
+        request=None
+    ):
+        """
+        Handles teacher/staff self attendance punch (check-in / check-out) with camera snapshot,
+        fixed geo-location radius verification, and timing checks.
+        If outside campus radius, late, or early, requires reason and marks PENDING_APPROVAL.
+        """
+        from apps.school_config.models import AcademicYear, SchoolProfile
+        today = timezone.localdate()
+        now_time = timezone.localtime().time()
+        school_profile = SchoolProfile.get_singleton()
+
+        current_ay = AcademicYear.objects.filter(is_current=True).first()
+        if current_ay:
+            status = CalendarService.get_day_status(current_ay, today)
+            if not status.get('is_working', True):
+                if not str(exception_reason or '').strip():
+                    raise ValidationError({
+                        'exception_reason': _(f"Today is marked as non-working ({status.get('reason', 'Holiday')}). Please provide an explanation.")
+                    })
+
+        action_type = str(action_type or '').strip().upper()
+        if action_type not in ('CHECK_IN', 'CHECK_OUT'):
+            raise ValidationError({'action_type': _("Action must be either CHECK_IN or CHECK_OUT.")})
+
+        # Geo-location radius calculation
+        dist = None
+        is_within_radius = True
+        if latitude is not None and longitude is not None and school_profile.latitude and school_profile.longitude:
+            dist = cls.calculate_haversine_distance(
+                school_profile.latitude, school_profile.longitude,
+                latitude, longitude
+            )
+            if dist is not None:
+                is_within_radius = (dist <= school_profile.geo_radius_meters)
+            else:
+                is_within_radius = False
+        else:
+            is_within_radius = False
+
+        # Timing checks
+        is_late = False
+        is_early = False
+        if action_type == 'CHECK_IN':
+            if school_profile.school_start_time and now_time > school_profile.school_start_time:
+                is_late = True
+        elif action_type == 'CHECK_OUT':
+            if school_profile.school_end_time and now_time < school_profile.school_end_time:
+                is_early = True
+
+        # Check if exception approval is required
+        needs_approval = (not is_within_radius) or is_late or is_early
+        clean_reason = str(exception_reason or '').strip()
+        if needs_approval and not clean_reason:
+            flags = []
+            if not is_within_radius:
+                flags.append(f"outside campus radius ({dist or 'unknown'}m from campus, allowed {school_profile.geo_radius_meters}m)")
+            if is_late:
+                flags.append(f"late check-in (after {school_profile.school_start_time.strftime('%H:%M')})")
+            if is_early:
+                flags.append(f"early check-out (before {school_profile.school_end_time.strftime('%H:%M')})")
+            raise ValidationError({
+                'exception_reason': _(f"Reason required: You are {' and '.join(flags)}.")
+            })
+
+        app_status = StaffApprovalStatus.PENDING_APPROVAL if needs_approval else StaffApprovalStatus.AUTO_APPROVED
+
+        # Load or create record
+        profile = getattr(user, 'staff_profile', None)
+        record, created = StaffDailyAttendance.objects.get_or_create(
+            user=user,
+            date=today,
+            defaults={
+                'staff_profile': profile,
+                'status': AttendanceStatus.PRESENT,
+                'marked_by': actor or user,
+                'check_in_method': CheckInMethod.SELF_GEO,
+                'approval_status': app_status,
+            }
+        )
+
+        if action_type == 'CHECK_IN':
+            if record.check_in_time and not created:
+                raise ValidationError({'check_in_time': _("You have already checked in for today.")})
+            record.check_in_time = now_time
+            if selfie_base64:
+                record.selfie_image = selfie_base64
+            if latitude is not None:
+                record.latitude = latitude
+            if longitude is not None:
+                record.longitude = longitude
+            record.distance_meters = dist
+            record.is_within_radius = is_within_radius
+            record.is_late_check_in = is_late
+            record.check_in_method = CheckInMethod.SELF_GEO
+            record.status = AttendanceStatus.PRESENT
+            if clean_reason:
+                record.exception_reason = clean_reason
+            record.approval_status = app_status
+        elif action_type == 'CHECK_OUT':
+            if not record.check_in_time:
+                record.check_in_time = now_time
+            record.check_out_time = now_time
+            record.is_early_check_out = is_early
+            if clean_reason:
+                if record.exception_reason:
+                    record.exception_reason = f"{record.exception_reason} | Checkout: {clean_reason}"
+                else:
+                    record.exception_reason = clean_reason
+            if needs_approval and record.approval_status != StaffApprovalStatus.PENDING_APPROVAL:
+                record.approval_status = StaffApprovalStatus.PENDING_APPROVAL
+
+        record.save()
+
+        AuditService.log(
+            action=AuditAction.CREATE if created else AuditAction.UPDATE,
+            module="attendance",
+            entity_type="StaffDailyAttendance",
+            entity_id=str(record.pk),
+            actor=actor or user,
+            reason=f"Self attendance {action_type} for {user.username} (Radius: {'Within' if is_within_radius else 'Outside'}, Status: {app_status})",
+            changes={
+                "action": action_type,
+                "time": now_time.strftime("%H:%M:%S"),
+                "distance_meters": dist,
+                "within_radius": is_within_radius,
+                "is_late": is_late,
+                "is_early": is_early,
+                "approval_status": record.approval_status,
+                "reason": clean_reason
+            },
+            request=request
+        )
+        return record
+
+    @classmethod
+    @transaction.atomic
+    def review_self_attendance(
+        cls,
+        attendance_id,
+        action,
+        review_notes="",
+        reviewer=None,
+        request=None
+    ):
+        """
+        Admin/Principal reviews a staff self-attendance pending approval.
+        action: 'APPROVE' or 'REJECT'
+        """
+        try:
+            record = StaffDailyAttendance.objects.select_related('user').get(pk=attendance_id)
+        except StaffDailyAttendance.DoesNotExist:
+            raise ResourceNotFoundError(f"Staff attendance record with ID {attendance_id} not found.")
+
+        act = str(action or '').strip().upper()
+        if act not in ('APPROVE', 'REJECT'):
+            raise ValidationError({'action': _("Review action must be either APPROVE or REJECT.")})
+
+        if act == 'APPROVE':
+            record.approval_status = StaffApprovalStatus.APPROVED
+            record.status = AttendanceStatus.PRESENT
+        else:
+            record.approval_status = StaffApprovalStatus.REJECTED
+            record.status = AttendanceStatus.ABSENT
+
+        record.reviewed_by = reviewer
+        record.review_notes = str(review_notes or '').strip()
+        record.reviewed_at = timezone.now()
+        record.save()
+
+        AuditService.log(
+            action=AuditAction.UPDATE,
+            module="attendance",
+            entity_type="StaffDailyAttendance",
+            entity_id=str(record.pk),
+            actor=reviewer,
+            reason=f"{act} self-attendance for {record.user.username} on {record.date}",
+            changes={
+                "approval_status": record.approval_status,
+                "status": record.status,
+                "review_notes": record.review_notes
+            },
+            request=request
+        )
+        return record
+
+    @classmethod
+    def get_pending_self_attendances(cls):
+        """Returns staff attendance records awaiting Admin/Principal review."""
+        return StaffDailyAttendance.objects.filter(
+            approval_status=StaffApprovalStatus.PENDING_APPROVAL
+        ).select_related('user', 'staff_profile', 'staff_profile__department', 'staff_profile__designation').order_by('-date', '-created_at')
 
 
 class AttendanceReportService:

@@ -2695,6 +2695,27 @@ class TimetableWebViewsTests(TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.context['active_tab'], tab_name)
 
+    def test_teacher_timetable_scoping(self):
+        # When a teacher user accesses timetable, can_view_all_teachers is False and selected_teacher is self
+        teacher = User.objects.create_user(
+            username='teacher_tt_scoping',
+            email='teacher_scoping@example.com',
+            password='Password123!',
+            user_type='TEACHER'
+        )
+        role = Role.objects.create(name='Teacher TT Role', code='teacher_tt_role')
+        role.permissions.add(Permission.objects.get(codename='academics.timetable.view'))
+        UserRoleAssignment.objects.create(user=teacher, role=role, scope_type=ScopeType.GLOBAL)
+
+        self.client.force_login(teacher)
+        response = self.client.get(reverse('academics-timetable-list'))
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.context['can_view_all_teachers'])
+        self.assertEqual(response.context['selected_teacher'], teacher)
+        self.assertEqual(response.context['active_tab'], 'teacher_matrix')
+        self.assertContains(response, "My Weekly Teaching Schedule")
+
+
 
 class TimetableAPITests(TestCase):
     """

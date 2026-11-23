@@ -1,0 +1,512 @@
+{% extends 'dashboard/base.html' %}
+{% load static %}
+
+{% block admin %}
+<div class="container-fluid px-0">
+    <!-- Header with Title & Breadcrumbs -->
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
+        <div>
+            <h3 class="fw-bold mb-1 text-dark">
+                <i class="ti ti-camera text-primary me-2"></i> Mark My Attendance
+            </h3>
+            <p class="text-muted mb-0 small">
+                Self-service biometric attendance with live photo verification and campus geo-fencing.
+            </p>
+        </div>
+        <div class="d-flex align-items-center gap-2">
+            <span class="badge bg-light text-dark border px-3 py-2 fs-6">
+                <i class="ti ti-calendar me-1"></i> {{ status_data.date|date:"l, F d, Y" }}
+            </span>
+            <span class="badge bg-primary-subtle text-primary border border-primary-subtle px-3 py-2 fs-6" id="liveClock">
+                --:--:--
+            </span>
+        </div>
+    </div>
+
+    <!-- Django Messages Alerts -->
+    {% if messages %}
+    <div class="mb-4">
+        {% for message in messages %}
+        <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show shadow-sm" role="alert">
+            <i class="ti ti-info-circle me-1"></i> {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Calendar & Working Day Banner -->
+    {% if not status_data.is_working %}
+    <div class="alert alert-warning d-flex align-items-center gap-2 shadow-sm mb-4">
+        <i class="ti ti-alert-circle fs-3 text-warning flex-shrink-0"></i>
+        <div>
+            <strong class="text-dark">Calendar Notice:</strong> Today is marked as a <strong>non-working day</strong> ({{ status_data.calendar_status.reason }}).
+            <div class="small text-muted">Attendance submitted today will require an official reason and Admin / Principal approval.</div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Main Attendance Workspace Grid -->
+    <div class="row g-4 mb-4">
+        <!-- LEFT COLUMN: Live Camera & Photo Snapshot -->
+        <div class="col-lg-6">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-header bg-white border-bottom py-3 d-flex justify-content-between align-items-center">
+                    <h6 class="card-title mb-0 fw-bold text-dark">
+                        <i class="ti ti-video text-primary me-2"></i> Camera Verification
+                    </h6>
+                    <span class="badge bg-success-subtle text-success border border-success-subtle" id="cameraStatusBadge">
+                        Camera Ready
+                    </span>
+                </div>
+                <div class="card-body p-3 p-md-4 text-center">
+                    <!-- Video Feed Container -->
+                    <div class="position-relative bg-dark rounded-3 overflow-hidden shadow-sm mx-auto mb-3" style="max-width: 480px; aspect-ratio: 4/3;">
+                        <video id="webcam" autoplay playsinline class="w-100 h-100 object-fit-cover" style="transform: scaleX(-1);"></video>
+                        <canvas id="snapshotCanvas" class="position-absolute top-0 start-0 w-100 h-100 object-fit-cover d-none"></canvas>
+                        
+                        <div id="cameraPlaceholder" class="position-absolute top-50 start-50 translate-middle text-white text-center w-100 px-3 d-none">
+                            <i class="ti ti-camera-off fs-1 text-white-50 mb-2 d-block"></i>
+                            <span class="small">Camera access is initializing or paused.</span>
+                        </div>
+
+                        <!-- Face Alignment Guide Overlay -->
+                        <div id="cameraOverlay" class="position-absolute top-50 start-50 translate-middle border border-2 border-white border-opacity-50 rounded-circle pointer-events-none" style="width: 200px; height: 240px; border-style: dashed !important;"></div>
+                    </div>
+
+                    <!-- Camera Control Buttons -->
+                    <div class="d-flex justify-content-center gap-2">
+                        <button type="button" class="btn btn-primary px-4 shadow-sm" id="btnCapture" onclick="captureSnapshot()">
+                            <i class="ti ti-aperture me-1"></i> Capture Photo
+                        </button>
+                        <button type="button" class="btn btn-outline-secondary px-3 shadow-sm d-none" id="btnRetake" onclick="retakePhoto()">
+                            <i class="ti ti-refresh me-1"></i> Retake
+                        </button>
+                    </div>
+                    <small class="text-muted d-block mt-2" id="cameraHelpText">
+                        Ensure your face is clearly visible inside the oval guide.
+                    </small>
+                </div>
+            </div>
+        </div>
+
+        <!-- RIGHT COLUMN: Location Verification & Attendance Action -->
+        <div class="col-lg-6">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-header bg-white border-bottom py-3 d-flex justify-content-between align-items-center">
+                    <h6 class="card-title mb-0 fw-bold text-dark">
+                        <i class="ti ti-map-pin text-primary me-2"></i> Campus Geo-Fencing
+                    </h6>
+                    <span class="badge bg-info-subtle text-info border border-info-subtle" id="gpsStatusBadge">
+                        Detecting GPS...
+                    </span>
+                </div>
+                <div class="card-body p-3 p-md-4">
+                    <!-- Geolocation Status Card -->
+                    <div class="p-3 bg-light rounded-3 mb-3 border">
+                        <div class="d-flex align-items-center justify-content-between mb-2">
+                            <span class="small fw-semibold text-muted text-uppercase">Distance from Campus:</span>
+                            <span class="badge fs-6" id="radiusBadge">Calculating...</span>
+                        </div>
+                        <div class="d-flex align-items-center justify-content-between small text-muted">
+                            <span>Campus Allowed Radius:</span>
+                            <strong class="text-dark">{{ school_profile.geo_radius_meters|default:500 }} meters</strong>
+                        </div>
+                        <div class="d-flex align-items-center justify-content-between small text-muted mt-1">
+                            <span>School Timing Window:</span>
+                            <span class="text-dark">{{ school_profile.school_start_time|time:"H:i" }} to {{ school_profile.school_end_time|time:"H:i" }}</span>
+                        </div>
+                    </div>
+
+                    <!-- Current Punch Form -->
+                    <form method="POST" id="attendanceForm" onsubmit="return validateAttendanceSubmission(event)">
+                        {% csrf_token %}
+                        <input type="hidden" name="action_type" id="formActionType" value="{% if status_data.can_check_in %}CHECK_IN{% else %}CHECK_OUT{% endif %}">
+                        <input type="hidden" name="latitude" id="formLatitude" value="">
+                        <input type="hidden" name="longitude" id="formLongitude" value="">
+                        <input type="hidden" name="selfie_image" id="formSelfieImage" value="">
+
+                        <!-- Exception Reason Input (Shown if outside radius or late/early) -->
+                        <div id="exceptionReasonContainer" class="d-none mb-3">
+                            <div class="alert alert-danger p-3 mb-2 shadow-sm">
+                                <div class="fw-bold text-danger mb-1" id="deviationTitle">
+                                    <i class="ti ti-alert-triangle me-1"></i> Exception Deviation Detected
+                                </div>
+                                <p class="small text-muted mb-0" id="deviationDescription">
+                                    You are outside the campus boundary or punch time deviates from regular school hours.
+                                    An official explanation is required for Admin / Principal approval.
+                                </p>
+                            </div>
+                            <label for="exception_reason" class="form-label small fw-semibold text-dark">
+                                Reason for Remote / Off-Campus / Schedule Deviation <span class="text-danger">*</span>
+                            </label>
+                            <textarea name="exception_reason" id="exception_reason" class="form-control shadow-sm" rows="2" placeholder="e.g. Official school field duty, traffic congestion, illness..."></textarea>
+                        </div>
+
+                        <!-- Punch Action Buttons -->
+                        <div class="d-grid gap-2">
+                            {% if status_data.can_check_in %}
+                            <button type="submit" class="btn btn-success btn-lg shadow-sm py-3 fw-bold" id="btnPunchCheckIn">
+                                <i class="ti ti-login me-2 fs-4 align-middle"></i> Punch Check-In
+                            </button>
+                            <div class="small text-center text-muted">
+                                Morning check-in deadline: <strong>{{ school_profile.school_start_time|time:"H:i A" }}</strong>
+                            </div>
+                            {% elif status_data.can_check_out %}
+                            <button type="submit" class="btn btn-warning btn-lg shadow-sm py-3 fw-bold text-dark" id="btnPunchCheckOut">
+                                <i class="ti ti-logout me-2 fs-4 align-middle"></i> Punch Check-Out
+                            </button>
+                            <div class="small text-center text-muted">
+                                Checked in at <strong>{{ record.check_in_time|time:"H:i A" }}</strong>. Closing time: <strong>{{ school_profile.school_end_time|time:"H:i A" }}</strong>
+                            </div>
+                            {% else %}
+                            <div class="alert alert-success text-center py-3 mb-0 shadow-sm">
+                                <i class="ti ti-circle-check fs-2 text-success d-block mb-1"></i>
+                                <h6 class="fw-bold mb-1 text-success">Attendance Completed for Today</h6>
+                                <p class="small text-muted mb-0">
+                                    You have completed both Check-In and Check-Out punches for {{ status_data.date|date:"F d, Y" }}.
+                                </p>
+                            </div>
+                            {% endif %}
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- BOTTOM ROW: Today's Punch History & Approval Status Card -->
+    {% if record %}
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-header bg-white border-bottom py-3">
+            <h6 class="card-title mb-0 fw-bold text-dark">
+                <i class="ti ti-history text-primary me-2"></i> Today's Punch Summary ({{ status_data.date|date:"F d, Y" }})
+            </h6>
+        </div>
+        <div class="card-body p-3 p-md-4">
+            <div class="row g-3 align-items-center">
+                <!-- Selfie Preview -->
+                <div class="col-md-2 text-center">
+                    {% if record.selfie_image %}
+                    <img src="{{ record.selfie_image }}" alt="Selfie" class="rounded-3 shadow-sm border img-fluid" style="max-height: 110px;">
+                    {% else %}
+                    <div class="bg-light rounded-3 p-3 text-muted small border">
+                        <i class="ti ti-user fs-1 text-muted d-block"></i> No Photo
+                    </div>
+                    {% endif %}
+                </div>
+
+                <!-- Punch Timeline & Badges -->
+                <div class="col-md-10">
+                    <div class="d-flex flex-wrap align-items-center gap-3 mb-2">
+                        <span class="badge bg-light-primary text-primary px-3 py-2 fs-6 rounded-pill">
+                            <i class="ti ti-login me-1"></i> Check-In: <strong>{{ record.check_in_time|time:"H:i A"|default:"Not marked" }}</strong>
+                        </span>
+                        <span class="badge bg-light-info text-info px-3 py-2 fs-6 rounded-pill">
+                            <i class="ti ti-logout me-1"></i> Check-Out: <strong>{{ record.check_out_time|time:"H:i A"|default:"Pending" }}</strong>
+                        </span>
+                        
+                        <!-- Approval Status Badge -->
+                        {% if record.approval_status == 'AUTO_APPROVED' %}
+                        <span class="badge bg-success px-3 py-2 fs-6 rounded-pill">
+                            <i class="ti ti-check me-1"></i> Auto Approved (On-Campus)
+                        </span>
+                        {% elif record.approval_status == 'PENDING_APPROVAL' %}
+                        <span class="badge bg-warning text-dark px-3 py-2 fs-6 rounded-pill">
+                            <i class="ti ti-clock me-1"></i> Pending Approval (Admin/Principal)
+                        </span>
+                        {% elif record.approval_status == 'APPROVED' %}
+                        <span class="badge bg-success px-3 py-2 fs-6 rounded-pill">
+                            <i class="ti ti-circle-check me-1"></i> Approved by {{ record.reviewed_by.get_full_name|default:record.reviewed_by.username }}
+                        </span>
+                        {% elif record.approval_status == 'REJECTED' %}
+                        <span class="badge bg-danger px-3 py-2 fs-6 rounded-pill">
+                            <i class="ti ti-circle-x me-1"></i> Rejected
+                        </span>
+                        {% endif %}
+                    </div>
+
+                    <!-- Details: Distance & Reason -->
+                    <div class="small text-muted">
+                        {% if record.distance_meters is not None %}
+                        <span class="me-3">
+                            <i class="ti ti-map-pin me-1"></i> Recorded Distance: <strong>{{ record.distance_meters }}m</strong> from campus
+                            {% if record.is_within_radius %}
+                            <span class="text-success fw-bold">(Within Radius)</span>
+                            {% else %}
+                            <span class="text-danger fw-bold">(Outside Radius)</span>
+                            {% endif %}
+                        </span>
+                        {% endif %}
+                        {% if record.is_late_check_in %}
+                        <span class="badge bg-danger-subtle text-danger border border-danger-subtle me-2">Late Check-In</span>
+                        {% endif %}
+                        {% if record.is_early_check_out %}
+                        <span class="badge bg-warning-subtle text-warning border border-warning-subtle me-2">Early Check-Out</span>
+                        {% endif %}
+                    </div>
+
+                    {% if record.exception_reason %}
+                    <div class="mt-2 p-2 bg-light rounded border small">
+                        <strong>Submitted Reason:</strong> {{ record.exception_reason }}
+                        {% if record.review_notes %}
+                        <div class="text-primary mt-1"><strong>Reviewer Note:</strong> {{ record.review_notes }}</div>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- JavaScript Engine for WebRTC Camera, Geolocation & Auto-Verification -->
+<script>
+const SCHOOL_LAT = {{ school_profile.latitude|default:"26.882978" }};
+const SCHOOL_LON = {{ school_profile.longitude|default:"80.949782" }};
+const SCHOOL_RADIUS = {{ school_profile.geo_radius_meters|default:500 }};
+const SCHOOL_START_TIME = "{{ school_profile.school_start_time|time:'H:i'|default:'08:30' }}";
+const SCHOOL_END_TIME = "{{ school_profile.school_end_time|time:'H:i'|default:'14:30' }}";
+
+let currentLat = null;
+let currentLon = null;
+let currentDistance = null;
+let isWithinCampus = false;
+let photoCaptured = false;
+let webcamStream = null;
+
+// Live Clock
+function updateClock() {
+    const now = new Date();
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+    const el = document.getElementById('liveClock');
+    if (el) el.innerText = `${hours}:${minutes}:${seconds}`;
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// Haversine distance in meters
+function computeHaversineDistance(lat1, lon1, lat2, lon2) {
+    const R = 6371000;
+    const toRad = (x) => (x * Math.PI) / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+              Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+              Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return Math.round(R * c);
+}
+
+// Check schedule deviation
+function isLateCheckIn() {
+    const now = new Date();
+    const [sH, sM] = SCHOOL_START_TIME.split(':').map(Number);
+    const deadline = new Date();
+    deadline.setHours(sH, sM, 0, 0);
+    return now > deadline;
+}
+
+function isEarlyCheckOut() {
+    const now = new Date();
+    const [eH, eM] = SCHOOL_END_TIME.split(':').map(Number);
+    const closing = new Date();
+    closing.setHours(eH, eM, 0, 0);
+    return now < closing;
+}
+
+// Camera Management
+async function initWebcam() {
+    const video = document.getElementById('webcam');
+    const badge = document.getElementById('cameraStatusBadge');
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+                width: { ideal: 640 },
+                height: { ideal: 480 },
+                facingMode: 'user'
+            },
+            audio: false
+        });
+        webcamStream = stream;
+        video.srcObject = stream;
+        if (badge) {
+            badge.innerText = "Camera Active";
+            badge.className = "badge bg-success-subtle text-success border border-success-subtle";
+        }
+    } catch (err) {
+        console.warn("Camera access error:", err);
+        if (badge) {
+            badge.innerText = "Camera Unavailable";
+            badge.className = "badge bg-danger-subtle text-danger border border-danger-subtle";
+        }
+        const ph = document.getElementById('cameraPlaceholder');
+        if (ph) ph.classList.remove('d-none');
+    }
+}
+
+function captureSnapshot() {
+    const video = document.getElementById('webcam');
+    const canvas = document.getElementById('snapshotCanvas');
+    const overlay = document.getElementById('cameraOverlay');
+    const btnCapture = document.getElementById('btnCapture');
+    const btnRetake = document.getElementById('btnRetake');
+    const formInput = document.getElementById('formSelfieImage');
+
+    if (!video || !canvas) return;
+
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
+    const ctx = canvas.getContext('2d');
+    
+    // Mirror the snapshot to match video view
+    ctx.translate(canvas.width, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    const base64Data = canvas.toDataURL('image/jpeg', 0.85);
+    if (formInput) formInput.value = base64Data;
+
+    canvas.classList.remove('d-none');
+    video.classList.add('d-none');
+    if (overlay) overlay.classList.add('d-none');
+    if (btnCapture) btnCapture.classList.add('d-none');
+    if (btnRetake) btnRetake.classList.remove('d-none');
+    photoCaptured = true;
+}
+
+function retakePhoto() {
+    const video = document.getElementById('webcam');
+    const canvas = document.getElementById('snapshotCanvas');
+    const overlay = document.getElementById('cameraOverlay');
+    const btnCapture = document.getElementById('btnCapture');
+    const btnRetake = document.getElementById('btnRetake');
+    const formInput = document.getElementById('formSelfieImage');
+
+    if (canvas) canvas.classList.add('d-none');
+    if (video) video.classList.remove('d-none');
+    if (overlay) overlay.classList.remove('d-none');
+    if (btnCapture) btnCapture.classList.remove('d-none');
+    if (btnRetake) btnRetake.classList.add('d-none');
+    if (formInput) formInput.value = '';
+    photoCaptured = false;
+}
+
+// Geolocation Detection
+function initGeolocation() {
+    const gpsBadge = document.getElementById('gpsStatusBadge');
+    const radiusBadge = document.getElementById('radiusBadge');
+
+    if (!navigator.geolocation) {
+        if (gpsBadge) {
+            gpsBadge.innerText = "GPS Not Supported";
+            gpsBadge.className = "badge bg-danger-subtle text-danger border border-danger-subtle";
+        }
+        handleDeviation("Geolocation not supported by device. Admin approval required.");
+        return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+        (position) => {
+            currentLat = position.coords.latitude;
+            currentLon = position.coords.longitude;
+            document.getElementById('formLatitude').value = currentLat;
+            document.getElementById('formLongitude').value = currentLon;
+
+            currentDistance = computeHaversineDistance(SCHOOL_LAT, SCHOOL_LON, currentLat, currentLon);
+            isWithinCampus = (currentDistance <= SCHOOL_RADIUS);
+
+            if (gpsBadge) {
+                gpsBadge.innerText = "GPS Fixed";
+                gpsBadge.className = "badge bg-success-subtle text-success border border-success-subtle";
+            }
+
+            if (radiusBadge) {
+                if (isWithinCampus) {
+                    radiusBadge.className = "badge bg-success px-3 py-1";
+                    radiusBadge.innerHTML = `<i class="ti ti-check me-1"></i> ${currentDistance}m (Inside Campus)`;
+                } else {
+                    radiusBadge.className = "badge bg-danger px-3 py-1";
+                    radiusBadge.innerHTML = `<i class="ti ti-x me-1"></i> ${currentDistance}m (Outside Campus)`;
+                }
+            }
+
+            checkExceptionsAndToggleReason();
+        },
+        (error) => {
+            console.warn("Geolocation error:", error);
+            if (gpsBadge) {
+                gpsBadge.innerText = "GPS Blocked / Unavailable";
+                gpsBadge.className = "badge bg-danger-subtle text-danger border border-danger-subtle";
+            }
+            if (radiusBadge) {
+                radiusBadge.className = "badge bg-warning text-dark px-3 py-1";
+                radiusBadge.innerText = "Location Unknown";
+            }
+            isWithinCampus = false;
+            checkExceptionsAndToggleReason();
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+}
+
+function checkExceptionsAndToggleReason() {
+    const actionType = document.getElementById('formActionType')?.value || 'CHECK_IN';
+    const container = document.getElementById('exceptionReasonContainer');
+    const titleEl = document.getElementById('deviationTitle');
+    const descEl = document.getElementById('deviationDescription');
+    const reasonInput = document.getElementById('exception_reason');
+
+    let deviations = [];
+    if (!isWithinCampus) {
+        deviations.push(`Outside campus perimeter (${currentDistance ? currentDistance + 'm' : 'location unavailable'}, allowed ${SCHOOL_RADIUS}m)`);
+    }
+
+    if (actionType === 'CHECK_IN' && isLateCheckIn()) {
+        deviations.push(`Late arrival check-in after ${SCHOOL_START_TIME}`);
+    } else if (actionType === 'CHECK_OUT' && isEarlyCheckOut()) {
+        deviations.push(`Early departure check-out before ${SCHOOL_END_TIME}`);
+    }
+
+    if (deviations.length > 0) {
+        container?.classList.remove('d-none');
+        if (titleEl) titleEl.innerHTML = `<i class="ti ti-alert-triangle me-1"></i> Exception Reason Required`;
+        if (descEl) descEl.innerText = deviations.join(' & ') + '. Your attendance will be submitted for Admin / Principal review.';
+        if (reasonInput) reasonInput.required = true;
+    } else {
+        container?.classList.add('d-none');
+        if (reasonInput) reasonInput.required = false;
+    }
+}
+
+// Form validation before submit
+function validateAttendanceSubmission(e) {
+    if (!photoCaptured) {
+        alert("Please capture your photo before marking attendance.");
+        e.preventDefault();
+        return false;
+    }
+
+    const container = document.getElementById('exceptionReasonContainer');
+    const reasonInput = document.getElementById('exception_reason');
+    if (container && !container.classList.contains('d-none')) {
+        if (!reasonInput || !reasonInput.value.trim()) {
+            alert("Please enter a reason for the location or timing deviation before submitting.");
+            reasonInput?.focus();
+            e.preventDefault();
+            return false;
+        }
+    }
+    return true;
+}
+
+// Initialize on DOM load
+document.addEventListener('DOMContentLoaded', () => {
+    initWebcam();
+    initGeolocation();
+});
+</script>
+{% endblock %}

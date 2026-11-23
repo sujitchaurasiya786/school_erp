@@ -1,4 +1,5 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from unittest.mock import patch
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.test import TestCase
@@ -14,7 +15,8 @@ from apps.academics.services import TimetableService
 from apps.attendance.models import (
     Holiday, HolidayType, SaturdayRule, OverrideType,
     WorkingDayConfig, SpecialDayOverride,
-    StudentDailyAttendance, AttendanceCorrectionRequest, StaffDailyAttendance, AttendanceStatus, WEEKDAY_CHOICES
+    StudentDailyAttendance, AttendanceCorrectionRequest, StaffDailyAttendance, AttendanceStatus,
+    StaffApprovalStatus, CheckInMethod, WEEKDAY_CHOICES
 )
 from apps.attendance.services import (
     CalendarService, StudentDailyAttendanceService,
@@ -1026,6 +1028,18 @@ class DailyAttendanceServiceTests(AttendanceTestBase):
         )
         self.assertFalse(StudentDailyAttendanceService.validate_user_attendance_scope(other_teacher, "Class 10", "A"))
 
+        # 4. Scoped role assignment: CLASS scope
+        role = Role.objects.create(name='Class 10 Scoped Marker', code='class_10_marker')
+        role.permissions.add(Permission.objects.get(codename='attendance.record.mark'))
+        UserRoleAssignment.objects.create(
+            user=other_teacher,
+            role=role,
+            scope_type=ScopeType.CLASS,
+            scope_id="Class 10"
+        )
+        self.assertTrue(StudentDailyAttendanceService.validate_user_attendance_scope(other_teacher, "Class 10", "A"))
+        self.assertFalse(StudentDailyAttendanceService.validate_user_attendance_scope(other_teacher, "Class 9", "A"))
+
 
 # ==============================================================================
 # 11. Attendance Correction Workflow Tests
@@ -1170,6 +1184,24 @@ class AttendanceDailyWebViewsTests(AttendanceTestBase):
         self.assertContains(res, "Daily Student Attendance")
         self.assertContains(res, "Aarav")
         self.assertContains(res, "ADM-2027-001")
+
+    def test_daily_attendance_view_get_as_teacher(self):
+        # Teacher assigned to section A loads daily attendance without scope_value error
+        self.section.class_teacher = self.teacher
+        self.section.save()
+        self.client.force_login(self.teacher)
+        res = self.client.get(
+            reverse('attendance-daily'),
+            {
+                'year': self.ay.pk,
+                'class_id': self.school_class.pk,
+                'section_name': 'A',
+                'date': '2027-04-05'
+            }
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "Daily Student Attendance")
+        self.assertContains(res, "Aarav")
 
     def test_daily_attendance_view_post_save_success(self):
         self.client.force_login(self.superuser)
@@ -1555,4 +1587,181 @@ class StaffAttendanceAndReportsWebViewsTests(AttendanceTestBase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res['Content-Type'], 'text/csv')
         self.assertIn('Aarav Verma', res.content.decode('utf-8'))
+
+
+class StaffSelfAttendanceServiceTests(AttendanceTestBase):
+    """
+    Tests for teacher/staff self attendance with geolocation radius and approval workflows.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.today = date(2027, 4, 5)
+        from apps.school_config.models import SchoolProfile
+        self.profile = SchoolProfile.get_singleton()
+        self.profile.latitude = 28.613939
+        self.profile.longitude = 77.209021
+        self.profile.geo_radius_meters = 500
+        self.profile.school_start_time = "08:30:00"
+        self.profile.school_end_time = "14:30:00"
+        self.profile.save()
+
+    def test_haversine_distance_calculation(self):
+        # Distance between identical points is 0
+        d0 = StaffDailyAttendanceService.calculate_haversine_distance(
+            28.613939, 77.209021, 28.613939, 77.209021
+        )
+        self.assertEqual(d0, 0.0)
+
+        # Distance to nearby point (~110 meters)
+        d_near = StaffDailyAttendanceService.calculate_haversine_distance(
+            28.613939, 77.209021, 28.614900, 77.209021
+        )
+        self.assertIsNotNone(d_near)
+        self.assertTrue(50 < d_near < 200)
+
+    def test_self_check_in_within_radius_and_on_time(self):
+        with patch('django.utils.timezone.localtime') as mock_now:
+            # Set mock time to 08:15:00 (on-time)
+            dummy_dt = datetime.combine(self.today, datetime.strptime("08:15:00", "%H:%M:%S").time())
+            mock_now.return_value = dummy_dt
+            with patch('django.utils.timezone.localdate', return_value=self.today):
+                rec = StaffDailyAttendanceService.record_self_attendance(
+                    user=self.teacher,
+                    action_type='CHECK_IN',
+                    latitude=28.613950,
+                    longitude=77.209030,
+                    selfie_base64="data:image/jpeg;base64,sample_img",
+                    actor=self.teacher
+                )
+                self.assertIsNotNone(rec)
+                self.assertTrue(rec.is_within_radius)
+                self.assertFalse(rec.is_late_check_in)
+                self.assertEqual(rec.approval_status, StaffApprovalStatus.AUTO_APPROVED)
+                self.assertEqual(rec.status, AttendanceStatus.PRESENT)
+
+    def test_self_check_in_outside_radius_requires_reason(self):
+        with patch('django.utils.timezone.localdate', return_value=self.today):
+            # Coordinates 5km away
+            with self.assertRaises(ValidationError) as cm:
+                StaffDailyAttendanceService.record_self_attendance(
+                    user=self.teacher,
+                    action_type='CHECK_IN',
+                    latitude=28.650000,
+                    longitude=77.250000,
+                    selfie_base64="data:image/jpeg;base64,sample_img",
+                    exception_reason="",
+                    actor=self.teacher
+                )
+            self.assertIn('exception_reason', cm.exception.message_dict)
+
+    def test_self_check_in_outside_radius_with_reason_marks_pending_approval(self):
+        with patch('django.utils.timezone.localdate', return_value=self.today):
+            rec = StaffDailyAttendanceService.record_self_attendance(
+                user=self.teacher,
+                action_type='CHECK_IN',
+                latitude=28.650000,
+                longitude=77.250000,
+                selfie_base64="data:image/jpeg;base64,sample_img",
+                exception_reason="Field trip to Science Museum with students",
+                actor=self.teacher
+            )
+            self.assertFalse(rec.is_within_radius)
+            self.assertEqual(rec.approval_status, StaffApprovalStatus.PENDING_APPROVAL)
+            self.assertEqual(rec.exception_reason, "Field trip to Science Museum with students")
+
+    def test_review_self_attendance_approve_and_reject(self):
+        with patch('django.utils.timezone.localdate', return_value=self.today):
+            rec = StaffDailyAttendanceService.record_self_attendance(
+                user=self.teacher,
+                action_type='CHECK_IN',
+                latitude=28.650000,
+                longitude=77.250000,
+                selfie_base64="data:image/jpeg;base64,sample_img",
+                exception_reason="Traffic delay",
+                actor=self.teacher
+            )
+            self.assertEqual(rec.approval_status, StaffApprovalStatus.PENDING_APPROVAL)
+
+            # Review Approve
+            approved_rec = StaffDailyAttendanceService.review_self_attendance(
+                attendance_id=rec.pk,
+                action='APPROVE',
+                review_notes="Approved by Principal Sharma",
+                reviewer=self.superuser
+            )
+            self.assertEqual(approved_rec.approval_status, StaffApprovalStatus.APPROVED)
+            self.assertEqual(approved_rec.status, AttendanceStatus.PRESENT)
+
+            # Review Reject
+            rejected_rec = StaffDailyAttendanceService.review_self_attendance(
+                attendance_id=rec.pk,
+                action='REJECT',
+                review_notes="Invalid explanation",
+                reviewer=self.superuser
+            )
+            self.assertEqual(rejected_rec.approval_status, StaffApprovalStatus.REJECTED)
+            self.assertEqual(rejected_rec.status, AttendanceStatus.ABSENT)
+
+
+class StaffSelfAttendanceWebViewsTests(AttendanceTestBase):
+    """
+    Web view test cases for self-attendance marking and admin approvals.
+    """
+
+    def test_self_attendance_view_get(self):
+        self.client.force_login(self.teacher)
+        res = self.client.get(reverse('attendance-self-mark'))
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "Mark My Attendance")
+        self.assertContains(res, "Camera Verification")
+        self.assertContains(res, "Campus Geo-Fencing")
+
+    def test_self_attendance_view_post_check_in(self):
+        self.client.force_login(self.teacher)
+        res = self.client.post(
+            reverse('attendance-self-mark'),
+            {
+                'action_type': 'CHECK_IN',
+                'latitude': '28.613939',
+                'longitude': '77.209021',
+                'selfie_image': 'data:image/jpeg;base64,test_snap',
+                'exception_reason': 'On campus',
+            }
+        )
+        self.assertEqual(res.status_code, 302)
+        rec = StaffDailyAttendance.objects.filter(user=self.teacher, date=date.today()).first()
+        self.assertIsNotNone(rec)
+        self.assertIsNotNone(rec.check_in_time)
+
+    def test_teacher_blocked_from_staff_attendance_admin_screen(self):
+        # Teacher without attendance.staff.view permission should be redirected
+        self.client.force_login(self.teacher)
+        res = self.client.get(reverse('attendance-staff'))
+        self.assertEqual(res.status_code, 302)
+        self.assertRedirects(res, reverse('home-dashboard'))
+
+    def test_admin_can_approve_self_attendance(self):
+        # Create pending self attendance
+        rec = StaffDailyAttendance.objects.create(
+            user=self.teacher,
+            date=date.today(),
+            status=AttendanceStatus.PRESENT,
+            approval_status=StaffApprovalStatus.PENDING_APPROVAL,
+            exception_reason="Traffic jam",
+            marked_by=self.teacher
+        )
+        self.client.force_login(self.superuser)
+        res = self.client.post(
+            reverse('attendance-staff'),
+            {
+                'action': 'approve_self_attendance',
+                'attendance_id': rec.pk,
+                'review_notes': 'Principal approved',
+            }
+        )
+        self.assertEqual(res.status_code, 302)
+        rec.refresh_from_db()
+        self.assertEqual(rec.approval_status, StaffApprovalStatus.APPROVED)
+
 

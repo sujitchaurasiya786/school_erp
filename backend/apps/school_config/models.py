@@ -131,6 +131,35 @@ class SchoolProfile(TimeStampedModel):
         blank=True,
         related_name='school_profiles'
     )
+    # Geo-fencing & Timings for Attendance
+    latitude = models.DecimalField(
+        max_digits=10,
+        decimal_places=7,
+        null=True,
+        blank=True,
+        default=26.8829779,
+        help_text=_("School campus center latitude")
+    )
+    longitude = models.DecimalField(
+        max_digits=10,
+        decimal_places=7,
+        null=True,
+        blank=True,
+        default=80.9497815,
+        help_text=_("School campus center longitude")
+    )
+    geo_radius_meters = models.PositiveIntegerField(
+        default=500,
+        help_text=_("Allowed radius in meters for geofenced staff attendance")
+    )
+    school_start_time = models.TimeField(
+        default='08:30:00',
+        help_text=_("Official school opening / staff check-in deadline")
+    )
+    school_end_time = models.TimeField(
+        default='14:30:00',
+        help_text=_("Official school closing / staff check-out time")
+    )
 
     class Meta:
         db_table = 'config_school_profile'

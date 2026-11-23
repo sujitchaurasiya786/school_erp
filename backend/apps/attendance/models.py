@@ -25,6 +25,18 @@ class SaturdayRule(models.TextChoices):
     SECOND_FOURTH_OFF = 'SECOND_FOURTH_OFF', _('2nd and 4th Saturday Off')
 
 
+class StaffApprovalStatus(models.TextChoices):
+    AUTO_APPROVED = 'AUTO_APPROVED', _('Auto Approved')
+    PENDING_APPROVAL = 'PENDING_APPROVAL', _('Pending Approval')
+    APPROVED = 'APPROVED', _('Approved')
+    REJECTED = 'REJECTED', _('Rejected')
+
+
+class CheckInMethod(models.TextChoices):
+    MANUAL = 'MANUAL', _('Manual (Admin/HR)')
+    SELF_GEO = 'SELF_GEO', _('Self Check-in (Geo/Camera)')
+
+
 class OverrideType(models.TextChoices):
     SPECIAL_WORKING = 'SPECIAL_WORKING', _('Special / Compensatory Working Day')
     EMERGENCY_CLOSURE = 'EMERGENCY_CLOSURE', _('Emergency / Unplanned Closure')
@@ -277,6 +289,36 @@ class StaffDailyAttendance(TimeStampedModel):
         null=True,
         blank=True,
         related_name='marked_staff_attendances'
+    )
+    # Self-attendance, Geofencing, Timings & Approval
+    check_in_time = models.TimeField(null=True, blank=True)
+    check_out_time = models.TimeField(null=True, blank=True)
+    selfie_image = models.TextField(blank=True, default='', help_text=_("Base64 Data URL or path of verification selfie"))
+    latitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    distance_meters = models.FloatField(null=True, blank=True)
+    is_within_radius = models.BooleanField(default=True)
+    is_late_check_in = models.BooleanField(default=False)
+    is_early_check_out = models.BooleanField(default=False)
+    exception_reason = models.TextField(blank=True, default='', help_text=_("Reason when outside radius or late/early"))
+    approval_status = models.CharField(
+        max_length=20,
+        choices=StaffApprovalStatus.choices,
+        default=StaffApprovalStatus.AUTO_APPROVED
+    )
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='reviewed_staff_attendances'
+    )
+    review_notes = models.TextField(blank=True, default='')
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    check_in_method = models.CharField(
+        max_length=20,
+        choices=CheckInMethod.choices,
+        default=CheckInMethod.MANUAL
     )
 
     class Meta:

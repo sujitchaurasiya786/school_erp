@@ -554,11 +554,11 @@ def staff_attendance_view(request):
     Staff Attendance Management Dashboard.
     Enables authorized administrators to record and inspect daily staff attendance.
     """
-    if not (request.user.is_superuser or _check_attendance_permission(request, 'attendance.staff.view') or _check_attendance_permission(request, 'attendance.record.view')):
+    if not (request.user.is_superuser or _check_attendance_permission(request, 'attendance.staff.view') or request.user.user_type in ['ADMIN', 'PRINCIPAL']):
         messages.error(request, "You do not have permission to view staff attendance.")
         return redirect('home-dashboard')
 
-    can_mark = request.user.is_superuser or _check_attendance_permission(request, 'attendance.staff.mark')
+    can_mark = request.user.is_superuser or _check_attendance_permission(request, 'attendance.staff.mark') or request.user.user_type in ['ADMIN', 'PRINCIPAL']
 
     selected_date_str = request.GET.get('date', '').strip()
     if not selected_date_str:
@@ -619,10 +619,32 @@ def staff_attendance_view(request):
 
             return redirect(request.get_full_path())
 
+        elif action in ('approve_self_attendance', 'reject_self_attendance'):
+            if not can_mark:
+                messages.error(request, "You do not have permission to review self-attendance.")
+                return redirect(request.get_full_path())
+            att_id = request.POST.get('attendance_id')
+            notes = request.POST.get('review_notes', '').strip()
+            review_action = 'APPROVE' if action == 'approve_self_attendance' else 'REJECT'
+            try:
+                StaffDailyAttendanceService.review_self_attendance(
+                    attendance_id=att_id,
+                    action=review_action,
+                    review_notes=notes,
+                    reviewer=request.user,
+                    request=request
+                )
+                messages.success(request, f"Self-attendance request {'approved' if review_action == 'APPROVE' else 'rejected'} successfully.")
+            except Exception as e:
+                messages.error(request, f"Error reviewing attendance: {e}")
+            return redirect(request.get_full_path())
+
     roster_data = StaffDailyAttendanceService.get_staff_roster_with_attendance(
         target_date=selected_date,
         department_id=department_id
     )
+    pending_approvals = StaffDailyAttendanceService.get_pending_self_attendances()
+    active_tab = request.GET.get('tab', 'roster')
 
     context = {
         'selected_date_str': selected_date_str,
@@ -632,8 +654,80 @@ def staff_attendance_view(request):
         'roster_data': roster_data,
         'can_mark': can_mark,
         'attendance_statuses': AttendanceStatus.choices,
+        'pending_approvals': pending_approvals,
+        'active_tab': active_tab,
     }
     return render(request, 'dashboard/attendance/staff_attendance.html', context)
+
+
+@login_required(login_url='login')
+def self_attendance_view(request):
+    """
+    Self Attendance check-in / check-out interface for teachers and staff.
+    Uses browser camera snapshot, GPS geolocation verification against campus radius,
+    and automatic late/early detection.
+    """
+    if request.user.user_type in ('STUDENT', 'PARENT'):
+        messages.error(request, "Self attendance is only accessible to school staff and faculty.")
+        return redirect('home-dashboard')
+
+    if request.method == 'POST':
+        action_type = request.POST.get('action_type', '').strip().upper()
+        latitude = request.POST.get('latitude', '').strip()
+        longitude = request.POST.get('longitude', '').strip()
+        selfie_base64 = request.POST.get('selfie_image', '').strip()
+        exception_reason = request.POST.get('exception_reason', '').strip()
+
+        lat_val = None
+        lon_val = None
+        if latitude:
+            try:
+                lat_val = float(latitude)
+            except ValueError:
+                pass
+        if longitude:
+            try:
+                lon_val = float(longitude)
+            except ValueError:
+                pass
+
+        try:
+            record = StaffDailyAttendanceService.record_self_attendance(
+                user=request.user,
+                action_type=action_type,
+                latitude=lat_val,
+                longitude=lon_val,
+                selfie_base64=selfie_base64,
+                exception_reason=exception_reason,
+                actor=request.user,
+                request=request
+            )
+            if record.approval_status == StaffApprovalStatus.PENDING_APPROVAL:
+                messages.warning(
+                    request,
+                    f"{action_type.replace('_', ' ').title()} recorded. It is pending review from Admin/Principal due to location radius or schedule deviation."
+                )
+            else:
+                messages.success(
+                    request,
+                    f"{action_type.replace('_', ' ').title()} recorded successfully. Verified on-campus."
+                )
+        except ValidationError as err:
+            err_dict = err.message_dict if hasattr(err, 'message_dict') else {'error': err.messages}
+            msg = " ".join([" ".join(v) for v in err_dict.values()])
+            messages.error(request, msg)
+        except Exception as ex:
+            messages.error(request, f"Could not record attendance: {ex}")
+
+        return redirect('attendance-self-mark')
+
+    status_data = StaffDailyAttendanceService.get_self_attendance_status(request.user)
+    context = {
+        'status_data': status_data,
+        'school_profile': status_data['school_profile'],
+        'record': status_data['record'],
+    }
+    return render(request, 'dashboard/attendance/self_attendance.html', context)
 
 
 @login_required(login_url='login')
