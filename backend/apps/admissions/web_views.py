@@ -12,7 +12,7 @@ from django.views.decorators.http import require_POST
 from apps.academics.models import SchoolClass, Section
 from apps.admissions.models import (
     AdmissionApplication, ApplicationDocument, ApplicationStatus,
-    DocumentStatus, SeatQuota
+    DocumentStatus, SeatQuota, StudentCategory
 )
 from apps.admissions.services import AdmissionService
 from apps.audit.models import AuditAction
@@ -21,6 +21,9 @@ from apps.rbac.services import RBACService
 from apps.school_config.models import AcademicYear
 from common.exceptions import BusinessConflictError
 
+BLOOD_GROUP_CHOICES = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']
+RELATION_CHOICES = ['Father', 'Mother', 'Guardian', 'Other']
+
 
 def _check_admissions_permission(request, codename):
     if not request.user.is_authenticated:
@@ -28,6 +31,137 @@ def _check_admissions_permission(request, codename):
     if request.user.is_superuser:
         return True
     return RBACService.has_permission(request.user, codename)
+
+
+def _extract_and_create_application(request, selected_year):
+    """
+    Helper to extract 4-step admission intake parameters, validate files, and create application & documents.
+    """
+    first_name = request.POST.get('first_name', '').strip()
+    last_name = request.POST.get('last_name', '').strip()
+    applying_class = request.POST.get('applying_class', '').strip()
+    dob_str = request.POST.get('date_of_birth', '').strip()
+    gender = request.POST.get('gender', 'M').strip()
+
+    # Step 1 Demographics
+    aadhaar_number = request.POST.get('aadhaar_number', '').strip()
+    blood_group = request.POST.get('blood_group', '').strip()
+    religion = request.POST.get('religion', '').strip()
+    mother_tongue = request.POST.get('mother_tongue', '').strip()
+    student_photo = request.FILES.get('student_photo')
+
+    # Step 2 Parents / Guardian
+    father_name = request.POST.get('father_name', '').strip()
+    mother_name = request.POST.get('mother_name', '').strip()
+    guardian_relation = request.POST.get('guardian_relation', 'Father').strip() or 'Father'
+    guardian_phone = request.POST.get('guardian_phone', '').strip()
+    alternate_phone = request.POST.get('alternate_phone', '').strip()
+    guardian_email = request.POST.get('guardian_email', '').strip()
+    father_occupation = request.POST.get('father_occupation', '').strip()
+    mother_occupation = request.POST.get('mother_occupation', '').strip()
+
+    # Step 3 Address & Academic History
+    address = request.POST.get('address', '').strip()
+    city = request.POST.get('city', '').strip()
+    district = request.POST.get('district', '').strip()
+    state = request.POST.get('state', '').strip()
+    pincode = request.POST.get('pincode', '').strip()
+
+    same_as_current_address = request.POST.get('same_as_current_address') in ['on', 'true', 'True', '1', True]
+    if same_as_current_address:
+        permanent_address = address
+        permanent_city = city
+        permanent_district = district
+        permanent_state = state
+        permanent_pincode = pincode
+    else:
+        permanent_address = request.POST.get('permanent_address', '').strip()
+        permanent_city = request.POST.get('permanent_city', '').strip()
+        permanent_district = request.POST.get('permanent_district', '').strip()
+        permanent_state = request.POST.get('permanent_state', '').strip()
+        permanent_pincode = request.POST.get('permanent_pincode', '').strip()
+
+    previous_school = request.POST.get('previous_school', '').strip()
+    previous_class = request.POST.get('previous_class', '').strip()
+    prev_pct_str = request.POST.get('previous_percentage', '').strip()
+    previous_percentage = float(prev_pct_str) if prev_pct_str else None
+
+    # Step 4 Category, Facilities & Consent
+    category = request.POST.get('category', StudentCategory.GENERAL).strip()
+    needs_transport = request.POST.get('needs_transport') in ['on', 'true', 'True', '1', True]
+    needs_hostel = request.POST.get('needs_hostel') in ['on', 'true', 'True', '1', True]
+    has_sibling_in_school = request.POST.get('has_sibling_in_school') in ['on', 'true', 'True', '1', True]
+    sibling_details = request.POST.get('sibling_details', '').strip()
+    medical_conditions = request.POST.get('medical_conditions', '').strip()
+    declaration_accepted = (request.POST.get('declaration_accepted') in ['on', 'true', 'True', '1', True]) if 'declaration_accepted' in request.POST else True
+
+    dob = datetime.strptime(dob_str, "%Y-%m-%d").date()
+
+    app = AdmissionService.create_application(
+        academic_year=selected_year,
+        applying_class=applying_class,
+        first_name=first_name,
+        last_name=last_name,
+        date_of_birth=dob,
+        gender=gender,
+        father_name=father_name,
+        mother_name=mother_name,
+        guardian_phone=guardian_phone,
+        address=address,
+        guardian_email=guardian_email,
+        previous_school=previous_school,
+        actor=request.user,
+        request=request,
+        aadhaar_number=aadhaar_number,
+        blood_group=blood_group,
+        religion=religion,
+        mother_tongue=mother_tongue,
+        student_photo=student_photo,
+        guardian_relation=guardian_relation,
+        alternate_phone=alternate_phone,
+        father_occupation=father_occupation,
+        mother_occupation=mother_occupation,
+        city=city,
+        district=district,
+        state=state,
+        pincode=pincode,
+        same_as_current_address=same_as_current_address,
+        permanent_address=permanent_address,
+        permanent_city=permanent_city,
+        permanent_district=permanent_district,
+        permanent_state=permanent_state,
+        permanent_pincode=permanent_pincode,
+        previous_class=previous_class,
+        previous_percentage=previous_percentage,
+        category=category,
+        declaration_accepted=declaration_accepted,
+        needs_transport=needs_transport,
+        needs_hostel=needs_hostel,
+        has_sibling_in_school=has_sibling_in_school,
+        sibling_details=sibling_details,
+        medical_conditions=medical_conditions,
+    )
+
+    # Document uploads
+    doc_fields = [
+        ('doc_birth_certificate', 'Birth Certificate'),
+        ('doc_transfer_certificate', 'Transfer Certificate'),
+        ('doc_marksheet', 'Previous Marksheet'),
+        ('doc_aadhaar', 'Aadhaar Card'),
+        ('doc_caste_certificate', 'Caste Certificate'),
+        ('doc_address_proof', 'Address Proof'),
+    ]
+    for field_name, label in doc_fields:
+        f = request.FILES.get(field_name)
+        if f:
+            ApplicationDocument.objects.create(
+                application=app,
+                doc_type=label,
+                title=f"{app.first_name} {label}",
+                document_file=f
+            )
+
+    return app
 
 
 @login_required(login_url='login')
@@ -61,38 +195,13 @@ def applications_list_view(request):
                 messages.error(request, "You do not have permission to submit admission applications.")
                 return redirect('admissions-applications-list')
 
-            first_name = request.POST.get('first_name', '').strip()
-            last_name = request.POST.get('last_name', '').strip()
-            applying_class = request.POST.get('applying_class', '').strip()
-            dob_str = request.POST.get('date_of_birth', '').strip()
-            gender = request.POST.get('gender', 'M')
-            father_name = request.POST.get('father_name', '').strip()
-            mother_name = request.POST.get('mother_name', '').strip()
-            guardian_phone = request.POST.get('guardian_phone', '').strip()
-            guardian_email = request.POST.get('guardian_email', '').strip()
-            address = request.POST.get('address', '').strip()
-            previous_school = request.POST.get('previous_school', '').strip()
-
             try:
-                dob = datetime.strptime(dob_str, "%Y-%m-%d").date()
-                app = AdmissionService.create_application(
-                    academic_year=selected_year,
-                    applying_class=applying_class,
-                    first_name=first_name,
-                    last_name=last_name,
-                    date_of_birth=dob,
-                    gender=gender,
-                    father_name=father_name,
-                    mother_name=mother_name,
-                    guardian_phone=guardian_phone,
-                    address=address,
-                    guardian_email=guardian_email,
-                    previous_school=previous_school,
-                    actor=request.user,
-                    request=request
-                )
+                app = _extract_and_create_application(request, selected_year)
                 messages.success(request, f"Application {app.application_number} submitted successfully.")
                 return redirect('admissions-application-detail', pk=app.pk)
+            except ValidationError as ve:
+                err_msg = "; ".join([f"{k}: {', '.join(v) if isinstance(v, list) else v}" for k, v in ve.message_dict.items()]) if hasattr(ve, 'message_dict') else str(ve)
+                messages.error(request, f"Validation error: {err_msg}")
             except Exception as e:
                 messages.error(request, f"Error creating application: {e}")
 
@@ -137,6 +246,9 @@ def applications_list_view(request):
         'applications': qs.order_by('-created_at')[:100],
         'metrics': metrics,
         'status_choices': ApplicationStatus.choices,
+        'categories': StudentCategory.choices,
+        'blood_groups': BLOOD_GROUP_CHOICES,
+        'relation_choices': RELATION_CHOICES,
         'can_add': can_add,
         'can_approve': can_approve,
         'status_filter': status_filter,
@@ -144,6 +256,49 @@ def applications_list_view(request):
         'search_query': search_query,
     }
     return render(request, 'dashboard/admissions/applications_list.html', context)
+
+
+@login_required(login_url='login')
+def application_apply_view(request):
+    """
+    Dedicated 4-Step Intake Wizard Page for Admission Applications.
+    """
+    if not _check_admissions_permission(request, 'admissions.application.add'):
+        messages.error(request, "You do not have permission to submit admission applications.")
+        return redirect('admissions-applications-list')
+
+    academic_years = AcademicYear.objects.all().order_by('-start_date')
+    selected_year_id = request.GET.get('year') or request.POST.get('academic_year')
+    current_year = AcademicYear.objects.filter(is_current=True).first()
+
+    if selected_year_id:
+        selected_year = get_object_or_404(AcademicYear, pk=selected_year_id)
+    else:
+        selected_year = current_year or academic_years.first()
+
+    classes = SchoolClass.objects.all().order_by('order')
+
+    if request.method == 'POST':
+        try:
+            app = _extract_and_create_application(request, selected_year)
+            messages.success(request, f"Application {app.application_number} submitted successfully.")
+            return redirect('admissions-application-detail', pk=app.pk)
+        except ValidationError as ve:
+            err_msg = "; ".join([f"{k}: {', '.join(v) if isinstance(v, list) else v}" for k, v in ve.message_dict.items()]) if hasattr(ve, 'message_dict') else str(ve)
+            messages.error(request, f"Validation error: {err_msg}")
+        except Exception as e:
+            messages.error(request, f"Error creating application: {e}")
+
+    context = {
+        'academic_years': academic_years,
+        'selected_year': selected_year,
+        'current_year': current_year,
+        'classes': classes,
+        'categories': StudentCategory.choices,
+        'blood_groups': BLOOD_GROUP_CHOICES,
+        'relation_choices': RELATION_CHOICES,
+    }
+    return render(request, 'dashboard/admissions/application_form.html', context)
 
 
 @login_required(login_url='login')

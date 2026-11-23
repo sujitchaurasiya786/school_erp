@@ -551,3 +551,281 @@ class AdmissionsWebViewsTests(TestCase):
         })
         self.assertEqual(resp.status_code, 302)
         self.assertFalse(SeatQuota.objects.filter(pk=quota.pk).exists())
+
+    def test_application_validations_phone_pincode_age_declaration(self):
+        # 1. Phone validation: must be 10 digits
+        with self.assertRaises(ValidationError) as ctx:
+            AdmissionService.create_application(
+                academic_year=self.year,
+                applying_class='Class 1',
+                first_name='Rohan',
+                last_name='Mehra',
+                date_of_birth=date(2020, 1, 1),
+                gender='M',
+                father_name='Suresh Mehra',
+                guardian_phone='12345',  # Invalid phone
+                address='Street 1'
+            )
+        self.assertIn('guardian_phone', str(ctx.exception))
+
+        # 2. Pincode validation: must be 6 digits if provided
+        with self.assertRaises(ValidationError) as ctx:
+            AdmissionService.create_application(
+                academic_year=self.year,
+                applying_class='Class 1',
+                first_name='Rohan',
+                last_name='Mehra',
+                date_of_birth=date(2020, 1, 1),
+                gender='M',
+                father_name='Suresh Mehra',
+                guardian_phone='9811223344',
+                address='Street 1',
+                pincode='1100'  # 4 digits, invalid
+            )
+        self.assertIn('pincode', str(ctx.exception))
+
+        # 3. Age vs class check: Nursery requires >= 3 years
+        # Year start date is 2026-04-01. If DOB is 2024-01-01, age is ~2.25 years -> rejected!
+        with self.assertRaises(ValidationError) as ctx:
+            AdmissionService.create_application(
+                academic_year=self.year,
+                applying_class='Nursery',
+                first_name='Baby',
+                last_name='Mehra',
+                date_of_birth=date(2024, 1, 1),
+                gender='M',
+                father_name='Suresh Mehra',
+                guardian_phone='9811223344',
+                address='Street 1'
+            )
+        self.assertIn('date_of_birth', str(ctx.exception))
+
+        # 4. Declaration must be accepted
+        with self.assertRaises(ValidationError) as ctx:
+            AdmissionService.create_application(
+                academic_year=self.year,
+                applying_class='Class 1',
+                first_name='Rohan',
+                last_name='Mehra',
+                date_of_birth=date(2020, 1, 1),
+                gender='M',
+                father_name='Suresh Mehra',
+                guardian_phone='9811223344',
+                address='Street 1',
+                declaration_accepted=False
+            )
+        self.assertIn('declaration_accepted', str(ctx.exception))
+
+    def test_application_enhanced_fields_and_conversion_to_student(self):
+        from apps.admissions.models import StudentCategory
+        # Create application with all enhanced fields
+        app = AdmissionService.create_application(
+            academic_year=self.year,
+            applying_class='Class 1',
+            first_name='Kavya',
+            last_name='Nair',
+            date_of_birth=date(2020, 2, 14),
+            gender='F',
+            father_name='Ramesh Nair',
+            mother_name='Deepa Nair',
+            guardian_phone='9876543210',
+            alternate_phone='9123456780',
+            guardian_email='nair@example.com',
+            guardian_relation='Father',
+            father_occupation='Senior Architect',
+            mother_occupation='Professor',
+            address='Apartment 4B, Palm Grove',
+            city='Bengaluru',
+            district='Bengaluru Urban',
+            state='Karnataka',
+            pincode='560001',
+            previous_school='Little Scholars Nursery',
+            previous_class='UKG',
+            previous_percentage=94.5,
+            category=StudentCategory.OBC,
+            blood_group='O+',
+            aadhaar_number='123456789012',
+            religion='Hindu',
+            mother_tongue='Malayalam',
+            needs_transport=True,
+            needs_hostel=False,
+            has_sibling_in_school=True,
+            sibling_details='Rahul Nair, Class 6th',
+            medical_conditions='Peanut allergy',
+            declaration_accepted=True,
+            actor=self.superuser
+        )
+
+        self.assertEqual(app.category, StudentCategory.OBC)
+        self.assertEqual(app.city, 'Bengaluru')
+        self.assertEqual(app.pincode, '560001')
+        self.assertTrue(app.needs_transport)
+        self.assertEqual(app.sibling_details, 'Rahul Nair, Class 6th')
+
+        # Approve application
+        AdmissionService.approve_application(app, user=self.superuser)
+
+        # Convert to student
+        student = AdmissionService.convert_to_student(
+            application_id=app.pk,
+            section_name='A',
+            roll_number=5,
+            user=self.superuser
+        )
+
+        self.assertEqual(student.first_name, 'Kavya')
+        self.assertEqual(student.blood_group, 'O+')
+        self.assertEqual(student.city, 'Bengaluru')
+        self.assertEqual(student.state, 'Karnataka')
+        self.assertEqual(student.pincode, '560001')
+
+        # Verify application preserved demographic, category, facilities & medical details
+        self.assertEqual(app.category, StudentCategory.OBC)
+        self.assertTrue(app.needs_transport)
+        self.assertEqual(app.medical_conditions, 'Peanut allergy')
+
+        # Verify guardian record was created with occupations
+        guardian = student.primary_guardian
+        self.assertIsNotNone(guardian)
+        self.assertEqual(guardian.first_name, 'Ramesh')
+        self.assertEqual(guardian.occupation, 'Senior Architect')
+        self.assertEqual(guardian.phone, '9876543210')
+
+    def test_application_apply_view_get_and_post(self):
+        self.client.force_login(self.superuser)
+
+        # GET request to dedicated 4-step wizard page
+        resp = self.client.get('/dashboard/admissions/applications/apply/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'New Student Admission Intake')
+        self.assertContains(resp, 'Student Details')
+        self.assertContains(resp, 'Parent / Guardian')
+        self.assertContains(resp, 'Address & Academic')
+        self.assertContains(resp, 'Category & Documents')
+
+        # POST submission via wizard
+        post_data = {
+            'action': 'create_application',
+            'academic_year': str(self.year.pk),
+            'applying_class': 'Class 1',
+            'first_name': 'Ishaan',
+            'last_name': 'Verma',
+            'date_of_birth': '2020-03-25',
+            'gender': 'M',
+            'blood_group': 'B+',
+            'father_name': 'Manish Verma',
+            'father_occupation': 'Doctor',
+            'mother_name': 'Pooja Verma',
+            'mother_occupation': 'Dentist',
+            'guardian_phone': '9988776655',
+            'address': 'B-12 Green Park',
+            'city': 'New Delhi',
+            'state': 'Delhi',
+            'pincode': '110016',
+            'category': 'GENERAL',
+            'declaration_accepted': '1'
+        }
+        resp = self.client.post('/dashboard/admissions/applications/apply/', post_data)
+        self.assertEqual(resp.status_code, 302)
+        created_app = AdmissionApplication.objects.filter(first_name='Ishaan', last_name='Verma').first()
+        self.assertIsNotNone(created_app)
+        self.assertEqual(created_app.guardian_phone, '9988776655')
+        self.assertEqual(created_app.pincode, '110016')
+        self.assertEqual(created_app.father_occupation, 'Doctor')
+
+    def test_permanent_address_and_same_as_current_sync(self):
+        self.client.force_login(self.superuser)
+
+        # 1. Test model-level sync when same_as_current_address=True
+        app1 = AdmissionService.create_application(
+            academic_year=self.year,
+            applying_class='Class 1',
+            first_name='Arjun',
+            last_name='Kapoor',
+            date_of_birth=date(2020, 1, 15),
+            gender='M',
+            father_name='Anil Kapoor',
+            guardian_phone='9811223344',
+            address='Flat 101, Galaxy Apts',
+            city='Mumbai',
+            district='Mumbai Suburban',
+            state='Maharashtra',
+            pincode='400050',
+            same_as_current_address=True
+        )
+        self.assertTrue(app1.same_as_current_address)
+        self.assertEqual(app1.permanent_address, 'Flat 101, Galaxy Apts')
+        self.assertEqual(app1.permanent_city, 'Mumbai')
+        self.assertEqual(app1.permanent_district, 'Mumbai Suburban')
+        self.assertEqual(app1.permanent_state, 'Maharashtra')
+        self.assertEqual(app1.permanent_pincode, '400050')
+
+        # 2. Test distinct permanent address when same_as_current_address=False
+        app2 = AdmissionService.create_application(
+            academic_year=self.year,
+            applying_class='Class 1',
+            first_name='Riya',
+            last_name='Sen',
+            date_of_birth=date(2020, 5, 20),
+            gender='F',
+            father_name='Amit Sen',
+            guardian_phone='9811223355',
+            address='Rent House 22, Sector 15',
+            city='Gurugram',
+            state='Haryana',
+            pincode='122001',
+            same_as_current_address=False,
+            permanent_address='Village Rampur, PO Kotwali',
+            permanent_city='Varanasi',
+            permanent_state='Uttar Pradesh',
+            permanent_pincode='221001'
+        )
+        self.assertFalse(app2.same_as_current_address)
+        self.assertEqual(app2.address, 'Rent House 22, Sector 15')
+        self.assertEqual(app2.permanent_address, 'Village Rampur, PO Kotwali')
+        self.assertEqual(app2.permanent_city, 'Varanasi')
+        self.assertEqual(app2.permanent_pincode, '221001')
+
+        # 3. Invalid permanent pincode validation
+        with self.assertRaises(ValidationError) as ctx:
+            AdmissionService.create_application(
+                academic_year=self.year,
+                applying_class='Class 1',
+                first_name='Invalid',
+                last_name='Pin',
+                date_of_birth=date(2020, 1, 1),
+                gender='M',
+                father_name='Father',
+                guardian_phone='9811223366',
+                address='Some address',
+                same_as_current_address=False,
+                permanent_pincode='123'  # Invalid length
+            )
+        self.assertIn('permanent_pincode', str(ctx.exception))
+
+        # 4. Intake Web View with same_as_current_address checkbox selected
+        post_data = {
+            'action': 'create_application',
+            'academic_year': str(self.year.pk),
+            'applying_class': 'Class 1',
+            'first_name': 'Tanvi',
+            'last_name': 'Rao',
+            'date_of_birth': '2020-02-10',
+            'gender': 'F',
+            'father_name': 'Prakash Rao',
+            'guardian_phone': '9822334455',
+            'address': 'Villa 9, Palm Meadows',
+            'city': 'Hyderabad',
+            'state': 'Telangana',
+            'pincode': '500084',
+            'same_as_current_address': 'on',
+            'declaration_accepted': '1'
+        }
+        resp = self.client.post('/dashboard/admissions/applications/apply/', post_data)
+        self.assertEqual(resp.status_code, 302)
+        created = AdmissionApplication.objects.filter(first_name='Tanvi', last_name='Rao').first()
+        self.assertIsNotNone(created)
+        self.assertTrue(created.same_as_current_address)
+        self.assertEqual(created.permanent_address, 'Villa 9, Palm Meadows')
+        self.assertEqual(created.permanent_city, 'Hyderabad')
+        self.assertEqual(created.permanent_pincode, '500084')

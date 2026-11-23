@@ -1,4 +1,5 @@
 {% extends 'dashboard/base.html' %}
+{% load static %}
 
 {% block admin %}
 <div class="container-fluid px-0">
@@ -20,9 +21,14 @@
                 </select>
             </form>
             {% if can_add %}
-            <button type="button" class="btn btn-primary btn-sm shadow-sm" data-bs-toggle="modal" data-bs-target="#newApplicationModal">
-                <i class="ti ti-plus me-1"></i> New Application
-            </button>
+            <div class="btn-group shadow-sm">
+                <button type="button" class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#newApplicationModal">
+                    <i class="ti ti-plus me-1"></i> New Application
+                </button>
+                <a href="{% url 'admissions-application-apply' %}{% if selected_year %}?year={{ selected_year.pk }}{% endif %}" class="btn btn-primary btn-sm border-start" title="Open Full-Page 4-Step Intake Wizard">
+                    <i class="ti ti-external-link"></i>
+                </a>
+            </div>
             {% endif %}
         </div>
     </div>
@@ -206,95 +212,630 @@
         </div>
     </div>
 
-    <!-- Modal for Creating New Application -->
+    <!-- 4-Step Wizard Modal for Creating New Application -->
     {% if can_add %}
-    <div class="modal fade" id="newApplicationModal" tabindex="-1" aria-labelledby="newApplicationModalLabel" aria-hidden="true">
-        <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal fade" id="newApplicationModal" tabindex="-1" aria-labelledby="newApplicationModalLabel" aria-hidden="true" data-bs-backdrop="static">
+        <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
             <div class="modal-content border-0 shadow">
-                <div class="modal-header border-bottom py-3">
-                    <h5 class="modal-title fw-bold text-dark" id="newApplicationModalLabel">
-                        <i class="ti ti-user-plus text-primary me-2"></i> Submit Admission Application
-                    </h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                <div class="modal-header border-bottom py-3 bg-light">
+                    <div class="d-flex align-items-center gap-2">
+                        <div class="bg-primary text-white p-2 rounded">
+                            <i class="ti ti-user-plus fs-5"></i>
+                        </div>
+                        <div>
+                            <h5 class="modal-title fw-bold text-dark mb-0" id="newApplicationModalLabel">New Admission Application (4-Step Wizard)</h5>
+                            <span class="text-muted small">Session: <strong>{{ selected_year.name }}</strong></span>
+                        </div>
+                    </div>
+                    <div class="d-flex align-items-center gap-2">
+                        <a href="{% url 'admissions-application-apply' %}{% if selected_year %}?year={{ selected_year.pk }}{% endif %}" class="btn btn-sm btn-outline-secondary" title="Open Full Screen Form">
+                            <i class="ti ti-arrows-maximize me-1"></i> Full Page
+                        </a>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
                 </div>
-                <form method="POST">
-                    {% csrf_token %}
-                    <input type="hidden" name="action" value="create_application">
-                    <div class="modal-body p-4">
-                        <div class="row g-3">
-                            <div class="col-md-6">
-                                <label class="form-label fw-medium small text-uppercase">Applying For Class <span class="text-danger">*</span></label>
-                                <select name="applying_class" class="form-select" required>
-                                    <option value="">-- Select Class --</option>
-                                    {% for c in classes %}
-                                    <option value="{{ c.name }}">{{ c.name }}</option>
-                                    {% endfor %}
-                                </select>
-                            </div>
-                            <div class="col-md-6">
-                                <label class="form-label fw-medium small text-uppercase">Session</label>
-                                <input type="text" class="form-control" value="{{ selected_year.name }}" disabled>
-                            </div>
 
-                            <div class="col-md-6">
-                                <label class="form-label fw-medium small text-uppercase">First Name <span class="text-danger">*</span></label>
-                                <input type="text" name="first_name" class="form-control" placeholder="Student First Name" required>
+                <!-- Wizard Steps Progress Bar Header -->
+                <div class="bg-white border-bottom p-3">
+                    <div class="row text-center position-relative g-1">
+                        <div class="col-3">
+                            <div class="modal-step-badge active" id="modal-badge-step-1">
+                                <span class="badge-num">1</span>
+                                <span class="badge-label d-block fw-semibold small">Student Details</span>
                             </div>
-                            <div class="col-md-6">
-                                <label class="form-label fw-medium small text-uppercase">Last Name <span class="text-danger">*</span></label>
-                                <input type="text" name="last_name" class="form-control" placeholder="Student Last Name" required>
+                        </div>
+                        <div class="col-3">
+                            <div class="modal-step-badge" id="modal-badge-step-2">
+                                <span class="badge-num">2</span>
+                                <span class="badge-label d-block fw-semibold text-muted small">Parents / Guardian</span>
                             </div>
-
-                            <div class="col-md-6">
-                                <label class="form-label fw-medium small text-uppercase">Date of Birth <span class="text-danger">*</span></label>
-                                <input type="date" name="date_of_birth" class="form-control" required>
+                        </div>
+                        <div class="col-3">
+                            <div class="modal-step-badge" id="modal-badge-step-3">
+                                <span class="badge-num">3</span>
+                                <span class="badge-label d-block fw-semibold text-muted small">Address & Academic</span>
                             </div>
-                            <div class="col-md-6">
-                                <label class="form-label fw-medium small text-uppercase">Gender <span class="text-danger">*</span></label>
-                                <select name="gender" class="form-select" required>
-                                    <option value="M">Male</option>
-                                    <option value="F">Female</option>
-                                    <option value="O">Other</option>
-                                </select>
-                            </div>
-
-                            <div class="col-md-6">
-                                <label class="form-label fw-medium small text-uppercase">Father's Name <span class="text-danger">*</span></label>
-                                <input type="text" name="father_name" class="form-control" placeholder="Father's Full Name" required>
-                            </div>
-                            <div class="col-md-6">
-                                <label class="form-label fw-medium small text-uppercase">Mother's Name <span class="text-danger">*</span></label>
-                                <input type="text" name="mother_name" class="form-control" placeholder="Mother's Full Name" required>
-                            </div>
-
-                            <div class="col-md-6">
-                                <label class="form-label fw-medium small text-uppercase">Guardian Phone <span class="text-danger">*</span></label>
-                                <input type="tel" name="guardian_phone" class="form-control" placeholder="Primary Contact Number" required>
-                            </div>
-                            <div class="col-md-6">
-                                <label class="form-label fw-medium small text-uppercase">Guardian Email</label>
-                                <input type="email" name="guardian_email" class="form-control" placeholder="Optional Email">
-                            </div>
-
-                            <div class="col-12">
-                                <label class="form-label fw-medium small text-uppercase">Residential Address <span class="text-danger">*</span></label>
-                                <textarea name="address" class="form-control" rows="2" placeholder="Street, City, Pincode" required></textarea>
-                            </div>
-
-                            <div class="col-12">
-                                <label class="form-label fw-medium small text-uppercase">Previous School / Board (if any)</label>
-                                <input type="text" name="previous_school" class="form-control" placeholder="e.g. St. Xavier's School (CBSE)">
+                        </div>
+                        <div class="col-3">
+                            <div class="modal-step-badge" id="modal-badge-step-4">
+                                <span class="badge-num">4</span>
+                                <span class="badge-label d-block fw-semibold text-muted small">Category & Documents</span>
                             </div>
                         </div>
                     </div>
-                    <div class="modal-footer border-top py-2">
-                        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
-                        <button type="submit" class="btn btn-primary px-4 shadow-sm">Submit Application</button>
+                </div>
+
+                <form method="POST" enctype="multipart/form-data" id="modalAdmissionForm" class="needs-validation" novalidate>
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="create_application">
+                    <input type="hidden" name="academic_year" value="{{ selected_year.pk }}">
+
+                    <div class="modal-body p-4" style="min-height: 400px;">
+
+                        <!-- STEP 1: STUDENT DETAILS -->
+                        <div class="modal-wizard-step" id="modal-step-1">
+                            <div class="d-flex align-items-center gap-2 mb-3 pb-2 border-bottom">
+                                <span class="badge bg-primary">Step 1 of 4</span>
+                                <h6 class="fw-bold mb-0 text-dark">Student Basic & Demographic Information</h6>
+                            </div>
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold small text-uppercase">Applying For Class <span class="text-danger">*</span></label>
+                                    <select name="applying_class" class="form-select" required>
+                                        <option value="">-- Select Class --</option>
+                                        {% for c in classes %}
+                                        <option value="{{ c.name }}">{{ c.name }}</option>
+                                        {% endfor %}
+                                    </select>
+                                    <div class="invalid-feedback">Admission class is required.</div>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold small text-uppercase">Academic Session</label>
+                                    <input type="text" class="form-control bg-light" value="{{ selected_year.name }}" readonly>
+                                </div>
+
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold small text-uppercase">First Name <span class="text-danger">*</span></label>
+                                    <input type="text" name="first_name" class="form-control" placeholder="Student First Name" required>
+                                    <div class="invalid-feedback">First name is required.</div>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold small text-uppercase">Last Name <span class="text-danger">*</span></label>
+                                    <input type="text" name="last_name" class="form-control" placeholder="Student Last Name" required>
+                                    <div class="invalid-feedback">Last name is required.</div>
+                                </div>
+
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold small text-uppercase">Date of Birth <span class="text-danger">*</span></label>
+                                    <input type="date" name="date_of_birth" class="form-control" required>
+                                    <small class="text-muted" style="font-size: 0.75rem;">Nursery &ge; 3 yrs, LKG &ge; 4 yrs, UKG &ge; 5 yrs, Class 1 &ge; 5.5 yrs.</small>
+                                    <div class="invalid-feedback">Date of birth is required.</div>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold small text-uppercase">Gender <span class="text-danger">*</span></label>
+                                    <select name="gender" class="form-select" required>
+                                        <option value="M" selected>Male</option>
+                                        <option value="F">Female</option>
+                                        <option value="O">Other</option>
+                                    </select>
+                                </div>
+
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold small text-uppercase">Student Photo (Passport size)</label>
+                                    <input type="file" name="student_photo" class="form-control" accept="image/jpeg,image/png">
+                                    <small class="text-muted" style="font-size: 0.75rem;">Max 2 MB, JPG/PNG.</small>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold small text-uppercase">Blood Group</label>
+                                    <select name="blood_group" class="form-select">
+                                        <option value="">-- Optional --</option>
+                                        {% for bg in blood_groups %}
+                                        <option value="{{ bg }}">{{ bg }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+
+                                <div class="col-md-4">
+                                    <label class="form-label fw-semibold small text-uppercase">Aadhaar (Optional)</label>
+                                    <input type="text" name="aadhaar_number" class="form-control" placeholder="12-digit Aadhaar" maxlength="20">
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label fw-semibold small text-uppercase">Religion (Optional)</label>
+                                    <input type="text" name="religion" class="form-control" placeholder="e.g. Hindu, Muslim, Christian">
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label fw-semibold small text-uppercase">Mother Tongue (Optional)</label>
+                                    <input type="text" name="mother_tongue" class="form-control" placeholder="e.g. Hindi, English">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- STEP 2: PARENT / GUARDIAN -->
+                        <div class="modal-wizard-step d-none" id="modal-step-2">
+                            <div class="d-flex align-items-center gap-2 mb-3 pb-2 border-bottom">
+                                <span class="badge bg-primary">Step 2 of 4</span>
+                                <h6 class="fw-bold mb-0 text-dark">Parent & Guardian Contacts</h6>
+                            </div>
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold small text-uppercase">Father's Full Name <span class="text-danger">*</span></label>
+                                    <input type="text" name="father_name" class="form-control" placeholder="Father's full name" required>
+                                    <div class="invalid-feedback">Father's name is required.</div>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold small text-uppercase">Father's Occupation</label>
+                                    <input type="text" name="father_occupation" class="form-control" placeholder="e.g. Business, Engineer">
+                                </div>
+
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold small text-uppercase">Mother's Full Name <span class="text-danger">*</span></label>
+                                    <input type="text" name="mother_name" class="form-control" placeholder="Mother's full name" required>
+                                    <div class="invalid-feedback">Mother's name is required.</div>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold small text-uppercase">Mother's Occupation</label>
+                                    <input type="text" name="mother_occupation" class="form-control" placeholder="e.g. Homemaker, Teacher">
+                                </div>
+
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold small text-uppercase">Primary Mobile Number (WhatsApp) <span class="text-danger">*</span></label>
+                                    <div class="input-group">
+                                        <span class="input-group-text bg-light">+91</span>
+                                        <input type="tel" name="guardian_phone" class="form-control" placeholder="10-digit number" maxlength="10" required>
+                                    </div>
+                                    <small class="text-muted" style="font-size: 0.75rem;">Official WhatsApp alerts will be delivered here.</small>
+                                    <div class="invalid-feedback">10-digit primary phone is required.</div>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold small text-uppercase">Alternate Phone</label>
+                                    <div class="input-group">
+                                        <span class="input-group-text bg-light">+91</span>
+                                        <input type="tel" name="alternate_phone" class="form-control" placeholder="Optional contact" maxlength="15">
+                                    </div>
+                                </div>
+
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold small text-uppercase">Guardian Email</label>
+                                    <input type="email" name="guardian_email" class="form-control" placeholder="parent@example.com">
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold small text-uppercase">Guardian Relation</label>
+                                    <select name="guardian_relation" class="form-select">
+                                        {% for rel in relation_choices %}
+                                        <option value="{{ rel }}" {% if rel == 'Father' %}selected{% endif %}>{{ rel }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- STEP 3: ADDRESS & ACADEMIC -->
+                        <div class="modal-wizard-step d-none" id="modal-step-3">
+                            <div class="d-flex align-items-center gap-2 mb-3 pb-2 border-bottom">
+                                <span class="badge bg-primary">Step 3 of 4</span>
+                                <h6 class="fw-bold mb-0 text-dark">Residential Address & Prior Schooling</h6>
+                            </div>
+                            <div class="row g-3">
+                                <div class="col-12">
+                                    <label class="form-label fw-semibold small text-uppercase">Residential Address <span class="text-danger">*</span></label>
+                                    <textarea name="address" id="modal_address" class="form-control" rows="2" placeholder="House/Flat No, Street, Landmark" required></textarea>
+                                    <div class="invalid-feedback">Address is required.</div>
+                                </div>
+
+                                <!-- Current Address Location Fields -->
+                                <div class="col-md-3">
+                                    <label class="form-label fw-semibold small text-uppercase">State <span class="text-danger">*</span></label>
+                                    <select name="state" id="modal_state" class="form-select" required>
+                                        <option value="">-- Select State --</option>
+                                    </select>
+                                    <div class="invalid-feedback">State is required.</div>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label fw-semibold small text-uppercase">District <span class="text-danger">*</span></label>
+                                    <select name="district" id="modal_district" class="form-select" required disabled>
+                                        <option value="">-- Select State First --</option>
+                                    </select>
+                                    <div class="invalid-feedback">District is required.</div>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label fw-semibold small text-uppercase">City / Town <span class="text-danger">*</span></label>
+                                    <input type="text" name="city" id="modal_city" class="form-control" placeholder="City" required>
+                                    <div class="invalid-feedback">City is required.</div>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label fw-semibold small text-uppercase">PIN Code <span class="text-danger">*</span></label>
+                                    <input type="text" name="pincode" id="modal_pincode" class="form-control" placeholder="6 digits" maxlength="6" required>
+                                    <div class="invalid-feedback">6-digit PIN code is required.</div>
+                                </div>
+
+                                <!-- Permanent Address Section -->
+                                <div class="col-12 border-top pt-2 mt-3">
+                                    <div class="d-flex flex-wrap align-items-center justify-content-between mb-2">
+                                        <h6 class="fw-bold text-dark small text-uppercase mb-1">
+                                            <i class="ti ti-home me-1 text-primary"></i> Permanent Address
+                                        </h6>
+                                        <div class="form-check form-switch">
+                                            <input class="form-check-input" type="checkbox" name="same_as_current_address" id="modal_same_as_current_address" onchange="syncModalPermanentAddress()">
+                                            <label class="form-check-label fw-semibold text-primary small" for="modal_same_as_current_address">
+                                                Permanent address is same as Current address
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="col-12">
+                                    <label class="form-label fw-semibold small text-uppercase">Permanent Address</label>
+                                    <textarea name="permanent_address" id="modal_permanent_address" class="form-control" rows="2" placeholder="House/Flat No, Building, Street, Area"></textarea>
+                                </div>
+
+                                <div class="col-md-3">
+                                    <label class="form-label fw-semibold small text-uppercase">Permanent State</label>
+                                    <select name="permanent_state" id="modal_permanent_state" class="form-select">
+                                        <option value="">-- Select State --</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label fw-semibold small text-uppercase">Permanent District</label>
+                                    <select name="permanent_district" id="modal_permanent_district" class="form-select" disabled>
+                                        <option value="">-- Select State First --</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label fw-semibold small text-uppercase">Permanent City / Town</label>
+                                    <input type="text" name="permanent_city" id="modal_permanent_city" class="form-control" placeholder="City / Town">
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label fw-semibold small text-uppercase">Permanent PIN Code</label>
+                                    <input type="text" name="permanent_pincode" id="modal_permanent_pincode" class="form-control" placeholder="6-digit PIN" maxlength="6">
+                                </div>
+
+                                <div class="col-12 border-top pt-2 mt-3">
+                                    <h6 class="fw-bold text-dark small text-uppercase mb-2">Previous Schooling (for Class 1 and above)</h6>
+                                </div>
+
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold small text-uppercase">Previous School & Board</label>
+                                    <input type="text" name="previous_school" class="form-control" placeholder="e.g. St. Xavier's (CBSE)">
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label fw-semibold small text-uppercase">Last Class Attended</label>
+                                    <input type="text" name="previous_class" class="form-control" placeholder="e.g. Class 4th">
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label fw-semibold small text-uppercase">Marks / % Obtained</label>
+                                    <input type="number" step="0.01" min="0" max="100" name="previous_percentage" class="form-control" placeholder="e.g. 85.5">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- STEP 4: CATEGORY, FACILITIES & DOCUMENTS -->
+                        <div class="modal-wizard-step d-none" id="modal-step-4">
+                            <div class="d-flex align-items-center gap-2 mb-3 pb-2 border-bottom">
+                                <span class="badge bg-primary">Step 4 of 4</span>
+                                <h6 class="fw-bold mb-0 text-dark">Category, Facilities, Documents & Consent</h6>
+                            </div>
+                            <div class="row g-3">
+                                <div class="col-md-4">
+                                    <label class="form-label fw-semibold small text-uppercase">Category <span class="text-danger">*</span></label>
+                                    <select name="category" class="form-select" required>
+                                        {% for val, label in categories %}
+                                        <option value="{{ val }}">{{ label }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label fw-semibold small text-uppercase">School Bus Service</label>
+                                    <div class="form-check form-switch mt-2">
+                                        <input class="form-check-input" type="checkbox" name="needs_transport" id="modal_needs_transport">
+                                        <label class="form-check-label" for="modal_needs_transport">Requires Transport</label>
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label fw-semibold small text-uppercase">Hostel Accommodation</label>
+                                    <div class="form-check form-switch mt-2">
+                                        <input class="form-check-input" type="checkbox" name="needs_hostel" id="modal_needs_hostel">
+                                        <label class="form-check-label" for="modal_needs_hostel">Requires Hostel</label>
+                                    </div>
+                                </div>
+
+                                <div class="col-md-6">
+                                    <div class="form-check form-switch mb-1">
+                                        <input class="form-check-input" type="checkbox" name="has_sibling_in_school" id="modal_has_sibling" onchange="toggleModalSibling(this)">
+                                        <label class="form-check-label fw-semibold small" for="modal_has_sibling">Sibling In This School</label>
+                                    </div>
+                                    <input type="text" name="sibling_details" id="modal_sibling_details" class="form-control form-control-sm d-none" placeholder="Sibling Name, Class, Adm #">
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold small text-uppercase">Medical Notes / Allergies</label>
+                                    <input type="text" name="medical_conditions" class="form-control" placeholder="Specify any medical alerts or allergies">
+                                </div>
+
+                                <!-- Documents Upload -->
+                                <div class="col-12 border-top pt-2 mt-3">
+                                    <h6 class="fw-bold text-dark small text-uppercase mb-1">Documents (PDF / JPG / PNG, Max 2 MB)</h6>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold small text-uppercase">Birth Certificate <span class="text-danger">*</span></label>
+                                    <input type="file" name="doc_birth_certificate" class="form-control" accept=".pdf,image/jpeg,image/png" required>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-semibold small text-uppercase">Transfer Certificate (TC)</label>
+                                    <input type="file" name="doc_transfer_certificate" class="form-control" accept=".pdf,image/jpeg,image/png">
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label fw-semibold small text-uppercase">Marksheet</label>
+                                    <input type="file" name="doc_marksheet" class="form-control" accept=".pdf,image/jpeg,image/png">
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label fw-semibold small text-uppercase">Aadhaar Scan</label>
+                                    <input type="file" name="doc_aadhaar" class="form-control" accept=".pdf,image/jpeg,image/png">
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label fw-semibold small text-uppercase">Caste / EWS Cert</label>
+                                    <input type="file" name="doc_caste_certificate" class="form-control" accept=".pdf,image/jpeg,image/png">
+                                </div>
+
+                                <!-- Declaration -->
+                                <div class="col-12 mt-3">
+                                    <div class="p-3 rounded border border-warning bg-warning-subtle">
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" name="declaration_accepted" id="modal_declaration" value="1" required>
+                                            <label class="form-check-label fw-semibold text-dark small" for="modal_declaration">
+                                                Declaration: All furnished information is true and correct. I agree to abide by the institution's rules and fee structure. <span class="text-danger">*</span>
+                                            </label>
+                                            <div class="invalid-feedback">Declaration must be accepted.</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+
+                    <div class="modal-footer border-top py-2 bg-light d-flex justify-content-between">
+                        <button type="button" class="btn btn-light border" id="modalBtnPrev" style="display: none;" onclick="goToModalPrevStep()">
+                            <i class="ti ti-arrow-left me-1"></i> Previous
+                        </button>
+                        <div class="ms-auto d-flex gap-2">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                            <button type="button" class="btn btn-primary px-4 shadow-sm" id="modalBtnNext" onclick="goToModalNextStep()">
+                                Next Step <i class="ti ti-arrow-right ms-1"></i>
+                            </button>
+                            <button type="submit" class="btn btn-success px-4 shadow-sm" id="modalBtnSubmit" style="display: none;">
+                                <i class="ti ti-check me-1"></i> Submit Application
+                            </button>
+                        </div>
                     </div>
                 </form>
             </div>
         </div>
     </div>
+
+    <style>
+    .modal-step-badge {
+        text-align: center;
+        padding: 4px;
+        transition: all 0.2s;
+    }
+    .modal-step-badge .badge-num {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        background-color: #e9ecef;
+        color: #495057;
+        font-weight: 700;
+        font-size: 0.85rem;
+    }
+    .modal-step-badge.active .badge-num {
+        background-color: #0d6efd;
+        color: #ffffff;
+    }
+    .modal-step-badge.completed .badge-num {
+        background-color: #198754;
+        color: #ffffff;
+    }
+    .modal-step-badge.active .badge-label {
+        color: #0d6efd !important;
+    }
+    </style>
+
+    <script src="{% static 'js/india_locations.js' %}"></script>
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        setupLocationCascade({
+            stateSelectId: 'modal_state',
+            districtSelectId: 'modal_district',
+            cityInputId: 'modal_city',
+            pincodeInputId: 'modal_pincode'
+        });
+        setupLocationCascade({
+            stateSelectId: 'modal_permanent_state',
+            districtSelectId: 'modal_permanent_district',
+            cityInputId: 'modal_permanent_city',
+            pincodeInputId: 'modal_permanent_pincode'
+        });
+    });
+
+    let modalCurrentStep = 1;
+    const modalTotalSteps = 4;
+
+    function showModalStep(step) {
+        for (let i = 1; i <= modalTotalSteps; i++) {
+            const stepEl = document.getElementById(`modal-step-${i}`);
+            const badgeEl = document.getElementById(`modal-badge-step-${i}`);
+            if (i === step) {
+                stepEl.classList.remove('d-none');
+                badgeEl.classList.add('active');
+                badgeEl.classList.remove('completed');
+            } else if (i < step) {
+                stepEl.classList.add('d-none');
+                badgeEl.classList.remove('active');
+                badgeEl.classList.add('completed');
+            } else {
+                stepEl.classList.add('d-none');
+                badgeEl.classList.remove('active');
+                badgeEl.classList.remove('completed');
+            }
+        }
+
+        const btnPrev = document.getElementById('modalBtnPrev');
+        const btnNext = document.getElementById('modalBtnNext');
+        const btnSubmit = document.getElementById('modalBtnSubmit');
+
+        btnPrev.style.display = (step === 1) ? 'none' : 'inline-block';
+        if (step === modalTotalSteps) {
+            btnNext.style.display = 'none';
+            btnSubmit.style.display = 'inline-block';
+        } else {
+            btnNext.style.display = 'inline-block';
+            btnSubmit.style.display = 'none';
+        }
+    }
+
+    function validateModalStep(step) {
+        const stepEl = document.getElementById(`modal-step-${step}`);
+        const requiredInputs = stepEl.querySelectorAll('input[required], select[required], textarea[required]');
+        let isValid = true;
+
+        requiredInputs.forEach(input => {
+            if (input.type === 'checkbox') {
+                if (!input.checked) {
+                    input.classList.add('is-invalid');
+                    isValid = false;
+                } else {
+                    input.classList.remove('is-invalid');
+                }
+            } else if (input.name === 'guardian_phone') {
+                const val = input.value.replace(/\D/g, '');
+                if (val.length !== 10) {
+                    input.classList.add('is-invalid');
+                    isValid = false;
+                } else {
+                    input.classList.remove('is-invalid');
+                }
+            } else if (input.name === 'pincode') {
+                const val = input.value.replace(/\D/g, '');
+                if (val.length !== 6) {
+                    input.classList.add('is-invalid');
+                    isValid = false;
+                } else {
+                    input.classList.remove('is-invalid');
+                }
+            } else if (input.type === 'file' && input.files.length > 0) {
+                const file = input.files[0];
+                if (file.size > 2 * 1024 * 1024) {
+                    alert(`File "${file.name}" exceeds the 2 MB limit.`);
+                    input.classList.add('is-invalid');
+                    isValid = false;
+                } else {
+                    input.classList.remove('is-invalid');
+                }
+            } else {
+                if (!input.value.trim()) {
+                    input.classList.add('is-invalid');
+                    isValid = false;
+                } else {
+                    input.classList.remove('is-invalid');
+                }
+            }
+        });
+        return isValid;
+    }
+
+    function goToModalNextStep() {
+        if (validateModalStep(modalCurrentStep)) {
+            if (modalCurrentStep < modalTotalSteps) {
+                modalCurrentStep++;
+                showModalStep(modalCurrentStep);
+            }
+        }
+    }
+
+    function goToModalPrevStep() {
+        if (modalCurrentStep > 1) {
+            modalCurrentStep--;
+            showModalStep(modalCurrentStep);
+        }
+    }
+
+    function syncModalPermanentAddress() {
+        const isSame = document.getElementById('modal_same_as_current_address').checked;
+        const permAddr = document.getElementById('modal_permanent_address');
+        const permCity = document.getElementById('modal_permanent_city');
+        const permDist = document.getElementById('modal_permanent_district');
+        const permState = document.getElementById('modal_permanent_state');
+        const permPin = document.getElementById('modal_permanent_pincode');
+
+        if (isSame) {
+            permAddr.value = document.getElementById('modal_address').value;
+            const currState = document.getElementById('modal_state').value;
+            permState.value = currState;
+
+            // Trigger change so district options populate
+            permState.dispatchEvent(new Event('change'));
+
+            const currDist = document.getElementById('modal_district').value;
+            permDist.value = currDist;
+            permCity.value = document.getElementById('modal_city').value;
+            permPin.value = document.getElementById('modal_pincode').value;
+
+            permAddr.setAttribute('readonly', 'true');
+            permState.style.pointerEvents = 'none';
+            permState.style.backgroundColor = '#e9ecef';
+            permDist.style.pointerEvents = 'none';
+            permDist.style.backgroundColor = '#e9ecef';
+            permCity.setAttribute('readonly', 'true');
+            permPin.setAttribute('readonly', 'true');
+        } else {
+            permAddr.removeAttribute('readonly');
+            permState.style.pointerEvents = 'auto';
+            permState.style.backgroundColor = '';
+            permDist.style.pointerEvents = 'auto';
+            permDist.style.backgroundColor = '';
+            permCity.removeAttribute('readonly');
+            permPin.removeAttribute('readonly');
+        }
+    }
+
+    ['modal_address', 'modal_state', 'modal_district', 'modal_city', 'modal_pincode'].forEach(fieldId => {
+        const el = document.getElementById(fieldId);
+        if (el) {
+            el.addEventListener('input', () => {
+                const isSame = document.getElementById('modal_same_as_current_address');
+                if (isSame && isSame.checked) {
+                    syncModalPermanentAddress();
+                }
+            });
+            el.addEventListener('change', () => {
+                const isSame = document.getElementById('modal_same_as_current_address');
+                if (isSame && isSame.checked) {
+                    syncModalPermanentAddress();
+                }
+            });
+        }
+    });
+
+    function toggleModalSibling(checkbox) {
+        const siblingInput = document.getElementById('modal_sibling_details');
+        if (checkbox.checked) {
+            siblingInput.classList.remove('d-none');
+            siblingInput.focus();
+        } else {
+            siblingInput.classList.add('d-none');
+            siblingInput.value = '';
+        }
+    }
+
+    document.getElementById('modalAdmissionForm').addEventListener('submit', function(e) {
+        if (!validateModalStep(modalCurrentStep)) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+    });
+    </script>
     {% endif %}
 </div>
 {% endblock %}

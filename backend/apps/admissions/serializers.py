@@ -11,7 +11,7 @@ class ApplicationDocumentSerializer(serializers.ModelSerializer):
     class Meta:
         model = ApplicationDocument
         fields = [
-            'id', 'application', 'doc_type', 'document_file',
+            'id', 'application', 'doc_type', 'title', 'document_file',
             'verification_status', 'verification_status_display',
             'verification_notes', 'created_at', 'updated_at'
         ]
@@ -22,6 +22,7 @@ class AdmissionApplicationSerializer(serializers.ModelSerializer):
     academic_year_name = serializers.ReadOnlyField(source='academic_year.name')
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     gender_display = serializers.CharField(source='get_gender_display', read_only=True)
+    category_display = serializers.CharField(source='get_category_display', read_only=True)
     documents = ApplicationDocumentSerializer(many=True, read_only=True)
 
     class Meta:
@@ -30,8 +31,16 @@ class AdmissionApplicationSerializer(serializers.ModelSerializer):
             'id', 'application_number', 'academic_year', 'academic_year_name',
             'applying_class', 'first_name', 'last_name',
             'date_of_birth', 'gender', 'gender_display',
-            'father_name', 'mother_name', 'guardian_phone', 'guardian_email',
-            'address', 'previous_school', 'status', 'status_display',
+            'father_name', 'mother_name', 'guardian_phone', 'guardian_relation',
+            'alternate_phone', 'guardian_email', 'father_occupation', 'mother_occupation',
+            'address', 'city', 'district', 'state', 'pincode',
+            'same_as_current_address', 'permanent_address', 'permanent_city',
+            'permanent_district', 'permanent_state', 'permanent_pincode',
+            'previous_school', 'previous_class', 'previous_percentage',
+            'aadhaar_number', 'blood_group', 'religion', 'mother_tongue', 'student_photo',
+            'category', 'category_display', 'declaration_accepted',
+            'needs_transport', 'needs_hostel', 'has_sibling_in_school', 'sibling_details',
+            'medical_conditions', 'status', 'status_display',
             'test_score', 'interview_remarks', 'rejection_reason',
             'converted_student_id', 'documents', 'created_at', 'updated_at'
         ]

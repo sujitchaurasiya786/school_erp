@@ -61,61 +61,181 @@
     {% endif %}
 
     <div class="row g-4">
-        <!-- 1. Applicant Profile Card -->
+        <!-- 1. Applicant Profile & Background Card -->
         <div class="col-lg-6">
-            <div class="card border-0 shadow-sm h-100">
-                <div class="card-header bg-white border-bottom py-3">
+            <div class="card border-0 shadow-sm mb-4">
+                <div class="card-header bg-white border-bottom py-3 d-flex align-items-center justify-content-between">
                     <h5 class="card-title mb-0 fw-bold text-dark d-flex align-items-center">
-                        <i class="ti ti-user text-primary me-2 fs-5"></i> Applicant Details
+                        <i class="ti ti-user text-primary me-2 fs-5"></i> Student Details
                     </h5>
+                    <span class="badge bg-light text-dark border">{{ app.get_category_display }}</span>
                 </div>
                 <div class="card-body p-4">
+                    <div class="d-flex align-items-center gap-3 mb-4 pb-3 border-bottom">
+                        {% if app.student_photo %}
+                        <img src="{{ app.student_photo.url }}" alt="{{ app.full_name }}" class="rounded-circle shadow-sm border" style="width: 72px; height: 72px; object-fit: cover;">
+                        {% else %}
+                        <div class="rounded-circle bg-light d-flex align-items-center justify-content-center border" style="width: 72px; height: 72px;">
+                            <i class="ti ti-user fs-1 text-muted"></i>
+                        </div>
+                        {% endif %}
+                        <div>
+                            <h4 class="fw-bold text-dark mb-0">{{ app.first_name }} {{ app.last_name }}</h4>
+                            <span class="text-muted small d-block">App #: <strong>{{ app.application_number }}</strong> &bull; Class: <strong class="text-primary">{{ app.applying_class }}</strong></span>
+                            <span class="badge bg-primary-subtle text-primary border border-primary-subtle mt-1">{{ app.academic_year.name }}</span>
+                        </div>
+                    </div>
+
                     <div class="row g-3">
                         <div class="col-sm-6">
-                            <span class="text-muted small d-block">Full Name</span>
-                            <span class="fw-bold text-dark">{{ app.first_name }} {{ app.last_name }}</span>
+                            <span class="text-muted small d-block">Date of Birth & Gender</span>
+                            <span class="fw-semibold text-dark">{{ app.date_of_birth|date:"M d, Y" }} ({{ app.get_gender_display }})</span>
                         </div>
                         <div class="col-sm-6">
-                            <span class="text-muted small d-block">Gender & DOB</span>
-                            <span class="fw-bold text-dark">{{ app.get_gender_display }} &bull; {{ app.date_of_birth|date:"M d, Y" }}</span>
+                            <span class="text-muted small d-block">Blood Group</span>
+                            <span class="fw-semibold text-dark">{{ app.blood_group|default:"Not specified" }}</span>
                         </div>
                         <div class="col-sm-6">
-                            <span class="text-muted small d-block">Applying For Class</span>
-                            <span class="badge bg-light text-dark border fs-6">{{ app.applying_class }}</span>
+                            <span class="text-muted small d-block">Aadhaar Number</span>
+                            <span class="fw-semibold text-dark">{{ app.aadhaar_number|default:"—" }}</span>
                         </div>
                         <div class="col-sm-6">
-                            <span class="text-muted small d-block">Academic Session</span>
-                            <span class="fw-medium text-dark">{{ app.academic_year.name }}</span>
+                            <span class="text-muted small d-block">Religion & Mother Tongue</span>
+                            <span class="fw-semibold text-dark">{{ app.religion|default:"—" }}{% if app.mother_tongue %} / {{ app.mother_tongue }}{% endif %}</span>
                         </div>
+
+                        <!-- Parent & Guardian Section -->
                         <div class="col-12 border-top pt-3">
-                            <h6 class="fw-bold text-dark small text-uppercase mb-2">Parent / Guardian Information</h6>
+                            <h6 class="fw-bold text-dark small text-uppercase mb-2">
+                                <i class="ti ti-users me-1 text-primary"></i> Parent & Guardian Information
+                            </h6>
                             <div class="row g-2">
                                 <div class="col-sm-6">
-                                    <span class="text-muted small d-block">Father's Name</span>
+                                    <span class="text-muted small d-block">Father's Name & Occupation</span>
                                     <span class="fw-medium text-dark">{{ app.father_name|default:"—" }}</span>
+                                    {% if app.father_occupation %}
+                                    <span class="text-muted small d-block">({{ app.father_occupation }})</span>
+                                    {% endif %}
                                 </div>
                                 <div class="col-sm-6">
-                                    <span class="text-muted small d-block">Mother's Name</span>
+                                    <span class="text-muted small d-block">Mother's Name & Occupation</span>
                                     <span class="fw-medium text-dark">{{ app.mother_name|default:"—" }}</span>
+                                    {% if app.mother_occupation %}
+                                    <span class="text-muted small d-block">({{ app.mother_occupation }})</span>
+                                    {% endif %}
                                 </div>
                                 <div class="col-sm-6">
-                                    <span class="text-muted small d-block">Guardian Phone</span>
+                                    <span class="text-muted small d-block">Primary Contact (WhatsApp)</span>
                                     <span class="fw-bold text-primary">{{ app.guardian_phone }}</span>
+                                    <span class="text-muted small ms-1">({{ app.guardian_relation }})</span>
                                 </div>
                                 <div class="col-sm-6">
-                                    <span class="text-muted small d-block">Guardian Email</span>
+                                    <span class="text-muted small d-block">Alternate Contact</span>
+                                    <span class="fw-medium text-dark">{{ app.alternate_phone|default:"—" }}</span>
+                                </div>
+                                <div class="col-12">
+                                    <span class="text-muted small d-block">Email Address</span>
                                     <span class="fw-medium text-dark">{{ app.guardian_email|default:"—" }}</span>
                                 </div>
                             </div>
                         </div>
+
+                        <!-- Address & Location Section -->
                         <div class="col-12 border-top pt-3">
-                            <span class="text-muted small d-block">Residential Address</span>
-                            <span class="text-dark">{{ app.address }}</span>
+                            <h6 class="fw-bold text-dark small text-uppercase mb-2">
+                                <i class="ti ti-map-pin me-1 text-primary"></i> Current Residential Address
+                            </h6>
+                            <p class="text-dark mb-1">{{ app.address }}</p>
+                            <span class="text-muted small">
+                                {% if app.city %}{{ app.city }}, {% endif %}
+                                {% if app.district %}{{ app.district }}, {% endif %}
+                                {% if app.state %}{{ app.state }} {% endif %}
+                                {% if app.pincode %}- PIN: <strong>{{ app.pincode }}</strong>{% endif %}
+                            </span>
+
+                            <!-- Permanent Address Display -->
+                            <div class="mt-3 pt-2 border-top">
+                                <div class="d-flex align-items-center gap-2 mb-1">
+                                    <h6 class="fw-bold text-dark small text-uppercase mb-0">
+                                        <i class="ti ti-home me-1 text-secondary"></i> Permanent Address
+                                    </h6>
+                                    {% if app.same_as_current_address %}
+                                    <span class="badge bg-light text-muted border" style="font-size: 0.7rem;">Same as current address</span>
+                                    {% endif %}
+                                </div>
+                                <p class="text-dark mb-1">{{ app.permanent_address|default:app.address }}</p>
+                                <span class="text-muted small">
+                                    {% if app.permanent_city %}{{ app.permanent_city }}, {% elif app.city %}{{ app.city }}, {% endif %}
+                                    {% if app.permanent_district %}{{ app.permanent_district }}, {% elif app.district %}{{ app.district }}, {% endif %}
+                                    {% if app.permanent_state %}{{ app.permanent_state }} {% elif app.state %}{{ app.state }} {% endif %}
+                                    {% if app.permanent_pincode %}- PIN: <strong>{{ app.permanent_pincode }}</strong>{% elif app.pincode %}- PIN: <strong>{{ app.pincode }}</strong>{% endif %}
+                                </span>
+                            </div>
                         </div>
-                        <div class="col-12">
-                            <span class="text-muted small d-block">Previous School Record</span>
-                            <span class="text-dark">{{ app.previous_school|default:"No previous school recorded" }}</span>
+
+                        <!-- Academic Background Section -->
+                        <div class="col-12 border-top pt-3">
+                            <h6 class="fw-bold text-dark small text-uppercase mb-2">
+                                <i class="ti ti-school me-1 text-primary"></i> Prior Schooling Information
+                            </h6>
+                            <div class="row g-2">
+                                <div class="col-sm-6">
+                                    <span class="text-muted small d-block">Previous School</span>
+                                    <span class="fw-medium text-dark">{{ app.previous_school|default:"No previous school recorded" }}</span>
+                                </div>
+                                <div class="col-sm-3">
+                                    <span class="text-muted small d-block">Last Class</span>
+                                    <span class="fw-medium text-dark">{{ app.previous_class|default:"—" }}</span>
+                                </div>
+                                <div class="col-sm-3">
+                                    <span class="text-muted small d-block">Marks / %</span>
+                                    <span class="fw-bold text-dark">{% if app.previous_percentage %}{{ app.previous_percentage }}%{% else %}—{% endif %}</span>
+                                </div>
+                            </div>
                         </div>
+
+                        <!-- Facilities, Sibling & Health -->
+                        <div class="col-12 border-top pt-3">
+                            <h6 class="fw-bold text-dark small text-uppercase mb-2">
+                                <i class="ti ti-info-circle me-1 text-primary"></i> Facilities, Sibling & Health
+                            </h6>
+                            <div class="row g-2">
+                                <div class="col-sm-6">
+                                    <span class="text-muted small d-block">Transport Requested</span>
+                                    {% if app.needs_transport %}
+                                    <span class="badge bg-success-subtle text-success border border-success-subtle"><i class="ti ti-check me-1"></i> Bus Required</span>
+                                    {% else %}
+                                    <span class="text-muted small">No</span>
+                                    {% endif %}
+                                </div>
+                                <div class="col-sm-6">
+                                    <span class="text-muted small d-block">Hostel Facility</span>
+                                    {% if app.needs_hostel %}
+                                    <span class="badge bg-info-subtle text-info border border-info-subtle"><i class="ti ti-check me-1"></i> Hostel Required</span>
+                                    {% else %}
+                                    <span class="text-muted small">No</span>
+                                    {% endif %}
+                                </div>
+                                <div class="col-12">
+                                    <span class="text-muted small d-block">Sibling In This School</span>
+                                    {% if app.has_sibling_in_school %}
+                                    <span class="badge bg-warning-subtle text-dark border border-warning-subtle mb-1">Yes, Sibling Enrolled</span>
+                                    <p class="small text-muted mb-0">{{ app.sibling_details|default:"No details provided" }}</p>
+                                    {% else %}
+                                    <span class="text-muted small">No sibling enrolled</span>
+                                    {% endif %}
+                                </div>
+                                {% if app.medical_conditions %}
+                                <div class="col-12">
+                                    <span class="text-muted small d-block">Medical Alert / Allergies</span>
+                                    <div class="alert alert-warning py-1 px-2 mb-0 small">
+                                        {{ app.medical_conditions }}
+                                    </div>
+                                </div>
+                                {% endif %}
+                            </div>
+                        </div>
+
                         {% if app.rejection_reason %}
                         <div class="col-12 border-top pt-3">
                             <div class="alert alert-danger mb-0 py-2">

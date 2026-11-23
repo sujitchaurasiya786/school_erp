@@ -7,7 +7,7 @@ from django.utils.translation import gettext_lazy as _
 
 from apps.admissions.models import (
     AdmissionApplication, ApplicationDocument, ApplicationStatus,
-    DocumentStatus, SeatQuota
+    DocumentStatus, SeatQuota, StudentCategory
 )
 from apps.audit.models import AuditAction
 from apps.audit.services import AuditService
@@ -70,7 +70,35 @@ class AdmissionService:
             guardian_email=str(guardian_email or '').strip(),
             address=str(address).strip(),
             previous_school=str(previous_school or '').strip(),
-            status=ApplicationStatus.SUBMITTED
+            status=kwargs.get('status', ApplicationStatus.SUBMITTED),
+            aadhaar_number=str(kwargs.get('aadhaar_number', '')).strip(),
+            blood_group=str(kwargs.get('blood_group', '')).strip(),
+            religion=str(kwargs.get('religion', '')).strip(),
+            mother_tongue=str(kwargs.get('mother_tongue', '')).strip(),
+            student_photo=kwargs.get('student_photo'),
+            guardian_relation=str(kwargs.get('guardian_relation', 'Father')).strip() or 'Father',
+            alternate_phone=str(kwargs.get('alternate_phone', '')).strip(),
+            father_occupation=str(kwargs.get('father_occupation', '')).strip(),
+            mother_occupation=str(kwargs.get('mother_occupation', '')).strip(),
+            city=str(kwargs.get('city', '')).strip(),
+            district=str(kwargs.get('district', '')).strip(),
+            state=str(kwargs.get('state', '')).strip(),
+            pincode=str(kwargs.get('pincode', '')).strip(),
+            same_as_current_address=bool(kwargs.get('same_as_current_address', False)),
+            permanent_address=str(kwargs.get('permanent_address', '')).strip(),
+            permanent_city=str(kwargs.get('permanent_city', '')).strip(),
+            permanent_district=str(kwargs.get('permanent_district', '')).strip(),
+            permanent_state=str(kwargs.get('permanent_state', '')).strip(),
+            permanent_pincode=str(kwargs.get('permanent_pincode', '')).strip(),
+            previous_class=str(kwargs.get('previous_class', '')).strip(),
+            previous_percentage=kwargs.get('previous_percentage'),
+            category=kwargs.get('category', StudentCategory.GENERAL),
+            declaration_accepted=kwargs.get('declaration_accepted', True),
+            needs_transport=bool(kwargs.get('needs_transport', False)),
+            needs_hostel=bool(kwargs.get('needs_hostel', False)),
+            has_sibling_in_school=bool(kwargs.get('has_sibling_in_school', False)),
+            sibling_details=str(kwargs.get('sibling_details', '')).strip(),
+            medical_conditions=str(kwargs.get('medical_conditions', '')).strip()
         )
         app.clean()
         app.save()
@@ -258,9 +286,10 @@ class AdmissionService:
             guardian = Guardian.objects.create(
                 first_name=f_name,
                 last_name=l_name,
-                relationship="Father",
+                relationship=app.guardian_relation or "Father",
                 phone=phone,
-                email=app.guardian_email or ""
+                email=app.guardian_email or "",
+                occupation=app.father_occupation or app.mother_occupation or ""
             )
 
         # 2. Generate unique admission number
@@ -274,7 +303,12 @@ class AdmissionService:
             last_name=app.last_name,
             date_of_birth=app.date_of_birth,
             gender=app.gender,
+            blood_group=app.blood_group or '',
             address=app.address,
+            city=app.city or '',
+            state=app.state or '',
+            pincode=app.pincode or '',
+            photo=app.student_photo,
             previous_school=app.previous_school,
             admission_date=adm_date,
             primary_guardian=guardian,
