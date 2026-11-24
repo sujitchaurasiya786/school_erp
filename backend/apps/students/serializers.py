@@ -1,9 +1,6 @@
 from rest_framework import serializers
 
-from apps.students.models import (
-    BonafideCertificate, ClassEnrollment, Guardian, Student,
-    StudentDocument, TransferCertificate
-)
+from apps.students.models import *
 
 
 class GuardianSerializer(serializers.ModelSerializer):

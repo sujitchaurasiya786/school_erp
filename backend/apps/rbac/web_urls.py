@@ -2,16 +2,7 @@
 Web URL routing for RBAC & User Management Dashboard views.
 """
 from django.urls import path
-from apps.rbac.web_views import (
-    roles_list_view,
-    role_create_view,
-    role_detail_view,
-    role_edit_view,
-    role_delete_view,
-    role_revoke_assignment_view,
-    permissions_list_view,
-    users_list_view,
-)
+from apps.rbac.web_views import *
 
 urlpatterns = [
     # Dynamic Roles Management

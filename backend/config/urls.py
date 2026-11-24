@@ -57,13 +57,15 @@ api_v1_patterns = [
     path('analytics/', include('apps.analytics.urls')),
 ]
 
-from config.views import dashboard_view
+from config.views import dashboard_view, teacher_dashboard_view, student_dashboard_view
 from apps.identity.auth_views import login_view, logout_view, password_change_view
 from apps.rbac.web_views import users_list_view
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('', dashboard_view, name='home-dashboard'),
+    path('dashboard/teacher/', teacher_dashboard_view, name='teacher-dashboard'),
+    path('dashboard/student/', student_dashboard_view, name='student-dashboard'),
     path('login/', login_view, name='login'),
     path('logout/', logout_view, name='logout'),
     path('password-change/', password_change_view, name='password-change'),

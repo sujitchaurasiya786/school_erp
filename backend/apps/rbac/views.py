@@ -11,16 +11,11 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-
 from apps.audit.models import AuditAction
 from apps.audit.services import AuditService
-from apps.rbac.models import Permission, Role, UserRoleAssignment
+from apps.rbac.models import *
 from apps.rbac.permissions import HasDynamicPermission
-from apps.rbac.serializers import (
-    PermissionSerializer,
-    RoleSerializer,
-    UserRoleAssignmentSerializer,
-)
+from apps.rbac.serializers import *
 from apps.rbac.services import RBACService
 
 

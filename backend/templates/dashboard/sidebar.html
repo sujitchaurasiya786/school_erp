@@ -24,12 +24,32 @@
         <li class="pc-item pc-caption">
           <label>Main</label>
         </li>
+        {% if request.user.is_superuser or request.user.user_type in 'ADMIN,PRINCIPAL,STAFF,ACCOUNTANT' %}
         <li class="pc-item {% nav_active 'home-dashboard' %}" role="none">
           <a href="{% url 'home-dashboard' %}" class="pc-link" role="menuitem">
             <span class="pc-micon"><i class="ti ti-dashboard" aria-hidden="true"></i></span>
-            <span class="pc-mtext">Dashboard</span>
+            <span class="pc-mtext">Admin Overview</span>
           </a>
         </li>
+        {% endif %}
+
+        {% if request.user.is_superuser or request.user.user_type in 'TEACHER,ADMIN,PRINCIPAL,STAFF' %}
+        <li class="pc-item {% nav_active 'teacher-dashboard' %}" role="none">
+          <a href="{% url 'teacher-dashboard' %}" class="pc-link" role="menuitem">
+            <span class="pc-micon"><i class="ti ti-chalkboard" aria-hidden="true"></i></span>
+            <span class="pc-mtext">Teacher Dashboard</span>
+          </a>
+        </li>
+        {% endif %}
+
+        {% if request.user.is_superuser or request.user.user_type in 'STUDENT,PARENT,ADMIN,PRINCIPAL,TEACHER' %}
+        <li class="pc-item {% nav_active 'student-dashboard' %}" role="none">
+          <a href="{% url 'student-dashboard' %}" class="pc-link" role="menuitem">
+            <span class="pc-micon"><i class="ti ti-school" aria-hidden="true"></i></span>
+            <span class="pc-mtext">Student Portal</span>
+          </a>
+        </li>
+        {% endif %}
 
         <!-- ===============================================================
              1. Student Management (SRS §3.1 & §3.2)

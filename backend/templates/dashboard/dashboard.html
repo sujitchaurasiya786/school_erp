@@ -13,16 +13,22 @@
                 Academic Session: <span class="badge bg-primary-subtle text-primary border border-primary-subtle">{{ current_year.name|default:"2026-2027" }}</span>
             </p>
         </div>
-        {% if has_rbac_access or request.user.is_superuser %}
-        <div class="d-flex gap-2">
-            <a href="{% url 'rbac-roles-list' %}" class="btn btn-outline-primary">
+        <div class="d-flex flex-wrap gap-2">
+            <a href="{% url 'teacher-dashboard' %}" class="btn btn-outline-primary shadow-sm">
+                <i class="ti ti-chalkboard me-1"></i> Teacher Dashboard
+            </a>
+            <a href="{% url 'student-dashboard' %}" class="btn btn-outline-success shadow-sm">
+                <i class="ti ti-school me-1"></i> Student Portal
+            </a>
+            {% if has_rbac_access or request.user.is_superuser %}
+            <a href="{% url 'rbac-roles-list' %}" class="btn btn-outline-secondary shadow-sm">
                 <i class="ti ti-shield me-1"></i> RBAC Roles
             </a>
             <a href="{% url 'identity-users-list' %}" class="btn btn-primary shadow-sm">
                 <i class="ti ti-users me-1"></i> User Directory
             </a>
+            {% endif %}
         </div>
-        {% endif %}
     </div>
 
     <!-- Metric Cards Grid -->

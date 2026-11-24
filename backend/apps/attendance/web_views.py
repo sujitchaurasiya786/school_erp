@@ -2,7 +2,7 @@
 Attendance Web Views — Dashboard views for Working Days, Attendance Calendar, and Holidays.
 Provides intuitive web interfaces for school administrators and staff.
 """
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ValidationError
@@ -13,7 +13,8 @@ from apps.academics.models import SchoolClass, Section
 from apps.attendance.models import (
     Holiday, HolidayType, SaturdayRule, OverrideType,
     WorkingDayConfig, SpecialDayOverride, WEEKDAY_CHOICES,
-    StudentDailyAttendance, AttendanceCorrectionRequest, StaffDailyAttendance, AttendanceStatus
+    StudentDailyAttendance, AttendanceCorrectionRequest, StaffDailyAttendance,
+    AttendanceStatus, StaffApprovalStatus, CheckInMethod
 )
 from apps.attendance.services import (
     CalendarService, StudentDailyAttendanceService,

@@ -26,8 +26,6 @@ from apps.rbac.models import ActionCode, ModuleCode, Permission, Role, ScopeType
 from apps.rbac.services import RBACService
 
 User = get_user_model()
-
-
 def _check_rbac_permission(request, permission_codename):
     """
     Enforces dynamic RBAC permission for dashboard views.

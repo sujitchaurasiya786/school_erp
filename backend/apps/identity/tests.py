@@ -855,3 +855,131 @@ class WebAuthViewTests(TestCase):
         self.assertEqual(resp.url, "/")
 
 
+class RoleSpecificDashboardTests(TestCase):
+    def setUp(self):
+        from apps.school_config.models import AcademicYear, SchoolProfile
+        from datetime import date
+        self.year = AcademicYear.objects.filter(is_current=True).first()
+        if not self.year:
+            self.year = AcademicYear.objects.create(
+                name="2026-2027",
+                start_date=date(2026, 4, 1),
+                end_date=date(2027, 3, 31),
+                is_current=True
+            )
+        self.school = SchoolProfile.objects.first()
+        if not self.school:
+            self.school = SchoolProfile.objects.create(
+                school_name="CBSE Model Senior Secondary School",
+                affiliation_number="CBSE-2026-001"
+            )
+
+        self.admin = make_user("admin_dash_user", user_type=UserType.ADMIN, is_superuser=True)
+        self.teacher = make_user("teacher_dash_user", user_type=UserType.TEACHER)
+        self.student_user = make_user("student_dash_user", user_type=UserType.STUDENT)
+
+    def test_admin_dashboard_render(self):
+        self.client.login(username="admin_dash_user", password="TestPass@999")
+        resp = self.client.get("/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Teacher Dashboard")
+        self.assertContains(resp, "Student Portal")
+
+    def test_teacher_dashboard_redirect_and_view(self):
+        self.client.login(username="teacher_dash_user", password="TestPass@999")
+        # Accessing root redirects teacher to teacher dashboard
+        resp = self.client.get("/")
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, "/dashboard/teacher/")
+
+        # Directly visiting teacher dashboard renders 200
+        resp_teacher = self.client.get("/dashboard/teacher/")
+        self.assertEqual(resp_teacher.status_code, 200)
+        self.assertContains(resp_teacher, "Today's Timetable Schedule")
+        self.assertContains(resp_teacher, "One-Click Daily Attendance")
+        self.assertContains(resp_teacher, "Assignment &amp; Grading Queue")
+        self.assertContains(resp_teacher, "At-Risk Student Alerts")
+        self.assertContains(resp_teacher, "Parent Inquiries &amp; PTM")
+
+    def test_student_dashboard_redirect_and_view(self):
+        from apps.students.models import Student, Guardian, ClassEnrollment
+        from datetime import date
+        guardian = Guardian.objects.create(first_name="Ramesh", last_name="Kumar", phone="9988112233")
+        student = Student.objects.create(
+            admission_number="ADM-2026-9001",
+            first_name="Pooja",
+            last_name="Kumar",
+            date_of_birth=date(2014, 5, 10),
+            gender="F",
+            address="Lucknow",
+            admission_date=date(2026, 4, 1),
+            primary_guardian=guardian,
+            user_account=self.student_user
+        )
+        ClassEnrollment.objects.create(
+            student=student,
+            academic_year=self.year,
+            class_name="Class 8",
+            section_name="B",
+            roll_number=7
+        )
+
+        self.client.login(username="student_dash_user", password="TestPass@999")
+        # Accessing root redirects student to student dashboard
+        resp = self.client.get("/")
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.url, "/dashboard/student/")
+
+        # Directly visiting student dashboard renders 200
+        resp_student = self.client.get("/dashboard/student/")
+        self.assertEqual(resp_student.status_code, 200)
+        self.assertContains(resp_student, "Today's Class Schedule")
+        self.assertContains(resp_student, "Pending Homework &amp; Exam Timetable")
+        self.assertContains(resp_student, "Attendance Performance")
+        self.assertContains(resp_student, "Published Grades &amp; Scorecard")
+        self.assertContains(resp_student, "Fee Account &amp; Invoices")
+
+    def test_admin_student_dashboard_filter_by_class_and_roll(self):
+        from apps.students.models import Student, Guardian, ClassEnrollment
+        from datetime import date
+        guardian = Guardian.objects.create(first_name="Suresh", last_name="Verma", phone="9988112244")
+        student = Student.objects.create(
+            admission_number="ADM-2026-9002",
+            first_name="Aman",
+            last_name="Verma",
+            date_of_birth=date(2013, 8, 15),
+            gender="M",
+            address="Lucknow",
+            admission_date=date(2026, 4, 1),
+            primary_guardian=guardian,
+        )
+        ClassEnrollment.objects.create(
+            student=student,
+            academic_year=self.year,
+            class_name="Class 9",
+            section_name="A",
+            roll_number=15
+        )
+
+        self.client.login(username="admin_dash_user", password="TestPass@999")
+
+        # 1. Access without query params -> should display filter form
+        resp = self.client.get("/dashboard/student/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Filter Student:")
+        self.assertContains(resp, "Class 9")
+
+        # 2. Filter by class_name and roll_number
+        resp_filtered = self.client.get("/dashboard/student/?class_name=Class+9&roll_number=15")
+        self.assertEqual(resp_filtered.status_code, 200)
+        self.assertContains(resp_filtered, "Aman Verma")
+        self.assertContains(resp_filtered, "ADM-2026-9002")
+
+        # 3. Filter by admission number
+        resp_adm = self.client.get("/dashboard/student/?admission_number=ADM-2026-9002")
+        self.assertEqual(resp_adm.status_code, 200)
+        self.assertContains(resp_adm, "Aman Verma")
+
+
+
+

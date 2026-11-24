@@ -1,0 +1,496 @@
+{% extends 'dashboard/base.html' %}
+{% load static %}
+
+{% block admin %}
+<div class="container-fluid px-0">
+
+    <!-- Top Greeting & Persona Banner -->
+    <div class="card border-0 shadow-sm mb-4 bg-primary text-white overflow-hidden position-relative" style="background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%) !important;">
+        <div class="card-body p-4 position-relative" style="z-index: 2;">
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
+                <div class="d-flex align-items-center gap-3">
+                    <div class="rounded-circle bg-white bg-opacity-20 d-flex align-items-center justify-content-center text-white" style="width: 58px; height: 58px; font-size: 1.75rem;">
+                        <i class="ti ti-chalkboard"></i>
+                    </div>
+                    <div>
+                        <div class="d-flex align-items-center gap-2 mb-1">
+                            <span class="badge bg-white bg-opacity-20 text-white rounded-pill px-3 py-1 text-uppercase" style="font-size: 0.72rem; letter-spacing: 0.5px;">
+                                <i class="ti ti-badge me-1"></i> Faculty Portal
+                            </span>
+                            <span class="badge bg-warning text-dark rounded-pill px-2 py-1" style="font-size: 0.72rem;">
+                                {{ today|date:"l, d M Y" }}
+                            </span>
+                        </div>
+                        <h3 class="fw-bold mb-0 text-white">
+                            Welcome, {{ teacher_user.get_full_name|default:teacher_user.username }}! 🍎
+                        </h3>
+                        <p class="text-white text-opacity-75 mb-0 small mt-1">
+                            {{ school_profile.school_name|default:"CBSE School ERP" }} &bull; Session: <strong>{{ current_year.name|default:"2026-2027" }}</strong>
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Admin / Principal Teacher Switcher & Self-Attendance -->
+                <div class="d-flex flex-wrap align-items-center gap-2">
+                    <a href="{% url 'attendance-self-mark' %}" class="btn btn-warning shadow-sm fw-semibold">
+                        <i class="ti ti-camera me-1"></i> Mark My Attendance
+                    </a>
+
+                    {% if request.user.is_superuser or request.user.user_type in 'ADMIN,PRINCIPAL' %}
+                    <div class="dropdown">
+                        <button class="btn btn-white bg-white text-dark dropdown-toggle shadow-sm fw-semibold" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            <i class="ti ti-switch-horizontal me-1 text-primary"></i> Preview Faculty
+                        </button>
+                        <ul class="dropdown-menu dropdown-menu-end shadow border-0" style="max-height: 280px; overflow-y: auto;">
+                            <li><h6 class="dropdown-header text-uppercase small">Select Faculty Dashboard</h6></li>
+                            {% for t in all_teachers %}
+                            <li>
+                                <a class="dropdown-item {% if t.id == teacher_user.id %}active{% endif %}" href="{% url 'teacher-dashboard' %}?teacher_id={{ t.id }}">
+                                    {{ t.get_full_name|default:t.username }} ({{ t.username }})
+                                </a>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick Stat Cards -->
+    <div class="row g-3 mb-4">
+        <!-- 1. Today's Classes -->
+        <div class="col-6 col-lg-3">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body p-3">
+                    <div class="d-flex align-items-center justify-content-between mb-2">
+                        <span class="text-muted small fw-semibold text-uppercase">Today's Schedule</span>
+                        <div class="bg-primary bg-opacity-10 text-primary rounded-3 p-2">
+                            <i class="ti ti-calendar-event fs-4"></i>
+                        </div>
+                    </div>
+                    <h3 class="fw-bold mb-1 text-dark">{{ timetable_slots|length }}</h3>
+                    <small class="text-muted"><i class="ti ti-clock me-1"></i>Periods assigned today</small>
+                </div>
+            </div>
+        </div>
+
+        <!-- 2. Attendance Status -->
+        <div class="col-6 col-lg-3">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body p-3">
+                    <div class="d-flex align-items-center justify-content-between mb-2">
+                        <span class="text-muted small fw-semibold text-uppercase">Roll Call Status</span>
+                        <div class="{% if pending_attendance_count > 0 %}bg-danger bg-opacity-10 text-danger{% else %}bg-success bg-opacity-10 text-success{% endif %} rounded-3 p-2">
+                            <i class="ti ti-user-check fs-4"></i>
+                        </div>
+                    </div>
+                    <h3 class="fw-bold mb-1 {% if pending_attendance_count > 0 %}text-danger{% else %}text-success{% endif %}">
+                        {% if pending_attendance_count > 0 %}{{ pending_attendance_count }} Pending{% else %}All Done{% endif %}
+                    </h3>
+                    <small class="{% if pending_attendance_count > 0 %}text-danger{% else %}text-success{% endif %}">
+                        <i class="ti ti-alert-circle me-1"></i>Classes requiring roll call
+                    </small>
+                </div>
+            </div>
+        </div>
+
+        <!-- 3. Ungraded Assessments -->
+        <div class="col-6 col-lg-3">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body p-3">
+                    <div class="d-flex align-items-center justify-content-between mb-2">
+                        <span class="text-muted small fw-semibold text-uppercase">Grading Queue</span>
+                        <div class="bg-warning bg-opacity-10 text-warning rounded-3 p-2">
+                            <i class="ti ti-file-text fs-4"></i>
+                        </div>
+                    </div>
+                    <h3 class="fw-bold mb-1 text-dark">{{ assessments_queue|length }}</h3>
+                    <small class="text-muted"><i class="ti ti-pencil me-1"></i>Active tests/homework</small>
+                </div>
+            </div>
+        </div>
+
+        <!-- 4. At-Risk Alerts -->
+        <div class="col-6 col-lg-3">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body p-3">
+                    <div class="d-flex align-items-center justify-content-between mb-2">
+                        <span class="text-muted small fw-semibold text-uppercase">At-Risk Alerts</span>
+                        <div class="bg-danger bg-opacity-10 text-danger rounded-3 p-2">
+                            <i class="ti ti-alert-triangle fs-4"></i>
+                        </div>
+                    </div>
+                    <h3 class="fw-bold mb-1 text-danger">{{ at_risk_students|length }}</h3>
+                    <small class="text-danger"><i class="ti ti-shield-alert me-1"></i>Low att. or score drop</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MAIN TWO COLUMN WORKFLOW AREA -->
+    <div class="row g-4 mb-4">
+        
+        <!-- LEFT COLUMN: Timetable & One-Click Attendance -->
+        <div class="col-lg-7">
+
+            <!-- 1. TODAY'S TIMETABLE -->
+            <div class="card border-0 shadow-sm mb-4">
+                <div class="card-header bg-white border-bottom py-3 d-flex align-items-center justify-content-between">
+                    <h5 class="card-title mb-0 fw-bold text-dark d-flex align-items-center">
+                        <i class="ti ti-calendar-time text-primary me-2 fs-5"></i> Today's Timetable Schedule
+                    </h5>
+                    <span class="badge bg-primary-subtle text-primary border border-primary-subtle">
+                        {{ today|date:"l" }}
+                    </span>
+                </div>
+                <div class="card-body p-0">
+                    {% if timetable_slots %}
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th class="ps-3 py-3 text-uppercase small fw-semibold">Period & Time</th>
+                                    <th class="py-3 text-uppercase small fw-semibold">Class & Section</th>
+                                    <th class="py-3 text-uppercase small fw-semibold">Subject</th>
+                                    <th class="py-3 text-uppercase small fw-semibold">Room</th>
+                                    <th class="pe-3 py-3 text-uppercase small fw-semibold text-end">Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for item in timetable_slots %}
+                                <tr>
+                                    <td class="ps-3">
+                                        <div class="fw-bold text-dark">{{ item.period.name }} {{ item.period.period_number }}</div>
+                                        <small class="text-muted">{{ item.period.start_time|time:"H:i" }} - {{ item.period.end_time|time:"H:i" }}</small>
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-light text-dark border fw-semibold">
+                                            {{ item.section.school_class.name }} - {{ item.section.name }}
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <div class="fw-semibold text-dark">{{ item.subject.name }}</div>
+                                        <small class="text-muted">{{ item.subject.code }}</small>
+                                    </td>
+                                    <td>
+                                        <span class="text-muted small">
+                                            <i class="ti ti-map-pin me-1"></i>{{ item.room_display }}
+                                        </span>
+                                    </td>
+                                    <td class="pe-3 text-end">
+                                        <span class="badge {{ item.badge_class }} rounded-pill px-2 py-1">
+                                            {{ item.badge_text }}
+                                        </span>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <div class="p-5 text-center text-muted">
+                        <div class="rounded-circle bg-light d-inline-flex p-3 mb-3">
+                            <i class="ti ti-coffee fs-1 text-muted"></i>
+                        </div>
+                        <h6 class="fw-semibold text-dark">No classes scheduled for today</h6>
+                        <p class="small text-muted mb-0">You have no periods assigned for {{ today|date:"l" }}. Use this time for grading or lesson planning.</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- 2. ONE-CLICK ATTENDANCE MARKING -->
+            <div class="card border-0 shadow-sm mb-4">
+                <div class="card-header bg-white border-bottom py-3 d-flex align-items-center justify-content-between">
+                    <h5 class="card-title mb-0 fw-bold text-dark d-flex align-items-center">
+                        <i class="ti ti-checklist text-success me-2 fs-5"></i> One-Click Daily Attendance
+                    </h5>
+                    <span class="badge bg-light text-muted border">Daily Roll Call</span>
+                </div>
+                <div class="card-body p-3">
+                    {% if attendance_classes %}
+                    <div class="row g-3">
+                        {% for item in attendance_classes %}
+                        <div class="col-md-6">
+                            <div class="card h-100 border {% if not item.is_marked %}border-danger-subtle bg-danger-subtle bg-opacity-10{% else %}border-success-subtle bg-success-subtle bg-opacity-10{% endif %}">
+                                <div class="card-body p-3">
+                                    <div class="d-flex align-items-center justify-content-between mb-2">
+                                        <h6 class="fw-bold mb-0 text-dark">
+                                            {{ item.section.school_class.name }} &bull; Sec {{ item.section.name }}
+                                        </h6>
+                                        {% if item.is_class_teacher %}
+                                        <span class="badge bg-primary-subtle text-primary border border-primary-subtle" style="font-size: 0.7rem;">Class Teacher</span>
+                                        {% endif %}
+                                    </div>
+                                    <p class="text-muted small mb-3">
+                                        Total Strength: <strong>{{ item.total_students }}</strong> Students
+                                    </p>
+                                    
+                                    <div class="d-flex align-items-center justify-content-between pt-2 border-top">
+                                        {% if item.is_marked %}
+                                        <div>
+                                            <span class="badge bg-success text-white rounded-pill px-2 py-1 small">
+                                                <i class="ti ti-check me-1"></i>Marked
+                                            </span>
+                                            <small class="text-muted ms-1">{{ item.present_count }}/{{ item.total_students }} Present</small>
+                                        </div>
+                                        <a href="{{ item.direct_url }}" class="btn btn-sm btn-outline-success">
+                                            <i class="ti ti-eye me-1"></i> Review
+                                        </a>
+                                        {% else %}
+                                        <div>
+                                            <span class="badge bg-danger text-white rounded-pill px-2 py-1 small">
+                                                <i class="ti ti-alert-triangle me-1"></i>Pending
+                                            </span>
+                                        </div>
+                                        <a href="{{ item.direct_url }}" class="btn btn-sm btn-danger shadow-sm fw-semibold">
+                                            <i class="ti ti-hand-stop me-1"></i> Mark Attendance
+                                        </a>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <div class="p-4 text-center text-muted">
+                        <i class="ti ti-users-minus fs-2 mb-2 d-block"></i>
+                        <p class="small mb-0">No assigned class sections linked to your teacher profile.</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- 3. ASSIGNMENT & GRADING QUEUE -->
+            <div class="card border-0 shadow-sm mb-4">
+                <div class="card-header bg-white border-bottom py-3 d-flex align-items-center justify-content-between">
+                    <h5 class="card-title mb-0 fw-bold text-dark d-flex align-items-center">
+                        <i class="ti ti-files text-warning me-2 fs-5"></i> Assignment &amp; Grading Queue
+                    </h5>
+                    <span class="badge bg-light text-muted border">Active Assessments</span>
+                </div>
+                <div class="card-body p-0">
+                    {% if assessments_queue %}
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th class="ps-3 py-3 text-uppercase small fw-semibold">Assessment Title</th>
+                                    <th class="py-3 text-uppercase small fw-semibold">Class & Subject</th>
+                                    <th class="py-3 text-uppercase small fw-semibold">Grading Status</th>
+                                    <th class="pe-3 py-3 text-uppercase small fw-semibold text-end">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for q in assessments_queue %}
+                                <tr>
+                                    <td class="ps-3">
+                                        <div class="fw-bold text-dark">{{ q.assessment.term.title }}</div>
+                                        <small class="text-muted">{{ q.assessment.term.get_exam_type_display }} &bull; Max {{ q.assessment.maximum_marks }}</small>
+                                    </td>
+                                    <td>
+                                        <div class="fw-semibold text-dark">{{ q.assessment.class_name }}</div>
+                                        <small class="text-muted">{{ q.assessment.subject.name }}</small>
+                                    </td>
+                                    <td style="min-width: 140px;">
+                                        <div class="d-flex justify-content-between small mb-1">
+                                            <span>{{ q.graded_count }}/{{ q.total_students }} Graded</span>
+                                            {% if q.pending_count > 0 %}
+                                            <span class="text-danger fw-semibold">{{ q.pending_count }} Pending</span>
+                                            {% else %}
+                                            <span class="text-success fw-semibold">Complete</span>
+                                            {% endif %}
+                                        </div>
+                                        <div class="progress" style="height: 6px;">
+                                            <div class="progress-bar {% if q.is_completed %}bg-success{% else %}bg-warning{% endif %}" role="progressbar" style="width: {% if q.total_students > 0 %}{% widthratio q.graded_count q.total_students 100 %}{% else %}0{% endif %}%;"></div>
+                                        </div>
+                                    </td>
+                                    <td class="pe-3 text-end">
+                                        <a href="/dashboard/academics/" class="btn btn-sm btn-outline-primary">
+                                            <i class="ti ti-edit me-1"></i> Enter Marks
+                                        </a>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <div class="p-4 text-center text-muted">
+                        <i class="ti ti-clipboard-check fs-2 text-muted mb-2 d-block"></i>
+                        <p class="small mb-0">All current assignments and papers are graded and up to date!</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+        </div>
+
+        <!-- RIGHT COLUMN: At-Risk Alerts & Parent Communication -->
+        <div class="col-lg-5">
+
+            <!-- 4. AT-RISK STUDENT ALERTS -->
+            <div class="card border-0 shadow-sm mb-4">
+                <div class="card-header bg-white border-bottom py-3 d-flex align-items-center justify-content-between">
+                    <h5 class="card-title mb-0 fw-bold text-danger d-flex align-items-center">
+                        <i class="ti ti-shield-alert text-danger me-2 fs-5"></i> At-Risk Student Alerts
+                    </h5>
+                    <span class="badge bg-danger-subtle text-danger border border-danger-subtle">
+                        CBSE &lt;75% Attendance / Low Scores
+                    </span>
+                </div>
+                <div class="card-body p-3">
+                    {% if at_risk_students %}
+                    <div class="d-flex flex-column gap-3">
+                        {% for stu in at_risk_students %}
+                        <div class="p-3 border rounded-3 bg-light bg-opacity-50">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <div>
+                                    <h6 class="fw-bold mb-0 text-dark">
+                                        {{ stu.student.full_name }}
+                                    </h6>
+                                    <small class="text-muted">
+                                        {{ stu.class_name }} {{ stu.section_name }} &bull; Roll: <strong>{{ stu.roll_number|default:"—" }}</strong>
+                                    </small>
+                                </div>
+                                <span class="badge bg-danger-subtle text-danger border border-danger-subtle">
+                                    {{ stu.attendance_pct }}% Att.
+                                </span>
+                            </div>
+
+                            <div class="mb-3">
+                                {% for r in stu.reasons %}
+                                <div class="small text-danger d-flex align-items-center gap-1 mb-1">
+                                    <i class="ti ti-alert-circle"></i> {{ r }}
+                                </div>
+                                {% endfor %}
+                            </div>
+
+                            <div class="d-flex align-items-center justify-content-between pt-2 border-top">
+                                <small class="text-muted">
+                                    <i class="ti ti-user me-1"></i>{{ stu.guardian_name|default:"Guardian" }}
+                                </small>
+                                {% if stu.guardian_phone %}
+                                <a href="tel:{{ stu.guardian_phone }}" class="btn btn-sm btn-outline-danger">
+                                    <i class="ti ti-phone me-1"></i> Call Parent
+                                </a>
+                                {% else %}
+                                <a href="{% url 'students-student-detail' stu.student.pk %}" class="btn btn-sm btn-outline-secondary">
+                                    <i class="ti ti-user me-1"></i> Profile
+                                </a>
+                                {% endif %}
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <div class="p-4 text-center text-muted">
+                        <div class="rounded-circle bg-success bg-opacity-10 d-inline-flex p-3 mb-2">
+                            <i class="ti ti-mood-smile fs-2 text-success"></i>
+                        </div>
+                        <h6 class="fw-semibold text-dark">No At-Risk Students Flagged</h6>
+                        <p class="small text-muted mb-0">All enrolled students in your classes maintain &ge;75% attendance and satisfactory scores.</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- 5. PARENT COMMUNICATION & PTM -->
+            <div class="card border-0 shadow-sm mb-4">
+                <div class="card-header bg-white border-bottom py-3 d-flex align-items-center justify-content-between">
+                    <h5 class="card-title mb-0 fw-bold text-dark d-flex align-items-center">
+                        <i class="ti ti-messages text-primary me-2 fs-5"></i> Parent Inquiries &amp; PTM
+                    </h5>
+                    <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#schedulePtmModal">
+                        <i class="ti ti-calendar-plus me-1"></i> Schedule PTM
+                    </button>
+                </div>
+                <div class="card-body p-3">
+                    {% if parent_tickets %}
+                    <div class="list-group list-group-flush">
+                        {% for ticket in parent_tickets %}
+                        <div class="list-group-item px-0 py-3">
+                            <div class="d-flex align-items-center justify-content-between mb-1">
+                                <span class="badge bg-light text-dark border">{{ ticket.category.name }}</span>
+                                <span class="badge {% if ticket.status == 'OPEN' %}bg-warning-subtle text-warning border border-warning-subtle{% else %}bg-success-subtle text-success border border-success-subtle{% endif %}">
+                                    {{ ticket.get_status_display }}
+                                </span>
+                            </div>
+                            <h6 class="fw-semibold text-dark mb-1">{{ ticket.title }}</h6>
+                            <p class="text-muted small mb-2 text-truncate">{{ ticket.description }}</p>
+                            <div class="d-flex align-items-center justify-content-between small text-muted">
+                                <span><i class="ti ti-user me-1"></i>{{ ticket.creator.get_full_name|default:ticket.creator.username }}</span>
+                                <a href="/api/v1/helpdesk/" class="text-primary text-decoration-none">View Query &rarr;</a>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <div class="p-4 text-center text-muted">
+                        <i class="ti ti-message-dots fs-2 text-muted mb-2 d-block"></i>
+                        <p class="small mb-0">No unread inquiries from parents at this time.</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+<!-- Schedule PTM Modal -->
+<div class="modal fade" id="schedulePtmModal" tabindex="-1" aria-labelledby="schedulePtmModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <div class="modal-header border-bottom">
+                <h5 class="modal-title fw-bold" id="schedulePtmModalLabel">
+                    <i class="ti ti-calendar-event text-primary me-2"></i> Schedule Parent-Teacher Meeting (PTM)
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form onsubmit="event.preventDefault(); alert('PTM meeting invitation recorded and queued for parent notification!'); bootstrap.Modal.getInstance(document.getElementById('schedulePtmModal')).hide();">
+                <div class="modal-body p-4">
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold small text-uppercase">Meeting Date <span class="text-danger">*</span></label>
+                        <input type="date" class="form-control" value="{{ today|date:'Y-m-d' }}" required>
+                    </div>
+                    <div class="row g-2 mb-3">
+                        <div class="col-6">
+                            <label class="form-label fw-semibold small text-uppercase">Start Time <span class="text-danger">*</span></label>
+                            <input type="time" class="form-control" value="14:00" required>
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label fw-semibold small text-uppercase">End Time <span class="text-danger">*</span></label>
+                            <input type="time" class="form-control" value="14:30" required>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold small text-uppercase">Class & Section <span class="text-danger">*</span></label>
+                        <select class="form-select" required>
+                            <option value="">-- Choose Class Section --</option>
+                            {% for c in attendance_classes %}
+                            <option value="{{ c.section.id }}">{{ c.section.school_class.name }} - Sec {{ c.section.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold small text-uppercase">Meeting Agenda / Discussion Notes</label>
+                        <textarea class="form-control" rows="3" placeholder="e.g. Academic progress review, attendance discussion, term exam feedback"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer border-top bg-light">
+                    <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary fw-semibold">
+                        <i class="ti ti-check me-1"></i> Send PTM Invite
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
