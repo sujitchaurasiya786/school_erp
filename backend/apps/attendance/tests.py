@@ -813,7 +813,63 @@ class CalendarDashboardWebViewsTests(AttendanceTestBase):
         self.client.force_login(self.superuser)
         res = self.client.get(reverse('attendance-calendar'))
         self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "School calendar")
         self.assertContains(res, "Working Days & Attendance Calendar")
+
+    def test_calendar_event_lifecycle(self):
+        self.client.force_login(self.superuser)
+        # Add event
+        add_res = self.client.post(
+            reverse('attendance-calendar'),
+            data={
+                'action': 'add_event',
+                'title': 'Sports Day',
+                'event_type': 'EVENT',
+                'start_date': '2026-11-20',
+                'end_date': '2026-11-20',
+                'note': 'Annual Sports Festival',
+                'month': '2026-11',
+            },
+            follow=True
+        )
+        self.assertEqual(add_res.status_code, 200)
+        self.assertContains(add_res, "Sports Day")
+        from apps.attendance.models import CalendarEvent
+        event = CalendarEvent.objects.filter(title='Sports Day').first()
+        self.assertIsNotNone(event)
+        self.assertEqual(event.note, 'Annual Sports Festival')
+
+        # Edit event
+        edit_res = self.client.post(
+            reverse('attendance-calendar'),
+            data={
+                'action': 'edit_event',
+                'event_id': event.pk,
+                'title': 'Sports Day Grand Finale',
+                'event_type': 'EVENT',
+                'start_date': '2026-11-20',
+                'end_date': '2026-11-21',
+                'note': 'Extended celebration',
+                'month': '2026-11',
+            },
+            follow=True
+        )
+        self.assertEqual(edit_res.status_code, 200)
+        event.refresh_from_db()
+        self.assertEqual(event.title, 'Sports Day Grand Finale')
+
+        # Delete event
+        del_res = self.client.post(
+            reverse('attendance-calendar'),
+            data={
+                'action': 'delete_event',
+                'event_id': event.pk,
+                'month': '2026-11',
+            },
+            follow=True
+        )
+        self.assertEqual(del_res.status_code, 200)
+        self.assertFalse(CalendarEvent.objects.filter(title='Sports Day Grand Finale').exists())
 
     def test_holidays_web_view_access(self):
         self.client.force_login(self.superuser)

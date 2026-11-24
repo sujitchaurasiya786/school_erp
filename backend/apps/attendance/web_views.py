@@ -2,6 +2,7 @@
 Attendance Web Views — Dashboard views for Working Days, Attendance Calendar, and Holidays.
 Provides intuitive web interfaces for school administrators and staff.
 """
+import calendar
 from datetime import date, datetime, timedelta
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -14,7 +15,8 @@ from apps.attendance.models import (
     Holiday, HolidayType, SaturdayRule, OverrideType,
     WorkingDayConfig, SpecialDayOverride, WEEKDAY_CHOICES,
     StudentDailyAttendance, AttendanceCorrectionRequest, StaffDailyAttendance,
-    AttendanceStatus, StaffApprovalStatus, CheckInMethod
+    AttendanceStatus, StaffApprovalStatus, CheckInMethod,
+    CalendarEvent, CalendarEventType
 )
 from apps.attendance.services import (
     CalendarService, StudentDailyAttendanceService,
@@ -43,14 +45,18 @@ def _check_attendance_permission(request, codename):
 @login_required(login_url='login')
 def attendance_calendar_view(request):
     """
-    Dashboard view for Weekly Working Days configuration, Special Day Overrides,
-    and operational calendar day resolution.
+    Dashboard view for School Calendar, Events, Holidays, Vacations,
+    Weekly Working Days configuration, and Special Day Overrides.
     """
-    if not _check_attendance_permission(request, 'attendance.calendar.view'):
+    if not (request.user.is_superuser or _check_attendance_permission(request, 'attendance.calendar.view') or request.user.user_type in ['ADMIN', 'PRINCIPAL']):
         messages.error(request, "You do not have permission to view the attendance calendar.")
         return redirect('home-dashboard')
 
-    can_manage = _check_attendance_permission(request, 'attendance.calendar.manage')
+    can_manage = (
+        request.user.is_superuser or
+        _check_attendance_permission(request, 'attendance.calendar.manage') or
+        request.user.user_type in ['ADMIN', 'PRINCIPAL']
+    )
 
     academic_years = AcademicYear.objects.all().order_by('-start_date')
     selected_year_id = request.GET.get('year')
@@ -61,15 +67,185 @@ def attendance_calendar_view(request):
     else:
         selected_year = current_year or academic_years.first()
 
+    # Determine Active Month (default to today's month or specified YYYY-MM)
+    today = date.today()
+    month_param = request.GET.get('month', '').strip()
+    year_val = today.year
+    month_val = today.month
+
+    if month_param:
+        try:
+            parts = month_param.split('-')
+            year_val = int(parts[0])
+            month_val = int(parts[1])
+            if not (1 <= month_val <= 12):
+                raise ValueError()
+        except (ValueError, IndexError):
+            year_val = today.year
+            month_val = today.month
+
+    current_month_str = f"{year_val:04d}-{month_val:02d}"
+    curr_first = date(year_val, month_val, 1)
+    prev_month_date = (curr_first - timedelta(days=1)).replace(day=1)
+    prev_month_str = prev_month_date.strftime("%Y-%m")
+    next_month_date = (curr_first + timedelta(days=32)).replace(day=1)
+    next_month_str = next_month_date.strftime("%Y-%m")
+    month_title = curr_first.strftime("%B %Y")
+    current_today_month_str = today.strftime("%Y-%m")
+
+    # Filter parameter
+    selected_filter = request.GET.get('filter', 'ALL')
+
     # Handle mutations (POST)
     if request.method == 'POST':
         if not can_manage:
             messages.error(request, "You do not have permission to modify calendar settings.")
-            return redirect(f"{request.path}?year={selected_year.pk if selected_year else ''}")
+            return redirect(f"{request.path}?month={current_month_str}")
 
         action = request.POST.get('action')
 
-        if action == 'save_working_days':
+        if action == 'add_event':
+            title = request.POST.get('title', '').strip()
+            event_type = request.POST.get('event_type', CalendarEventType.HOLIDAY)
+            start_date_str = request.POST.get('start_date', '').strip()
+            end_date_str = request.POST.get('end_date', '').strip()
+            note = request.POST.get('note', '').strip()
+
+            if not title:
+                messages.error(request, "Event title is required.")
+                return redirect(f"{request.path}?month={current_month_str}")
+
+            try:
+                start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+                end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date() if end_date_str else start_date
+                if end_date < start_date:
+                    messages.error(request, "End date cannot be earlier than start date.")
+                    return redirect(f"{request.path}?month={current_month_str}")
+
+                target_ay = AcademicYear.objects.filter(
+                    start_date__lte=start_date,
+                    end_date__gte=start_date
+                ).first() or selected_year or current_year or academic_years.first()
+
+                event = CalendarEvent.objects.create(
+                    academic_year=target_ay,
+                    title=title,
+                    event_type=event_type,
+                    start_date=start_date,
+                    end_date=end_date,
+                    note=note,
+                    created_by=request.user
+                )
+
+                if event_type in [CalendarEventType.HOLIDAY, CalendarEventType.VACATION] and target_ay:
+                    cur = start_date
+                    while cur <= end_date:
+                        Holiday.objects.get_or_create(
+                            academic_year=target_ay,
+                            date=cur,
+                            defaults={'title': title, 'description': note}
+                        )
+                        cur += timedelta(days=1)
+
+                AuditService.log(
+                    action=AuditAction.CREATE,
+                    module="attendance",
+                    entity_type="CalendarEvent",
+                    entity_id=str(event.pk),
+                    actor=request.user,
+                    reason=f"Created calendar event '{title}' ({event_type}) from {start_date} to {end_date}",
+                    request=request
+                )
+                messages.success(request, f"Event '{title}' added to calendar.")
+                return redirect(f"{request.path}?month={start_date.strftime('%Y-%m')}")
+            except Exception as e:
+                messages.error(request, f"Failed to add event: {e}")
+                return redirect(f"{request.path}?month={current_month_str}")
+
+        elif action == 'edit_event':
+            event_id = request.POST.get('event_id')
+            event = get_object_or_404(CalendarEvent, pk=event_id)
+            title = request.POST.get('title', '').strip()
+            event_type = request.POST.get('event_type', event.event_type)
+            start_date_str = request.POST.get('start_date', '').strip()
+            end_date_str = request.POST.get('end_date', '').strip()
+            note = request.POST.get('note', '').strip()
+
+            try:
+                start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+                end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date() if end_date_str else start_date
+                if end_date < start_date:
+                    messages.error(request, "End date cannot be earlier than start date.")
+                    return redirect(f"{request.path}?month={current_month_str}")
+
+                old_type = event.event_type
+                old_start = event.start_date
+                old_end = event.end_date
+
+                event.title = title
+                event.event_type = event_type
+                event.start_date = start_date
+                event.end_date = end_date
+                event.note = note
+                event.save()
+
+                if old_type in [CalendarEventType.HOLIDAY, CalendarEventType.VACATION]:
+                    Holiday.objects.filter(
+                        academic_year=event.academic_year,
+                        date__range=(old_start, old_end),
+                        title=title
+                    ).delete()
+
+                if event_type in [CalendarEventType.HOLIDAY, CalendarEventType.VACATION] and event.academic_year:
+                    cur = start_date
+                    while cur <= end_date:
+                        Holiday.objects.get_or_create(
+                            academic_year=event.academic_year,
+                            date=cur,
+                            defaults={'title': title, 'description': note}
+                        )
+                        cur += timedelta(days=1)
+
+                AuditService.log(
+                    action=AuditAction.UPDATE,
+                    module="attendance",
+                    entity_type="CalendarEvent",
+                    entity_id=str(event.pk),
+                    actor=request.user,
+                    reason=f"Updated calendar event '{title}'",
+                    request=request
+                )
+                messages.success(request, f"Event '{title}' updated.")
+            except Exception as e:
+                messages.error(request, f"Failed to update event: {e}")
+
+            return redirect(f"{request.path}?month={current_month_str}")
+
+        elif action == 'delete_event':
+            event_id = request.POST.get('event_id')
+            event = get_object_or_404(CalendarEvent, pk=event_id)
+            title = event.title
+            if event.event_type in [CalendarEventType.HOLIDAY, CalendarEventType.VACATION]:
+                Holiday.objects.filter(
+                    academic_year=event.academic_year,
+                    date__range=(event.start_date, event.end_date),
+                    title=title
+                ).delete()
+
+            event.delete()
+            AuditService.log(
+                action=AuditAction.DELETE,
+                module="attendance",
+                entity_type="CalendarEvent",
+                entity_id=str(event_id),
+                actor=request.user,
+                reason=f"Deleted calendar event '{title}'",
+                request=request
+            )
+            messages.success(request, f"Event '{title}' deleted.")
+            return redirect(f"{request.path}?month={current_month_str}")
+
+        elif action == 'save_working_days':
             if not selected_year:
                 messages.error(request, "Please select an academic year.")
                 return redirect(request.path)
@@ -104,7 +280,7 @@ def attendance_calendar_view(request):
             except ValidationError as e:
                 messages.error(request, str(e.message_dict if hasattr(e, 'message_dict') else e))
 
-            return redirect(f"{request.path}?year={selected_year.pk}")
+            return redirect(f"{request.path}?year={selected_year.pk}&month={current_month_str}")
 
         elif action == 'create_override':
             if not selected_year:
@@ -143,7 +319,7 @@ def attendance_calendar_view(request):
             except Exception as e:
                 messages.error(request, f"Error saving override: {e}")
 
-            return redirect(f"{request.path}?year={selected_year.pk}")
+            return redirect(f"{request.path}?year={selected_year.pk}&month={current_month_str}")
 
         elif action == 'delete_override':
             override_id = request.POST.get('override_id')
@@ -160,9 +336,61 @@ def attendance_calendar_view(request):
                 request=request
             )
             messages.success(request, f"Deleted override for {o_date}.")
-            return redirect(f"{request.path}?year={selected_year.pk}")
+            return redirect(f"{request.path}?year={selected_year.pk}&month={current_month_str}")
 
-    # Load data for view
+    # Build 7-column calendar grid
+    num_days_in_month = calendar.monthrange(year_val, month_val)[1]
+    month_start = date(year_val, month_val, 1)
+    month_end = date(year_val, month_val, num_days_in_month)
+
+    all_month_events_qs = CalendarEvent.objects.filter(
+        start_date__lte=month_end,
+        end_date__gte=month_start
+    ).order_by('start_date', 'title')
+
+    grid_events_qs = all_month_events_qs
+    if selected_filter and selected_filter != 'ALL':
+        grid_events_qs = grid_events_qs.filter(event_type=selected_filter)
+
+    events_by_date = {}
+    for ev in grid_events_qs:
+        ev_start = max(ev.start_date, month_start)
+        ev_end = min(ev.end_date, month_end)
+        cur = ev_start
+        while cur <= ev_end:
+            events_by_date.setdefault(cur, []).append(ev)
+            cur += timedelta(days=1)
+
+    # Holidays registered in Holiday model
+    holiday_dates = set(Holiday.objects.filter(date__range=(month_start, month_end)).values_list('date', flat=True))
+
+    cal = calendar.Calendar(firstweekday=0)  # Monday first (0=Mon, 6=Sun)
+    month_weeks = cal.monthdatescalendar(year_val, month_val)
+    calendar_grid = []
+    for week in month_weeks:
+        week_cells = []
+        for d in week:
+            in_month = (d.month == month_val)
+            is_today = (d == today)
+            is_sunday = (d.weekday() == 6)
+            cell_events = events_by_date.get(d, []) if in_month else []
+            has_holiday = (d in holiday_dates) or any(ev.event_type in [CalendarEventType.HOLIDAY, CalendarEventType.VACATION] for ev in cell_events)
+            is_red_day = (has_holiday or is_sunday) if in_month else False
+            week_cells.append({
+                'date': d,
+                'day': d.day,
+                'in_month': in_month,
+                'is_today': is_today,
+                'is_sunday': is_sunday,
+                'events': cell_events,
+                'has_holiday': has_holiday,
+                'is_red_day': is_red_day,
+            })
+        calendar_grid.append(week_cells)
+
+    month_events = list(all_month_events_qs)
+
+    # Working day config & overrides for collapsible section
     working_day_config = None
     overrides = []
     if selected_year:
@@ -184,6 +412,16 @@ def attendance_calendar_view(request):
         'saturday_rules': SaturdayRule.choices,
         'override_types': OverrideType.choices,
         'weekday_choices': WEEKDAY_CHOICES,
+        'month_title': month_title,
+        'current_month_str': current_month_str,
+        'prev_month_str': prev_month_str,
+        'next_month_str': next_month_str,
+        'current_today_month_str': current_today_month_str,
+        'selected_filter': selected_filter,
+        'calendar_grid': calendar_grid,
+        'month_events': month_events,
+        'default_from_date': month_start,
+        'event_types': CalendarEventType.choices,
     }
     return render(request, 'dashboard/attendance/calendar.html', context)
 

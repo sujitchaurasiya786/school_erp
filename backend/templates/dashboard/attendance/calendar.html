@@ -2,31 +2,6 @@
 
 {% block admin %}
 <div class="container-fluid px-0">
-    <!-- Header with Title & Year Selector -->
-    <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
-        <div>
-            <h3 class="fw-bold mb-1 text-dark">Working Days & Attendance Calendar</h3>
-            <p class="text-muted mb-0 small">Configure weekly operational days, Saturday policies, and special day overrides per academic year.</p>
-        </div>
-        <div class="d-flex align-items-center gap-2">
-            <form method="GET" class="d-flex align-items-center gap-2">
-                <label for="yearSelect" class="text-muted small fw-medium mb-0">Session:</label>
-                <select id="yearSelect" name="year" class="form-select form-select-sm shadow-sm" onchange="this.form.submit()">
-                    {% for ay in academic_years %}
-                    <option value="{{ ay.pk }}" {% if selected_year and selected_year.pk == ay.pk %}selected{% endif %}>
-                        {{ ay.name }} {% if ay.is_current %}(Current){% endif %}
-                    </option>
-                    {% endfor %}
-                </select>
-            </form>
-            {% if can_manage and selected_year %}
-            <button type="button" class="btn btn-primary btn-sm shadow-sm" data-bs-toggle="modal" data-bs-target="#createOverrideModal">
-                <i class="ti ti-plus me-1"></i> Add Special Day Override
-            </button>
-            {% endif %}
-        </div>
-    </div>
-
     <!-- Django Messages Alerts -->
     {% if messages %}
     <div class="mb-3">
@@ -39,172 +14,475 @@
     </div>
     {% endif %}
 
-    {% if not selected_year %}
-    <div class="alert alert-warning shadow-sm">
-        <i class="ti ti-alert-triangle me-1"></i> No academic years found. Please create an Academic Year first in Academics.
+    <!-- Top Header: Icon, School Calendar Title, Month Subtitle & Navigation Buttons -->
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-3">
+        <div class="d-flex align-items-center gap-3">
+            <div class="d-flex align-items-center justify-content-center shadow-sm" style="width: 44px; height: 44px; background-color: #2563eb; border-radius: 10px;">
+                <i class="ti ti-speakerphone fs-3 text-white"></i>
+            </div>
+            <div>
+                <h2 class="fw-bold mb-0" style="font-size: 26px; color: #0f172a; letter-spacing: -0.5px;">School calendar</h2>
+                <div style="font-size: 14px; font-weight: 500; color: #64748b;">{{ month_title }}</div>
+            </div>
+        </div>
+        <div class="d-flex align-items-center gap-2">
+            <a href="?month={{ prev_month_str }}{% if selected_filter %}&filter={{ selected_filter }}{% endif %}{% if selected_year %}&year={{ selected_year.pk }}{% endif %}" 
+               class="btn btn-sm bg-white shadow-xs px-3 fw-medium text-dark" 
+               style="border: 1px solid #cbd5e1; border-radius: 8px;">
+                &larr; {{ prev_month_str }}
+            </a>
+            <a href="?month={{ current_today_month_str }}{% if selected_filter %}&filter={{ selected_filter }}{% endif %}{% if selected_year %}&year={{ selected_year.pk }}{% endif %}" 
+               class="btn btn-sm bg-white shadow-xs px-3 fw-medium text-dark" 
+               style="border: 1px solid #cbd5e1; border-radius: 8px;">
+                Today
+            </a>
+            <a href="?month={{ next_month_str }}{% if selected_filter %}&filter={{ selected_filter }}{% endif %}{% if selected_year %}&year={{ selected_year.pk }}{% endif %}" 
+               class="btn btn-sm bg-white shadow-xs px-3 fw-medium text-dark" 
+               style="border: 1px solid #cbd5e1; border-radius: 8px;">
+                {{ next_month_str }} &rarr;
+            </a>
+        </div>
     </div>
-    {% else %}
 
-    <div class="row g-4">
-        <!-- 1. Weekly Working Days Configuration Card -->
-        <div class="col-lg-5">
-            <div class="card border-0 shadow-sm h-100">
-                <div class="card-header bg-white border-bottom py-3">
-                    <h5 class="card-title mb-0 fw-bold text-dark d-flex align-items-center">
-                        <i class="ti ti-calendar-time text-primary me-2 fs-5"></i> Weekly Schedule
-                    </h5>
-                    <small class="text-muted">Standard recurring weekday status for {{ selected_year.name }}</small>
-                </div>
+    <!-- Filter Control -->
+    <div class="mb-3">
+        <label class="form-label mb-1 d-block" style="font-size: 13px; font-weight: 500; color: #64748b;">Show</label>
+        <form method="GET" class="d-flex align-items-center gap-2">
+            <input type="hidden" name="month" value="{{ current_month_str }}">
+            {% if selected_year %}
+            <input type="hidden" name="year" value="{{ selected_year.pk }}">
+            {% endif %}
+            <select name="filter" class="form-select form-select-sm bg-white shadow-xs" style="max-width: 200px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px;">
+                <option value="ALL" {% if selected_filter == 'ALL' %}selected{% endif %}>Everything</option>
+                <option value="HOLIDAY" {% if selected_filter == 'HOLIDAY' %}selected{% endif %}>Holiday</option>
+                <option value="VACATION" {% if selected_filter == 'VACATION' %}selected{% endif %}>Vacation</option>
+                <option value="EXAM" {% if selected_filter == 'EXAM' %}selected{% endif %}>Exam</option>
+                <option value="PTM" {% if selected_filter == 'PTM' %}selected{% endif %}>Parent-teacher meeting</option>
+                <option value="EVENT" {% if selected_filter == 'EVENT' %}selected{% endif %}>Event</option>
+                <option value="OTHER" {% if selected_filter == 'OTHER' %}selected{% endif %}>Other</option>
+            </select>
+            <button type="submit" class="btn btn-sm bg-white shadow-xs px-3 fw-medium text-dark" style="border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px;">
+                Filter
+            </button>
+        </form>
+    </div>
+
+    <!-- Calendar Month Grid Card -->
+    <div class="card shadow-sm mb-2" style="border: 1px solid #e2e8f0; border-radius: 14px; overflow: hidden; background-color: #ffffff;">
+        <div class="table-responsive mb-0">
+            <table class="table mb-0" style="table-layout: fixed; width: 100%; border-collapse: collapse;">
+                <thead style="background-color: #ffffff; border-bottom: 1px solid #e2e8f0;">
+                    <tr class="text-center" style="font-size: 13px; font-weight: 600; color: #64748b;">
+                        <th style="width: 14.285%; padding: 12px 0; border: 1px solid #e2e8f0;">Mon</th>
+                        <th style="width: 14.285%; padding: 12px 0; border: 1px solid #e2e8f0;">Tue</th>
+                        <th style="width: 14.285%; padding: 12px 0; border: 1px solid #e2e8f0;">Wed</th>
+                        <th style="width: 14.285%; padding: 12px 0; border: 1px solid #e2e8f0;">Thu</th>
+                        <th style="width: 14.285%; padding: 12px 0; border: 1px solid #e2e8f0;">Fri</th>
+                        <th style="width: 14.285%; padding: 12px 0; border: 1px solid #e2e8f0;">Sat</th>
+                        <th style="width: 14.285%; padding: 12px 0; border: 1px solid #e2e8f0; color: #dc2626;">Sun</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for week in calendar_grid %}
+                    <tr>
+                        {% for cell in week %}
+                        <td style="height: 112px; min-height: 112px; max-height: 125px; vertical-align: top; padding: 8px 10px; border: 1px solid #e2e8f0; position: relative; {% if cell.in_month %}{% if cell.is_red_day %}background-color: #fef2f2 !important;{% else %}background-color: #ffffff;{% endif %}{% else %}background-color: #ffffff;{% endif %}">
+                            {% if cell.in_month %}
+                                <div class="d-flex align-items-center justify-content-between mb-1">
+                                    {% if cell.is_today %}
+                                        <span class="rounded-circle d-inline-flex align-items-center justify-content-center shadow-xs" 
+                                              style="width: 24px; height: 24px; background-color: #2563eb; color: #ffffff; font-size: 12px; font-weight: 700;">
+                                            {{ cell.day }}
+                                        </span>
+                                    {% elif cell.is_red_day %}
+                                        <span style="font-size: 13px; font-weight: 700; color: #dc2626;">
+                                            {{ cell.day }}
+                                        </span>
+                                    {% else %}
+                                        <span style="font-size: 13px; font-weight: 700; color: #1e293b;">
+                                            {{ cell.day }}
+                                        </span>
+                                    {% endif %}
+                                </div>
+                                
+                                <div class="d-flex flex-column gap-1 overflow-auto" style="max-height: 75px;">
+                                    {% for ev in cell.events %}
+                                    <div class="text-white text-truncate rounded px-2 py-0.5 fw-bold"
+                                         style="background-color: {{ ev.color_hex }}; font-size: 11px; line-height: 1.35; letter-spacing: 0.1px;"
+                                         title="{{ ev.title }}{% if ev.note %}: {{ ev.note }}{% endif %}">
+                                        {{ ev.title }}
+                                    </div>
+                                    {% endfor %}
+                                </div>
+                            {% endif %}
+                        </td>
+                        {% endfor %}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Calendar Legend: Colored dots matching category colors -->
+    <div class="d-flex flex-wrap align-items-center gap-4 my-3" style="font-size: 13px; color: #475569;">
+        <div class="d-flex align-items-center gap-1.5">
+            <span class="rounded-circle d-inline-block" style="width: 9px; height: 9px; background-color: #dc2626;"></span>
+            <span class="ms-1">Holiday</span>
+        </div>
+        <div class="d-flex align-items-center gap-1.5">
+            <span class="rounded-circle d-inline-block" style="width: 9px; height: 9px; background-color: #ea580c;"></span>
+            <span class="ms-1">Vacation</span>
+        </div>
+        <div class="d-flex align-items-center gap-1.5">
+            <span class="rounded-circle d-inline-block" style="width: 9px; height: 9px; background-color: #7c3aed;"></span>
+            <span class="ms-1">Exam</span>
+        </div>
+        <div class="d-flex align-items-center gap-1.5">
+            <span class="rounded-circle d-inline-block" style="width: 9px; height: 9px; background-color: #0891b2;"></span>
+            <span class="ms-1">Parent-teacher meeting</span>
+        </div>
+        <div class="d-flex align-items-center gap-1.5">
+            <span class="rounded-circle d-inline-block" style="width: 9px; height: 9px; background-color: #2563eb;"></span>
+            <span class="ms-1">Event</span>
+        </div>
+        <div class="d-flex align-items-center gap-1.5">
+            <span class="rounded-circle d-inline-block" style="width: 9px; height: 9px; background-color: #475569;"></span>
+            <span class="ms-1">Other</span>
+        </div>
+    </div>
+
+    <!-- Bottom Row: This month (left card) & Add to the calendar (right card) -->
+    <div class="row g-4 mt-1">
+        <!-- 1. Left Card: This month (<count>) -->
+        <div class="col-lg-6">
+            <div class="card shadow-sm h-100" style="border: 1px solid #e2e8f0; border-radius: 16px; background-color: #ffffff;">
                 <div class="card-body p-4">
-                    <form method="POST">
-                        {% csrf_token %}
-                        <input type="hidden" name="action" value="save_working_days">
+                    <h5 class="fw-bold mb-4" style="font-size: 18px; color: #0f172a;">This month ({{ month_events|length }})</h5>
+                    
+                    {% if month_events %}
+                        <div class="d-flex flex-column gap-3">
+                            {% for ev in month_events %}
+                            <div class="pb-3 {% if not forloop.last %}border-bottom{% endif %}" style="border-color: #f1f5f9 !important;">
+                                <div class="d-flex align-items-center justify-content-between">
+                                    <div class="d-flex align-items-center gap-2">
+                                        <span class="rounded-circle d-inline-block flex-shrink-0" style="width: 9px; height: 9px; background-color: {{ ev.color_hex }};"></span>
+                                        <span class="fw-bold" style="font-size: 15px; color: #0f172a;">{{ ev.title }}</span>
+                                    </div>
+                                    {% if can_manage %}
+                                    <div class="d-flex align-items-center gap-2 small">
+                                        <a href="#" class="text-primary text-decoration-underline" data-bs-toggle="modal" data-bs-target="#editEventModal{{ ev.pk }}">Edit</a>
+                                        <form method="POST" class="d-inline" onsubmit="return confirm('Are you sure you want to delete this event?');">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="action" value="delete_event">
+                                            <input type="hidden" name="event_id" value="{{ ev.pk }}">
+                                            <input type="hidden" name="month" value="{{ current_month_str }}">
+                                            {% if selected_year %}<input type="hidden" name="year" value="{{ selected_year.pk }}">{% endif %}
+                                            <button type="submit" class="btn btn-link p-0 text-danger text-decoration-underline border-0 small">Delete</button>
+                                        </form>
+                                    </div>
+                                    {% endif %}
+                                </div>
+                                <div style="font-size: 13px; color: #64748b; margin-top: 4px; padding-left: 17px;">
+                                    {{ ev.display_date_range }} - {{ ev.get_event_type_display }}
+                                </div>
+                                {% if ev.note %}
+                                <div style="font-size: 13px; color: #64748b; margin-top: 2px; padding-left: 17px;">
+                                    {{ ev.note }}
+                                </div>
+                                {% endif %}
+                            </div>
 
-                        <div class="mb-3">
-                            <label class="form-label fw-semibold text-dark small text-uppercase mb-2">Standard Weekdays</label>
-                            <div class="d-flex flex-column gap-2 bg-light p-3 rounded-3 border">
-                                <div class="form-check form-switch">
-                                    <input class="form-check-input" type="checkbox" id="mondaySwitch" name="monday" {% if working_day_config.monday %}checked{% endif %} {% if not can_manage %}disabled{% endif %}>
-                                    <label class="form-check-label fw-medium" for="mondaySwitch">Monday</label>
-                                </div>
-                                <div class="form-check form-switch">
-                                    <input class="form-check-input" type="checkbox" id="tuesdaySwitch" name="tuesday" {% if working_day_config.tuesday %}checked{% endif %} {% if not can_manage %}disabled{% endif %}>
-                                    <label class="form-check-label fw-medium" for="tuesdaySwitch">Tuesday</label>
-                                </div>
-                                <div class="form-check form-switch">
-                                    <input class="form-check-input" type="checkbox" id="wednesdaySwitch" name="wednesday" {% if working_day_config.wednesday %}checked{% endif %} {% if not can_manage %}disabled{% endif %}>
-                                    <label class="form-check-label fw-medium" for="wednesdaySwitch">Wednesday</label>
-                                </div>
-                                <div class="form-check form-switch">
-                                    <input class="form-check-input" type="checkbox" id="thursdaySwitch" name="thursday" {% if working_day_config.thursday %}checked{% endif %} {% if not can_manage %}disabled{% endif %}>
-                                    <label class="form-check-label fw-medium" for="thursdaySwitch">Thursday</label>
-                                </div>
-                                <div class="form-check form-switch">
-                                    <input class="form-check-input" type="checkbox" id="fridaySwitch" name="friday" {% if working_day_config.friday %}checked{% endif %} {% if not can_manage %}disabled{% endif %}>
-                                    <label class="form-check-label fw-medium" for="fridaySwitch">Friday</label>
-                                </div>
-                                <div class="form-check form-switch">
-                                    <input class="form-check-input" type="checkbox" id="sundaySwitch" name="sunday" {% if working_day_config.sunday %}checked{% endif %} {% if not can_manage %}disabled{% endif %}>
-                                    <label class="form-check-label fw-medium text-danger" for="sundaySwitch">Sunday (Default: Off)</label>
+                            <!-- Edit Event Modal -->
+                            {% if can_manage %}
+                            <div class="modal fade" id="editEventModal{{ ev.pk }}" tabindex="-1" aria-hidden="true">
+                                <div class="modal-dialog modal-dialog-centered">
+                                    <div class="modal-content border-0 shadow" style="border-radius: 14px;">
+                                        <div class="modal-header border-bottom py-3">
+                                            <h5 class="modal-title fw-bold text-dark">Edit Calendar Event</h5>
+                                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                                        </div>
+                                        <form method="POST">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="action" value="edit_event">
+                                            <input type="hidden" name="event_id" value="{{ ev.pk }}">
+                                            <input type="hidden" name="month" value="{{ current_month_str }}">
+                                            {% if selected_year %}<input type="hidden" name="year" value="{{ selected_year.pk }}">{% endif %}
+                                            <div class="modal-body p-4">
+                                                <div class="mb-3">
+                                                    <label class="form-label text-dark small fw-medium mb-1">Title</label>
+                                                    <input type="text" name="title" class="form-control" value="{{ ev.title }}" required style="border: 1px solid #cbd5e1; border-radius: 8px;">
+                                                </div>
+                                                <div class="mb-3">
+                                                    <label class="form-label text-dark small fw-medium mb-1">Type</label>
+                                                    <select name="event_type" class="form-select" required style="border: 1px solid #cbd5e1; border-radius: 8px;">
+                                                        {% for val, label in event_types %}
+                                                        <option value="{{ val }}" {% if ev.event_type == val %}selected{% endif %}>{{ label }}</option>
+                                                        {% endfor %}
+                                                    </select>
+                                                </div>
+                                                <div class="row g-2 mb-3">
+                                                    <div class="col-6">
+                                                        <label class="form-label text-dark small fw-medium mb-1">From</label>
+                                                        <input type="date" name="start_date" class="form-control" value="{{ ev.start_date|date:'Y-m-d' }}" required style="border: 1px solid #cbd5e1; border-radius: 8px;">
+                                                    </div>
+                                                    <div class="col-6">
+                                                        <label class="form-label text-dark small fw-medium mb-1">To</label>
+                                                        <input type="date" name="end_date" class="form-control" value="{{ ev.end_date|date:'Y-m-d' }}" style="border: 1px solid #cbd5e1; border-radius: 8px;">
+                                                    </div>
+                                                </div>
+                                                <div class="mb-3">
+                                                    <label class="form-label text-dark small fw-medium mb-1">Note</label>
+                                                    <textarea name="note" class="form-control" rows="3" style="border: 1px solid #cbd5e1; border-radius: 8px;">{{ ev.note }}</textarea>
+                                                </div>
+                                            </div>
+                                            <div class="modal-footer border-top py-2">
+                                                <button type="button" class="btn btn-light btn-sm" data-bs-dismiss="modal" style="border-radius: 6px;">Cancel</button>
+                                                <button type="submit" class="btn btn-primary btn-sm px-3 shadow-sm" style="background-color: #2563eb; border-radius: 6px;">Save Changes</button>
+                                            </div>
+                                        </form>
+                                    </div>
                                 </div>
                             </div>
+                            {% endif %}
+                            {% endfor %}
                         </div>
-
-                        <div class="mb-3">
-                            <label for="saturdayRule" class="form-label fw-semibold text-dark small text-uppercase">Saturday Policy</label>
-                            <select id="saturdayRule" name="saturday_rule" class="form-select" {% if not can_manage %}disabled{% endif %}>
-                                {% for val, label in saturday_rules %}
-                                <option value="{{ val }}" {% if working_day_config.saturday_rule == val %}selected{% endif %}>{{ label }}</option>
-                                {% endfor %}
-                            </select>
-                            <div class="form-text small">
-                                "2nd and 4th Saturday Off" designates 1st, 3rd and 5th Saturdays as working.
-                            </div>
-                        </div>
-
-                        <div class="mb-4">
-                            <label for="configNotes" class="form-label fw-semibold text-dark small text-uppercase">Operational Notes</label>
-                            <input type="text" id="configNotes" name="notes" class="form-control" value="{{ working_day_config.notes|default:'' }}" placeholder="e.g. CBSE 6-day academic cycle" {% if not can_manage %}disabled{% endif %}>
-                        </div>
-
-                        {% if can_manage %}
-                        <div class="text-end">
-                            <button type="submit" class="btn btn-primary px-4 shadow-sm">
-                                <i class="ti ti-device-floppy me-1"></i> Save Working Days
-                            </button>
-                        </div>
-                        {% endif %}
-                    </form>
+                    {% else %}
+                        <p class="text-muted small mb-0 py-3">No events scheduled for this month.</p>
+                    {% endif %}
                 </div>
             </div>
         </div>
 
-        <!-- 2. Special Day Overrides Table -->
-        <div class="col-lg-7">
-            <div class="card border-0 shadow-sm h-100">
-                <div class="card-header bg-white border-bottom py-3 d-flex justify-content-between align-items-center">
-                    <div>
-                        <h5 class="card-title mb-0 fw-bold text-dark d-flex align-items-center">
-                            <i class="ti ti-alert-circle text-warning me-2 fs-5"></i> Special Day Overrides & Closures
-                        </h5>
-                        <small class="text-muted">Overrides take highest precedence over regular days and holidays.</small>
-                    </div>
+        <!-- 2. Right Card: Add to the calendar -->
+        <div class="col-lg-6">
+            <div class="card shadow-sm h-100" style="border: 1px solid #e2e8f0; border-radius: 16px; background-color: #ffffff;">
+                <div class="card-body p-4">
+                    <h5 class="fw-bold mb-4" style="font-size: 18px; color: #0f172a;">Add to the calendar</h5>
+                    
+                    <form method="POST">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="add_event">
+                        <input type="hidden" name="month" value="{{ current_month_str }}">
+                        {% if selected_year %}<input type="hidden" name="year" value="{{ selected_year.pk }}">{% endif %}
+
+                        <div class="mb-3">
+                            <label class="form-label mb-1" style="font-size: 13px; font-weight: 500; color: #334155;">Title</label>
+                            <input type="text" name="title" class="form-control" placeholder="Diwali break" required {% if not can_manage %}disabled{% endif %} style="border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px;">
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label mb-1" style="font-size: 13px; font-weight: 500; color: #334155;">Type</label>
+                            <select name="event_type" class="form-select" required {% if not can_manage %}disabled{% endif %} style="border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px;">
+                                {% for val, label in event_types %}
+                                <option value="{{ val }}">{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <div class="row g-2 mb-3">
+                            <div class="col-6">
+                                <label class="form-label mb-1" style="font-size: 13px; font-weight: 500; color: #334155;">From</label>
+                                <input type="date" name="start_date" class="form-control" value="{{ default_from_date|date:'Y-m-d' }}" required {% if not can_manage %}disabled{% endif %} style="border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px;">
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label mb-1" style="font-size: 13px; font-weight: 500; color: #334155;">To (same day if empty)</label>
+                                <input type="date" name="end_date" class="form-control" {% if not can_manage %}disabled{% endif %} style="border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px;">
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label mb-1" style="font-size: 13px; font-weight: 500; color: #334155;">Note</label>
+                            <textarea name="note" class="form-control" rows="3" {% if not can_manage %}disabled{% endif %} style="border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px;"></textarea>
+                        </div>
+
+                        <div class="mb-3">
+                            <button type="submit" class="btn text-white px-4 fw-semibold shadow-xs" style="background-color: #2563eb; border-radius: 8px; font-size: 13px; padding: 7px 20px;" {% if not can_manage %}disabled{% endif %}>
+                                Add
+                            </button>
+                        </div>
+
+                        <p class="mb-0" style="font-size: 12px; color: #64748b; line-height: 1.5;">
+                            Holidays and vacations are skipped when working days are counted for staff attendance and payroll.
+                        </p>
+                    </form>
                 </div>
-                <div class="card-body p-0">
-                    <div class="table-responsive">
-                        <table class="table table-hover align-middle mb-0">
-                            <thead class="table-light">
-                                <tr>
-                                    <th class="ps-4">Date</th>
-                                    <th>Status</th>
-                                    <th>Type</th>
-                                    <th>Timetable</th>
-                                    <th>Reason</th>
-                                    <th class="text-end pe-4">Action</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {% if overrides %}
-                                    {% for o in overrides %}
-                                    <tr>
-                                        <td class="ps-4 fw-bold">{{ o.date|date:"D, M d, Y" }}</td>
-                                        <td>
-                                            {% if o.is_working %}
-                                                <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-1">
-                                                    <i class="ti ti-check me-1"></i> Working
-                                                </span>
-                                            {% else %}
-                                                <span class="badge bg-danger-subtle text-danger border border-danger-subtle px-2 py-1">
-                                                    <i class="ti ti-x me-1"></i> Closed
-                                                </span>
-                                            {% endif %}
-                                        </td>
-                                        <td><span class="badge bg-light text-dark border">{{ o.get_override_type_display }}</span></td>
-                                        <td>
-                                            {% if o.timetable_weekday %}
-                                                <span class="text-primary fw-medium">{{ o.get_timetable_weekday_display }} Schedule</span>
-                                            {% else %}
-                                                <span class="text-muted">—</span>
-                                            {% endif %}
-                                        </td>
-                                        <td class="small text-muted">{{ o.reason|truncatechars:35 }}</td>
-                                        <td class="text-end pe-4">
-                                            {% if can_manage %}
-                                            <form method="POST" class="d-inline" onsubmit="return confirm('Are you sure you want to delete this special day override?');">
-                                                {% csrf_token %}
-                                                <input type="hidden" name="action" value="delete_override">
-                                                <input type="hidden" name="override_id" value="{{ o.pk }}">
-                                                <button type="submit" class="btn btn-sm btn-outline-danger border-0" title="Delete Override">
-                                                    <i class="ti ti-trash"></i>
-                                                </button>
-                                            </form>
-                                            {% endif %}
-                                        </td>
-                                    </tr>
-                                    {% endfor %}
-                                {% else %}
-                                    <tr>
-                                        <td colspan="6" class="text-center py-5 text-muted">
-                                            <i class="ti ti-calendar-event fs-2 d-block mb-2 text-muted"></i>
-                                            No special day overrides defined for this academic year.
-                                        </td>
-                                    </tr>
-                                {% endif %}
-                            </tbody>
-                        </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Administrative Settings Accordion (Weekly Schedule & Special Overrides) -->
+    <div class="accordion mt-5 shadow-sm rounded-4 border-0" id="adminSettingsAccordion">
+        <div class="accordion-item border-0 rounded-4 overflow-hidden">
+            <h2 class="accordion-header" id="headingAdminSettings">
+                <button class="accordion-button collapsed bg-white fw-bold text-dark py-3" type="button" data-bs-toggle="collapse" data-bs-target="#collapseAdminSettings" aria-expanded="false" aria-controls="collapseAdminSettings">
+                    <i class="ti ti-settings text-primary me-2 fs-5"></i> Working Days & Attendance Calendar Configuration
+                </button>
+            </h2>
+            <div id="collapseAdminSettings" class="accordion-collapse collapse" aria-labelledby="headingAdminSettings" data-bs-parent="#adminSettingsAccordion">
+                <div class="accordion-body bg-light p-4">
+                    <div class="d-flex align-items-center justify-content-between mb-4">
+                        <div>
+                            <h6 class="fw-bold mb-0 text-dark">Academic Session Rules</h6>
+                            <small class="text-muted">Standard weekdays, alternate Saturdays, and emergency day overrides.</small>
+                        </div>
+                        <form method="GET" class="d-flex align-items-center gap-2">
+                            <input type="hidden" name="month" value="{{ current_month_str }}">
+                            <label for="yearSelect" class="text-muted small fw-medium mb-0">Session:</label>
+                            <select id="yearSelect" name="year" class="form-select form-select-sm shadow-sm" onchange="this.form.submit()">
+                                {% for ay in academic_years %}
+                                <option value="{{ ay.pk }}" {% if selected_year and selected_year.pk == ay.pk %}selected{% endif %}>
+                                    {{ ay.name }} {% if ay.is_current %}(Current){% endif %}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </form>
                     </div>
+
+                    {% if selected_year %}
+                    <div class="row g-4">
+                        <!-- Weekly Working Days Form -->
+                        <div class="col-lg-5">
+                            <div class="card border-0 shadow-sm rounded-3">
+                                <div class="card-header bg-white border-bottom py-3">
+                                    <h6 class="card-title mb-0 fw-bold text-dark">
+                                        <i class="ti ti-calendar-time text-primary me-2"></i> Weekly Schedule
+                                    </h6>
+                                </div>
+                                <div class="card-body p-3">
+                                    <form method="POST">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="action" value="save_working_days">
+                                        <input type="hidden" name="month" value="{{ current_month_str }}">
+
+                                        <div class="d-flex flex-column gap-2 bg-light p-3 rounded-3 border mb-3">
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input" type="checkbox" id="mondaySwitch" name="monday" {% if working_day_config.monday %}checked{% endif %} {% if not can_manage %}disabled{% endif %}>
+                                                <label class="form-check-label fw-medium" for="mondaySwitch">Monday</label>
+                                            </div>
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input" type="checkbox" id="tuesdaySwitch" name="tuesday" {% if working_day_config.tuesday %}checked{% endif %} {% if not can_manage %}disabled{% endif %}>
+                                                <label class="form-check-label fw-medium" for="tuesdaySwitch">Tuesday</label>
+                                            </div>
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input" type="checkbox" id="wednesdaySwitch" name="wednesday" {% if working_day_config.wednesday %}checked{% endif %} {% if not can_manage %}disabled{% endif %}>
+                                                <label class="form-check-label fw-medium" for="wednesdaySwitch">Wednesday</label>
+                                            </div>
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input" type="checkbox" id="thursdaySwitch" name="thursday" {% if working_day_config.thursday %}checked{% endif %} {% if not can_manage %}disabled{% endif %}>
+                                                <label class="form-check-label fw-medium" for="thursdaySwitch">Thursday</label>
+                                            </div>
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input" type="checkbox" id="fridaySwitch" name="friday" {% if working_day_config.friday %}checked{% endif %} {% if not can_manage %}disabled{% endif %}>
+                                                <label class="form-check-label fw-medium" for="fridaySwitch">Friday</label>
+                                            </div>
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input" type="checkbox" id="sundaySwitch" name="sunday" {% if working_day_config.sunday %}checked{% endif %} {% if not can_manage %}disabled{% endif %}>
+                                                <label class="form-check-label fw-medium text-danger" for="sundaySwitch">Sunday (Default: Off)</label>
+                                            </div>
+                                        </div>
+
+                                        <div class="mb-3">
+                                            <label for="saturdayRule" class="form-label fw-medium small">Saturday Policy</label>
+                                            <select id="saturdayRule" name="saturday_rule" class="form-select form-select-sm" {% if not can_manage %}disabled{% endif %}>
+                                                {% for val, label in saturday_rules %}
+                                                <option value="{{ val }}" {% if working_day_config.saturday_rule == val %}selected{% endif %}>{{ label }}</option>
+                                                {% endfor %}
+                                            </select>
+                                        </div>
+
+                                        <div class="mb-3">
+                                            <label for="configNotes" class="form-label fw-medium small">Operational Notes</label>
+                                            <input type="text" id="configNotes" name="notes" class="form-control form-control-sm" value="{{ working_day_config.notes|default:'' }}" placeholder="e.g. CBSE 6-day academic cycle" {% if not can_manage %}disabled{% endif %}>
+                                        </div>
+
+                                        {% if can_manage %}
+                                        <button type="submit" class="btn btn-primary btn-sm px-3 shadow-sm">Save Weekly Schedule</button>
+                                        {% endif %}
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Special Day Overrides Table -->
+                        <div class="col-lg-7">
+                            <div class="card border-0 shadow-sm rounded-3">
+                                <div class="card-header bg-white border-bottom py-3 d-flex justify-content-between align-items-center">
+                                    <h6 class="card-title mb-0 fw-bold text-dark">
+                                        <i class="ti ti-alert-circle text-warning me-2"></i> Special Day Overrides
+                                    </h6>
+                                    {% if can_manage %}
+                                    <button type="button" class="btn btn-primary btn-sm shadow-sm" data-bs-toggle="modal" data-bs-target="#createOverrideModal">
+                                        <i class="ti ti-plus me-1"></i> Add Override
+                                    </button>
+                                    {% endif %}
+                                </div>
+                                <div class="card-body p-0">
+                                    <div class="table-responsive">
+                                        <table class="table table-hover align-middle mb-0 small">
+                                            <thead class="table-light">
+                                                <tr>
+                                                    <th class="ps-3">Date</th>
+                                                    <th>Status</th>
+                                                    <th>Type</th>
+                                                    <th>Timetable</th>
+                                                    <th>Reason</th>
+                                                    <th class="text-end pe-3">Action</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {% if overrides %}
+                                                    {% for o in overrides %}
+                                                    <tr>
+                                                        <td class="ps-3 fw-bold">{{ o.date|date:"D, M d, Y" }}</td>
+                                                        <td>
+                                                            {% if o.is_working %}
+                                                                <span class="badge bg-success-subtle text-success">Working</span>
+                                                            {% else %}
+                                                                <span class="badge bg-danger-subtle text-danger">Closed</span>
+                                                            {% endif %}
+                                                        </td>
+                                                        <td>{{ o.get_override_type_display }}</td>
+                                                        <td>{{ o.get_timetable_weekday_display|default:'—' }}</td>
+                                                        <td>{{ o.reason|truncatechars:25 }}</td>
+                                                        <td class="text-end pe-3">
+                                                            {% if can_manage %}
+                                                            <form method="POST" class="d-inline" onsubmit="return confirm('Delete this override?');">
+                                                                {% csrf_token %}
+                                                                <input type="hidden" name="action" value="delete_override">
+                                                                <input type="hidden" name="override_id" value="{{ o.pk }}">
+                                                                <input type="hidden" name="month" value="{{ current_month_str }}">
+                                                                <button type="submit" class="btn btn-sm btn-outline-danger border-0"><i class="ti ti-trash"></i></button>
+                                                            </form>
+                                                            {% endif %}
+                                                        </td>
+                                                    </tr>
+                                                    {% endfor %}
+                                                {% else %}
+                                                    <tr>
+                                                        <td colspan="6" class="text-center py-4 text-muted">No special day overrides defined.</td>
+                                                    </tr>
+                                                {% endif %}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endif %}
                 </div>
             </div>
         </div>
     </div>
 
     <!-- Modal for Adding Special Day Override -->
-    {% if can_manage %}
-    <div class="modal fade" id="createOverrideModal" tabindex="-1" aria-labelledby="createOverrideModalLabel" aria-hidden="true">
+    {% if can_manage and selected_year %}
+    <div class="modal fade" id="createOverrideModal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content border-0 shadow">
+            <div class="modal-content border-0 shadow rounded-4">
                 <div class="modal-header border-bottom py-3">
-                    <h5 class="modal-title fw-bold text-dark" id="createOverrideModalLabel">
+                    <h5 class="modal-title fw-bold text-dark">
                         <i class="ti ti-calendar-plus text-primary me-2"></i> Add Special Day Override
                     </h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
@@ -212,12 +490,12 @@
                 <form method="POST">
                     {% csrf_token %}
                     <input type="hidden" name="action" value="create_override">
+                    <input type="hidden" name="month" value="{{ current_month_str }}">
                     <div class="modal-body p-4">
                         <div class="mb-3">
-                            <label for="overrideDate" class="form-label fw-medium small text-uppercase">Calendar Date <span class="text-danger">*</span></label>
-                            <input type="date" id="overrideDate" name="date" class="form-control" required
+                            <label class="form-label fw-medium small">Calendar Date <span class="text-danger">*</span></label>
+                            <input type="date" name="date" class="form-control" required
                                    min="{{ selected_year.start_date|date:'Y-m-d' }}" max="{{ selected_year.end_date|date:'Y-m-d' }}">
-                            <div class="form-text small">Must fall within session span: {{ selected_year.start_date }} to {{ selected_year.end_date }}</div>
                         </div>
 
                         <div class="mb-3">
@@ -228,8 +506,8 @@
                         </div>
 
                         <div class="mb-3">
-                            <label for="overrideType" class="form-label fw-medium small text-uppercase">Override Category <span class="text-danger">*</span></label>
-                            <select id="overrideType" name="override_type" class="form-select" required>
+                            <label class="form-label fw-medium small">Override Category <span class="text-danger">*</span></label>
+                            <select name="override_type" class="form-select" required>
                                 {% for val, label in override_types %}
                                 <option value="{{ val }}">{{ label }}</option>
                                 {% endfor %}
@@ -237,24 +515,23 @@
                         </div>
 
                         <div class="mb-3" id="timetableWeekdayGroup">
-                            <label for="timetableWeekday" class="form-label fw-medium small text-uppercase">Timetable Weekday to Execute <span class="text-danger">*</span></label>
+                            <label class="form-label fw-medium small">Timetable Weekday to Execute</label>
                             <select id="timetableWeekday" name="timetable_weekday" class="form-select">
                                 <option value="">-- Select Weekday Timetable --</option>
                                 {% for val, label in weekday_choices %}
                                 <option value="{{ val }}">{{ label }} Timetable</option>
                                 {% endfor %}
                             </select>
-                            <div class="form-text small">E.g. If working Sunday, reuse Monday's class schedule.</div>
                         </div>
 
                         <div class="mb-3">
-                            <label for="overrideReason" class="form-label fw-medium small text-uppercase">Reason / Justification <span class="text-danger">*</span></label>
-                            <input type="text" id="overrideReason" name="reason" class="form-control" placeholder="e.g. Annual Day preparations, Rain closure" required>
+                            <label class="form-label fw-medium small">Reason <span class="text-danger">*</span></label>
+                            <input type="text" name="reason" class="form-control" placeholder="e.g. Annual Day preparations" required>
                         </div>
                     </div>
                     <div class="modal-footer border-top py-2">
-                        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
-                        <button type="submit" class="btn btn-primary px-4 shadow-sm">Save Override</button>
+                        <button type="button" class="btn btn-light btn-sm" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-primary btn-sm px-3 shadow-sm">Save Override</button>
                     </div>
                 </form>
             </div>
@@ -267,16 +544,12 @@
             const select = document.getElementById('timetableWeekday');
             if (isWorking) {
                 group.style.display = 'block';
-                select.required = true;
             } else {
                 group.style.display = 'none';
-                select.required = false;
-                select.value = '';
+                if (select) select.value = '';
             }
         }
     </script>
-    {% endif %}
-
     {% endif %}
 </div>
 {% endblock %}

@@ -43,6 +43,15 @@ class OverrideType(models.TextChoices):
     EVENT = 'EVENT', _('School Event / Celebration')
 
 
+class CalendarEventType(models.TextChoices):
+    HOLIDAY = 'HOLIDAY', _('Holiday')
+    VACATION = 'VACATION', _('Vacation')
+    EXAM = 'EXAM', _('Exam')
+    PTM = 'PTM', _('Parent-teacher meeting')
+    EVENT = 'EVENT', _('Event')
+    OTHER = 'OTHER', _('Other')
+
+
 WEEKDAY_CHOICES = [
     (1, _('Monday')),
     (2, _('Tuesday')),
@@ -90,6 +99,70 @@ class Holiday(TimeStampedModel):
                     raise ValidationError({
                         'date': _(f"Holiday date {self.date} falls outside academic year '{ay.name}' ({ay.start_date} to {ay.end_date}).")
                     })
+
+
+class CalendarEvent(TimeStampedModel):
+    """
+    Events, holidays, vacations, examinations, and PTMs displayed on the school calendar.
+    """
+    academic_year = models.ForeignKey(
+        'school_config.AcademicYear',
+        on_delete=models.CASCADE,
+        related_name='calendar_events'
+    )
+    title = models.CharField(max_length=150)
+    event_type = models.CharField(
+        max_length=30,
+        choices=CalendarEventType.choices,
+        default=CalendarEventType.HOLIDAY,
+        db_index=True
+    )
+    start_date = models.DateField(db_index=True)
+    end_date = models.DateField(db_index=True)
+    note = models.TextField(blank=True, default='')
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_calendar_events'
+    )
+
+    class Meta:
+        db_table = 'attendance_calendar_events'
+        ordering = ['start_date', 'title']
+
+    def __str__(self):
+        if self.start_date == self.end_date:
+            return f"{self.title} ({self.start_date})"
+        return f"{self.title} ({self.start_date} - {self.end_date})"
+
+    @property
+    def is_multi_day(self):
+        return self.start_date != self.end_date
+
+    @property
+    def display_date_range(self):
+        if self.start_date == self.end_date:
+            return self.start_date.strftime("%d %b %Y").lstrip("0")
+        return f"{self.start_date.strftime('%d %b %Y').lstrip('0')} - {self.end_date.strftime('%d %b %Y').lstrip('0')}"
+
+    @property
+    def color_hex(self):
+        colors = {
+            CalendarEventType.HOLIDAY: '#dc2626',
+            CalendarEventType.VACATION: '#ea580c',
+            CalendarEventType.EXAM: '#7c3aed',
+            CalendarEventType.PTM: '#0891b2',
+            CalendarEventType.EVENT: '#2563eb',
+            CalendarEventType.OTHER: '#475569',
+        }
+        return colors.get(self.event_type, '#475569')
+
+    def clean(self):
+        super().clean()
+        if self.start_date and self.end_date and self.start_date > self.end_date:
+            raise ValidationError({'end_date': _("End date cannot be earlier than start date.")})
 
 
 class WorkingDayConfig(TimeStampedModel):
