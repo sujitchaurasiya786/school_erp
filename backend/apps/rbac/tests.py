@@ -273,7 +273,7 @@ class SidebarRefactorTests(TestCase):
 
     def test_sidebar_hides_admin_links_for_unauthorized_user(self):
         self.client.login(username='student_sidebar', password='Password@123')
-        resp = self.client.get(reverse('home-dashboard'))
+        resp = self.client.get(reverse('home-dashboard'), follow=True)
         self.assertEqual(resp.status_code, 200)
 
         # Unauthorized student cannot see User Management or Roles & Permissions

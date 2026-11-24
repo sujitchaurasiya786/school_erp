@@ -28,7 +28,7 @@ def dashboard_view(request):
     Renders the primary school ERP web dashboard with role-aware redirection.
     - Teachers automatically see the Teacher Dashboard.
     - Students automatically see the Student Dashboard.
-    - Admin/Principal/Staff see the Admin Overview with quick dashboard switchers.
+    - Admin/Principal/Staff see the Admin Overview strictly bounded by their approved permissions.
     """
     if request.user.user_type == UserType.TEACHER:
         return redirect('teacher-dashboard')
@@ -38,14 +38,24 @@ def dashboard_view(request):
     current_year = AcademicYear.objects.filter(is_current=True).first()
     school_profile = SchoolProfile.objects.first()
 
-    total_students = Student.objects.filter(status=StudentStatus.ACTIVE).count()
-    total_applications = AdmissionApplication.objects.count()
-    total_staff = StaffProfile.objects.count()
-    total_roles = Role.objects.count()
-    total_users = User.objects.count()
+    from apps.rbac.services import RBACService
+    can_view_students = RBACService.has_permission(request.user, 'students.profile.view')
+    can_view_applications = RBACService.has_permission(request.user, 'admissions.application.view')
+    can_view_staff = RBACService.has_permission(request.user, 'hrms.staff.view')
+    can_view_roles = RBACService.has_permission(request.user, 'rbac.role.view')
+    can_view_users = RBACService.has_permission(request.user, 'identity.users.view')
 
-    recent_users = User.objects.order_by('-date_joined')[:5]
-    recent_applications = AdmissionApplication.objects.order_by('-created_at')[:5]
+    total_students = Student.objects.filter(status=StudentStatus.ACTIVE).count() if can_view_students else 0
+    total_applications = AdmissionApplication.objects.count() if can_view_applications else 0
+    total_staff = StaffProfile.objects.count() if can_view_staff else 0
+    total_roles = Role.objects.count() if can_view_roles else 0
+    total_users = User.objects.count() if can_view_users else 0
+
+    recent_users = User.objects.order_by('-date_joined')[:5] if can_view_users else []
+    recent_applications = AdmissionApplication.objects.order_by('-created_at')[:5] if can_view_applications else []
+
+    user_roles = request.user.role_assignments.filter(is_active=True).select_related('role')
+    user_permissions = RBACService.get_user_permissions(request.user)
 
     context = {
         'school_profile': school_profile,
@@ -57,6 +67,13 @@ def dashboard_view(request):
         'total_users': total_users,
         'recent_users': recent_users,
         'recent_applications': recent_applications,
+        'can_view_students': can_view_students,
+        'can_view_applications': can_view_applications,
+        'can_view_staff': can_view_staff,
+        'can_view_roles': can_view_roles,
+        'can_view_users': can_view_users,
+        'user_roles': user_roles,
+        'user_permissions_count': len(user_permissions),
     }
     return render(request, 'dashboard/dashboard.html', context)
 
@@ -300,8 +317,18 @@ def student_dashboard_view(request):
         if guardian:
             student = guardian.students.filter(status=StudentStatus.ACTIVE).first()
 
-    # Filter options for Admin, Principal, Teacher, and Staff
-    classes_list = SchoolClass.objects.all().order_by('order')
+    # Scoping check: Teachers are strictly restricted to their assigned classes and sections
+    is_teacher_user = (request.user.user_type == UserType.TEACHER and not request.user.is_superuser)
+    teacher_sections = None
+    if is_teacher_user:
+        teacher_sections = Section.objects.filter(
+            Q(class_teacher=request.user) | Q(class_subjects__teacher=request.user)
+        ).distinct().select_related('school_class')
+        allowed_class_ids = teacher_sections.values_list('school_class_id', flat=True)
+        classes_list = SchoolClass.objects.filter(id__in=allowed_class_ids).order_by('order')
+    else:
+        classes_list = SchoolClass.objects.all().order_by('order')
+
     selected_class_name = request.GET.get('class_name', '').strip()
     selected_section_name = request.GET.get('section_name', '').strip().upper()
     search_roll = request.GET.get('roll_number', '').strip()
@@ -378,11 +405,28 @@ def student_dashboard_view(request):
             if matched_student:
                 student = matched_student
 
+        # Teacher Boundary Check: Teachers can ONLY see students in their assigned sections
+        if is_teacher_user and student:
+            allowed_class_names = set(teacher_sections.values_list('school_class__name', flat=True))
+            allowed_section_names = set(teacher_sections.values_list('name', flat=True))
+            ce = student.current_enrollment
+            if not ce or ce.class_name not in allowed_class_names or ce.section_name not in allowed_section_names:
+                messages.error(request, "Permission Denied: Teachers can only view students enrolled in their assigned classes and sections.")
+                student = None
+
         # 6. Default fallback to the first enrolled student if no filter was submitted
         has_search_params = bool(search_admission or search_roll or selected_class_name or request.GET.get('student_id'))
         if not student and not has_search_params:
-            first_enr = ClassEnrollment.objects.filter(academic_year=current_year).select_related('student').first() if current_year else None
-            student = first_enr.student if first_enr else Student.objects.filter(status=StudentStatus.ACTIVE).first()
+            if is_teacher_user:
+                first_enr = ClassEnrollment.objects.filter(
+                    academic_year=current_year,
+                    class_name__in=teacher_sections.values_list('school_class__name', flat=True),
+                    section_name__in=teacher_sections.values_list('name', flat=True)
+                ).select_related('student').first() if current_year else None
+                student = first_enr.student if first_enr else None
+            else:
+                first_enr = ClassEnrollment.objects.filter(academic_year=current_year).select_related('student').first() if current_year else None
+                student = first_enr.student if first_enr else Student.objects.filter(status=StudentStatus.ACTIVE).first()
 
     if student and not selected_class_name:
         selected_class_name = student.current_class_name
@@ -526,9 +570,15 @@ def student_dashboard_view(request):
             })
 
     # 5. NOTICES, LIBRARY, AND FEE STATUS
+    from apps.rbac.services import RBACService
+    can_view_student_finance = (
+        request.user.is_superuser
+        or request.user.user_type in [UserType.STUDENT, UserType.PARENT]
+        or RBACService.has_permission(request.user, 'finance.invoice.view')
+    )
     invoices_list = []
     total_balance_due = 0
-    if student and current_year:
+    if student and current_year and can_view_student_finance:
         invoices = StudentInvoice.objects.filter(
             student=student,
             academic_year=current_year
@@ -569,6 +619,7 @@ def student_dashboard_view(request):
         'att_pct': att_pct,
         'recent_attendance': recent_attendance,
         'exam_marks_list': exam_marks_list,
+        'can_view_student_finance': can_view_student_finance,
         'invoices_list': invoices_list,
         'total_balance_due': total_balance_due,
         'borrowed_books': borrowed_books,

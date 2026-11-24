@@ -33,7 +33,7 @@
         </li>
         {% endif %}
 
-        {% if request.user.is_superuser or request.user.user_type in 'TEACHER,ADMIN,PRINCIPAL,STAFF' %}
+        {% if request.user.is_superuser or request.user.user_type in 'TEACHER,ADMIN,PRINCIPAL' or request.user.staff_profile.is_teaching %}
         <li class="pc-item {% nav_active 'teacher-dashboard' %}" role="none">
           <a href="{% url 'teacher-dashboard' %}" class="pc-link" role="menuitem">
             <span class="pc-micon"><i class="ti ti-chalkboard" aria-hidden="true"></i></span>
@@ -42,7 +42,7 @@
         </li>
         {% endif %}
 
-        {% if request.user.is_superuser or request.user.user_type in 'STUDENT,PARENT,ADMIN,PRINCIPAL,TEACHER' %}
+        {% if request.user.is_superuser or request.user.user_type in 'STUDENT,PARENT,ADMIN,PRINCIPAL' %}
         <li class="pc-item {% nav_active 'student-dashboard' %}" role="none">
           <a href="{% url 'student-dashboard' %}" class="pc-link" role="menuitem">
             <span class="pc-micon"><i class="ti ti-school" aria-hidden="true"></i></span>
@@ -109,7 +109,7 @@
              2. Academics (SRS §3.3)
              Active Module: Academics
              =============================================================== -->
-        {% if request.user.is_superuser or request.user|has_any_perm:'academics.year.view,academics.class.view,academics.section.view,academics.stream.view,academics.subjects.view,academics.subjects.manage,academics.class_subject.view,academics.class_subject.manage,academics.assignment.view,academics.assignment.manage,academics.timetable.view,school_config.profile.view' %}
+        {% if request.user.is_superuser or request.user|has_any_perm:'academics.year.view,academics.class.view,academics.section.view,academics.stream.view,academics.subjects.view,academics.class_subject.view,academics.assignment.view,academics.timetable.view' %}
         <li class="pc-item pc-hasmenu {% nav_group_active 'academics-years-list,academics-classes-list,academics-sections-list,academics-streams-list,academics-subjects-list,academics-class-subjects-list,academics-teacher-assignments-list,academics-timetable-list' '/dashboard/academics/' %}" role="none">
           <a href="#!" class="pc-link" role="menuitem" aria-expanded="false">
             <span class="pc-micon"><i class="ti ti-book" aria-hidden="true"></i></span>
@@ -117,46 +117,62 @@
             <span class="pc-arrow"><i class="ti ti-chevron-right" aria-hidden="true"></i></span>
           </a>
           <ul class="pc-submenu" role="menu">
+            {% if request.user|has_perm:'academics.year.view' %}
             <li class="pc-item {% nav_active 'academics-years-list' %}" role="none">
               <a class="pc-link" href="{% url 'academics-years-list' %}" role="menuitem">
                 <i class="ti ti-calendar-event me-2" aria-hidden="true"></i> Academic Years
               </a>
             </li>
+            {% endif %}
+            {% if request.user|has_perm:'academics.class.view' %}
             <li class="pc-item {% nav_active 'academics-classes-list' %}" role="none">
               <a class="pc-link" href="{% url 'academics-classes-list' %}" role="menuitem">
                 <i class="ti ti-layout-grid me-2" aria-hidden="true"></i> Classes
               </a>
             </li>
+            {% endif %}
+            {% if request.user|has_perm:'academics.section.view' %}
             <li class="pc-item {% nav_active 'academics-sections-list' %}" role="none">
               <a class="pc-link" href="{% url 'academics-sections-list' %}" role="menuitem">
                 <i class="ti ti-columns me-2" aria-hidden="true"></i> Sections
               </a>
             </li>
+            {% endif %}
+            {% if request.user|has_perm:'academics.stream.view' %}
             <li class="pc-item {% nav_active 'academics-streams-list' %}" role="none">
               <a class="pc-link" href="{% url 'academics-streams-list' %}" role="menuitem">
                 <i class="ti ti-git-branch me-2" aria-hidden="true"></i> Streams (11–12)
               </a>
             </li>
+            {% endif %}
+            {% if request.user|has_perm:'academics.subjects.view' %}
             <li class="pc-item {% nav_active 'academics-subjects-list' %}" role="none">
               <a class="pc-link" href="{% url 'academics-subjects-list' %}" role="menuitem">
                 <i class="ti ti-books me-2" aria-hidden="true"></i> Subjects
               </a>
             </li>
+            {% endif %}
+            {% if request.user|has_perm:'academics.class_subject.view' %}
             <li class="pc-item {% nav_active 'academics-class-subjects-list' %}" role="none">
               <a class="pc-link" href="{% url 'academics-class-subjects-list' %}" role="menuitem">
                 <i class="ti ti-link me-2" aria-hidden="true"></i> Class–Subject Mapping
               </a>
             </li>
+            {% endif %}
+            {% if request.user|has_perm:'academics.assignment.view' %}
             <li class="pc-item {% nav_active 'academics-teacher-assignments-list' %}" role="none">
               <a class="pc-link" href="{% url 'academics-teacher-assignments-list' %}" role="menuitem">
                 <i class="ti ti-user-pin me-2" aria-hidden="true"></i> Teacher Assignments
               </a>
             </li>
+            {% endif %}
+            {% if request.user|has_perm:'academics.timetable.view' %}
             <li class="pc-item {% nav_active 'academics-timetable-list' %}" role="none">
               <a class="pc-link" href="{% url 'academics-timetable-list' %}" role="menuitem">
                 <i class="ti ti-clock me-2" aria-hidden="true"></i> Timetable
               </a>
             </li>
+            {% endif %}
           </ul>
         </li>
         {% endif %}
@@ -165,7 +181,7 @@
              3. Attendance (SRS §3.4)
              Active Module: Attendance
              =============================================================== -->
-        {% if request.user.is_superuser or request.user|has_any_perm:'attendance.record.view,attendance.record.mark,attendance.record.correct,attendance.correction.approve,attendance.staff.view,attendance.staff.mark,attendance.report.export,attendance.calendar.view,attendance.holiday.view' or request.user.user_type in 'TEACHER,STAFF,PRINCIPAL,ADMIN,ACCOUNTANT' %}
+        {% if request.user.is_superuser or request.user|has_any_perm:'attendance.record.view,attendance.record.mark,attendance.record.correct,attendance.correction.approve,attendance.staff.view,attendance.staff.mark,attendance.report.export,attendance.calendar.view,attendance.holiday.view' or request.user.staff_profile or request.user.user_type in 'TEACHER,STAFF' %}
         <li class="pc-item pc-hasmenu {% nav_group_active 'attendance-daily,attendance-self-mark,attendance-staff,attendance-reports,attendance-corrections,attendance-calendar,attendance-holidays' '/dashboard/attendance/' %}" role="none">
           <a href="#!" class="pc-link" role="menuitem" aria-expanded="false">
             <span class="pc-micon"><i class="ti ti-calendar-check" aria-hidden="true"></i></span>
@@ -173,49 +189,49 @@
             <span class="pc-arrow"><i class="ti ti-chevron-right" aria-hidden="true"></i></span>
           </a>
           <ul class="pc-submenu" role="menu">
-            {% if request.user.is_superuser or request.user|has_any_perm:'attendance.record.view,attendance.record.mark' %}
+            {% if request.user|has_any_perm:'attendance.record.view,attendance.record.mark' %}
             <li class="pc-item {% nav_active 'attendance-daily' %}" role="none">
               <a class="pc-link" href="{% url 'attendance-daily' %}" role="menuitem">
                 <i class="ti ti-checklist me-2" aria-hidden="true"></i> Student Attendance
               </a>
             </li>
             {% endif %}
-            {% if request.user.user_type not in 'STUDENT,PARENT' %}
+            {% if request.user.user_type in 'TEACHER,STAFF,ADMIN,PRINCIPAL' or request.user.staff_profile %}
             <li class="pc-item {% nav_active 'attendance-self-mark' %}" role="none">
               <a class="pc-link" href="{% url 'attendance-self-mark' %}" role="menuitem">
                 <i class="ti ti-camera me-2" aria-hidden="true"></i> Mark My Attendance
               </a>
             </li>
             {% endif %}
-            {% if request.user.is_superuser or request.user|has_any_perm:'attendance.staff.view,attendance.staff.mark' or request.user.user_type in 'ADMIN,PRINCIPAL' %}
+            {% if request.user|has_any_perm:'attendance.staff.view,attendance.staff.mark' %}
             <li class="pc-item {% nav_active 'attendance-staff' %}" role="none">
               <a class="pc-link" href="{% url 'attendance-staff' %}" role="menuitem">
                 <i class="ti ti-clipboard-check me-2" aria-hidden="true"></i> Staff Attendance
               </a>
             </li>
             {% endif %}
-            {% if request.user.is_superuser or request.user|has_any_perm:'attendance.record.view,attendance.report.export' %}
+            {% if request.user|has_any_perm:'attendance.record.view,attendance.report.export' %}
             <li class="pc-item {% nav_active 'attendance-reports' %}" role="none">
               <a class="pc-link" href="{% url 'attendance-reports' %}" role="menuitem">
                 <i class="ti ti-chart-bar me-2" aria-hidden="true"></i> Attendance Reports
               </a>
             </li>
             {% endif %}
-            {% if request.user.is_superuser or request.user|has_any_perm:'attendance.correction.approve,attendance.record.view' %}
+            {% if request.user|has_any_perm:'attendance.correction.approve,attendance.record.correct' %}
             <li class="pc-item {% nav_active 'attendance-corrections' %}" role="none">
               <a class="pc-link" href="{% url 'attendance-corrections' %}" role="menuitem">
                 <i class="ti ti-edit-circle me-2" aria-hidden="true"></i> Correction Requests
               </a>
             </li>
             {% endif %}
-            {% if request.user.is_superuser or request.user|has_perm:'attendance.calendar.view' %}
+            {% if request.user|has_perm:'attendance.calendar.view' %}
             <li class="pc-item {% nav_active 'attendance-calendar' %}" role="none">
               <a class="pc-link" href="{% url 'attendance-calendar' %}" role="menuitem">
                 <i class="ti ti-calendar me-2" aria-hidden="true"></i> Working Days & Calendar
               </a>
             </li>
             {% endif %}
-            {% if request.user.is_superuser or request.user|has_perm:'attendance.holiday.view' %}
+            {% if request.user|has_perm:'attendance.holiday.view' %}
             <li class="pc-item {% nav_active 'attendance-holidays' %}" role="none">
               <a class="pc-link" href="{% url 'attendance-holidays' %}" role="menuitem">
                 <i class="ti ti-calendar-off me-2" aria-hidden="true"></i> Holidays & Breaks
@@ -439,7 +455,7 @@
             {% if 'rbac.role.view' in user_permissions or request.user.is_superuser %}
             <li class="pc-item {% nav_active 'rbac-roles-list,rbac-role-detail,rbac-role-create,rbac-role-edit' %}" role="none">
               <a class="pc-link" href="{% url 'rbac-roles-list' %}" role="menuitem">
-                <i class="ti ti-shield me-2" aria-hidden="true"></i> Roles &amp; Permissions
+                <i class="ti ti-shield me-2" aria-hidden="true"></i> Roles & Permissions
               </a>
             </li>
 
@@ -450,7 +466,7 @@
             </li>
             {% endif %}
 
-            {% if request.user.is_staff or 'school_config.profile.view' in user_permissions or request.user.is_superuser %}
+            {% if request.user|has_perm:'school_config.profile.view' %}
             <li class="pc-item" role="none">
               <a class="pc-link" href="{% url 'admin:index' %}" role="menuitem">
                 <i class="ti ti-settings me-2" aria-hidden="true"></i> School Settings
@@ -458,7 +474,7 @@
             </li>
             {% endif %}
 
-            {% if request.user.is_staff or 'audit.logs.view' in user_permissions or request.user.is_superuser %}
+            {% if request.user|has_perm:'audit.logs.view' %}
             <li class="pc-item" role="none">
               <a class="pc-link" href="{% url 'admin:audit_auditlog_changelist' %}" role="menuitem">
                 <i class="ti ti-history me-2" aria-hidden="true"></i> Audit Logs
@@ -484,14 +500,12 @@
           </a>
         </li>
 
-        {% if request.user.is_staff %}
         <li class="pc-item" role="none">
-          <a href="{% url 'admin:password_change' %}" class="pc-link" role="menuitem">
+          <a href="{% url 'password-change' %}" class="pc-link" role="menuitem">
             <span class="pc-micon"><i class="ti ti-key" aria-hidden="true"></i></span>
             <span class="pc-mtext">Change Password</span>
           </a>
         </li>
-        {% endif %}
 
         <li class="pc-item" role="none">
           <a href="{% url 'logout' %}" class="pc-link text-danger" role="menuitem">

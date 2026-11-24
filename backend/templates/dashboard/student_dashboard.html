@@ -151,6 +151,7 @@
         </div>
 
         <!-- 4. Fee Balance Due -->
+        {% if can_view_student_finance %}
         <div class="col-6 col-lg-3">
             <div class="card border-0 shadow-sm h-100">
                 <div class="card-body p-3">
@@ -169,6 +170,7 @@
                 </div>
             </div>
         </div>
+        {% endif %}
     </div>
 
     <!-- MAIN TWO COLUMN WORKFLOW AREA -->
@@ -411,6 +413,7 @@
             </div>
 
             <!-- 5. NOTICES & FEE STATUS -->
+            {% if can_view_student_finance %}
             <div class="card border-0 shadow-sm mb-4">
                 <div class="card-header bg-white border-bottom py-3 d-flex align-items-center justify-content-between">
                     <h5 class="card-title mb-0 fw-bold text-dark d-flex align-items-center">
@@ -450,6 +453,7 @@
                     {% endif %}
                 </div>
             </div>
+            {% endif %}
 
             <!-- 6. LIBRARY BOOKS & UPCOMING HOLIDAYS -->
             <div class="card border-0 shadow-sm mb-4">

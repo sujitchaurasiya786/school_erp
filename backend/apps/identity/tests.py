@@ -900,6 +900,53 @@ class RoleSpecificDashboardTests(TestCase):
         self.assertContains(resp_teacher, "Assignment &amp; Grading Queue")
         self.assertContains(resp_teacher, "At-Risk Student Alerts")
         self.assertContains(resp_teacher, "Parent Inquiries &amp; PTM")
+        self.assertNotContains(resp_teacher, "Student Portal")
+
+    def test_teacher_cannot_view_unassigned_students_or_fees(self):
+        from apps.academics.models import SchoolClass, Section
+        from apps.students.models import Student, Guardian, ClassEnrollment
+        from datetime import date
+
+        c8 = SchoolClass.objects.create(name="Class 8_T", code="C8T", order=8)
+        sec_8a = Section.objects.create(school_class=c8, name="A", class_teacher=self.teacher)
+
+        c10 = SchoolClass.objects.create(name="Class 10_T", code="C10T", order=10)
+        sec_10a = Section.objects.create(school_class=c10, name="A")
+
+        g = Guardian.objects.create(first_name="Sunil", last_name="Sharma", phone="9988776655")
+        st_unassigned = Student.objects.create(
+            admission_number="ADM-2026-UNASSIGNED",
+            first_name="Rohan",
+            last_name="Sharma",
+            date_of_birth=date(2011, 2, 2),
+            gender="M",
+            admission_date=date(2026, 4, 1),
+            address="Lucknow",
+            primary_guardian=g
+        )
+        ClassEnrollment.objects.create(
+            student=st_unassigned,
+            academic_year=self.year,
+            class_name="Class 10_T",
+            section_name="A",
+            roll_number=101
+        )
+
+        self.client.login(username="teacher_dash_user", password="TestPass@999")
+
+        # 1. Teacher cannot see Student Portal in their sidebar
+        resp_t = self.client.get("/dashboard/teacher/")
+        self.assertNotContains(resp_t, "Student Portal")
+
+        # 2. If teacher visits student dashboard trying to filter an unassigned student, access is blocked
+        resp_unassigned = self.client.get(f"/dashboard/student/?admission_number={st_unassigned.admission_number}", follow=True)
+        self.assertContains(resp_unassigned, "Teachers can only view students enrolled in their assigned classes")
+        self.assertNotContains(resp_unassigned, "Rohan Sharma")
+
+        # 3. Fees and invoices are completely hidden from teacher
+        self.assertNotContains(resp_unassigned, "Fee Account &amp; Invoices")
+        self.assertNotContains(resp_unassigned, "Fee Dues")
+
 
     def test_student_dashboard_redirect_and_view(self):
         from apps.students.models import Student, Guardian, ClassEnrollment
@@ -979,6 +1026,42 @@ class RoleSpecificDashboardTests(TestCase):
         resp_adm = self.client.get("/dashboard/student/?admission_number=ADM-2026-9002")
         self.assertEqual(resp_adm.status_code, 200)
         self.assertContains(resp_adm, "Aman Verma")
+
+    def test_strictly_approved_actions_only_on_dashboard(self):
+        """
+        Verify that a user with only Admissions permission sees ONLY admissions-related
+        metrics and approved actions, and does NOT see RBAC, student directory, staff, or academics.
+        """
+        adm_user = make_user("admissions_clerk", user_type=UserType.STAFF)
+        perm_view = make_permission("admissions.application.view", module="admissions", action="view")
+        perm_add = make_permission("admissions.application.add", module="admissions", action="add")
+
+        adm_role = make_role("ADMISSIONS_OFFICER", "Admissions Officer", permissions=[perm_view, perm_add])
+        UserRoleAssignment.objects.create(
+            user=adm_user,
+            role=adm_role,
+            scope_type=ScopeType.GLOBAL,
+            is_active=True
+        )
+
+        self.client.login(username="admissions_clerk", password="TestPass@999")
+        resp = self.client.get("/")
+        self.assertEqual(resp.status_code, 200)
+
+        # 1. Approved actions and metrics must be present
+        self.assertContains(resp, "Admissions")
+        self.assertContains(resp, "Approved Actions")
+        self.assertContains(resp, "Recent Admission Applications")
+
+        # 2. Unauthorized items must NOT be present on the dashboard
+        self.assertNotContains(resp, "Configured Roles")
+        self.assertNotContains(resp, "Create Dynamic Role")
+        self.assertNotContains(resp, "Permissions Explorer")
+        self.assertNotContains(resp, "User Directory")
+        self.assertNotContains(resp, "Recent User Accounts")
+        self.assertNotContains(resp, "Active Students")
+        self.assertNotContains(resp, "Staff &amp; Teachers")
+
 
 
 
