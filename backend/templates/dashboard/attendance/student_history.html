@@ -1,0 +1,105 @@
+{% extends 'dashboard/base.html' %}
+
+{% block admin %}
+<div class="container-fluid px-0">
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
+        <div>
+            <h3 class="fw-bold mb-1 text-dark">Student Attendance History</h3>
+            <p class="text-muted mb-0 small">Chronological attendance records across academic years and class promotions.</p>
+        </div>
+        {% if request.user.user_type != 'STUDENT' or request.user.is_superuser %}
+        <a href="{% url 'attendance-reports' %}" class="btn btn-outline-secondary btn-sm shadow-sm">
+            <i class="ti ti-arrow-left me-1"></i> Back to Reports
+        </a>
+        {% endif %}
+    </div>
+
+    {% if request.user.user_type != 'STUDENT' or request.user.is_superuser %}
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body p-3">
+            <form method="GET" class="row g-2 align-items-end">
+                <div class="col-md-4">
+                    <label class="form-label small fw-semibold text-muted">Admission Number</label>
+                    <input type="text" name="admission_number" class="form-control form-control-sm" value="{{ admission_number_query|default:student.admission_number|default:'' }}" placeholder="e.g. ADM-2026-0001">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small fw-semibold text-muted">Academic Session</label>
+                    <select name="year" class="form-select form-select-sm">
+                        <option value="">All Academic Years</option>
+                        {% for ay in academic_years %}
+                        <option value="{{ ay.pk }}" {% if selected_year_id == ay.pk|stringformat:"s" %}selected{% endif %}>{{ ay.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <button type="submit" class="btn btn-primary btn-sm w-100">Lookup History</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if history_data %}
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body p-4">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-3">
+                <div>
+                    <h5 class="fw-bold mb-0">{{ history_data.student_name }}</h5>
+                    <small class="text-muted font-monospace">{{ history_data.admission_number }}</small>
+                </div>
+                <div class="d-flex flex-wrap gap-2">
+                    <span class="badge bg-primary-subtle text-primary px-3 py-2">Attendance: {{ history_data.summary.percentage }}%</span>
+                    <span class="badge bg-success-subtle text-success px-3 py-2">Present: {{ history_data.summary.present }}</span>
+                    <span class="badge bg-danger-subtle text-danger px-3 py-2">Absent: {{ history_data.summary.absent }}</span>
+                    <span class="badge bg-warning-subtle text-warning px-3 py-2">Half Day: {{ history_data.summary.half_day }}</span>
+                    <span class="badge bg-info-subtle text-info px-3 py-2">Leave: {{ history_data.summary.leave }}</span>
+                </div>
+            </div>
+
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light small text-uppercase text-muted">
+                        <tr>
+                            <th>Date</th>
+                            <th>Academic Year</th>
+                            <th>Class &amp; Section</th>
+                            <th>Roll No</th>
+                            <th>Status</th>
+                            <th>Remarks</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for rec in history_data.records %}
+                        <tr>
+                            <td class="fw-semibold">{{ rec.date }}</td>
+                            <td>{{ rec.academic_year }}</td>
+                            <td>{{ rec.class_name }} - {{ rec.section_name }}</td>
+                            <td>{{ rec.roll_number|default:"-" }}</td>
+                            <td>
+                                {% if rec.status == 'PRESENT' %}
+                                    <span class="badge bg-success-subtle text-success">Present</span>
+                                {% elif rec.status == 'ABSENT' %}
+                                    <span class="badge bg-danger-subtle text-danger">Absent</span>
+                                {% elif rec.status == 'HALF_DAY' %}
+                                    <span class="badge bg-warning-subtle text-warning">Half Day</span>
+                                {% elif rec.status == 'LATE' %}
+                                    <span class="badge bg-secondary-subtle text-secondary">Late</span>
+                                {% else %}
+                                    <span class="badge bg-info-subtle text-info">{{ rec.status }}</span>
+                                {% endif %}
+                            </td>
+                            <td class="small text-muted">{{ rec.remarks|default:"-" }}</td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="6" class="text-center py-4 text-muted">No attendance records found.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

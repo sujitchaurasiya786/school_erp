@@ -10,6 +10,7 @@ from apps.attendance.web_views import (
     staff_attendance_view,
     attendance_reports_view,
     self_attendance_view,
+    student_history_view,
 )
 
 urlpatterns = [
@@ -17,6 +18,8 @@ urlpatterns = [
     path('self-mark/', self_attendance_view, name='attendance-self-mark'),
     path('staff/', staff_attendance_view, name='attendance-staff'),
     path('reports/', attendance_reports_view, name='attendance-reports'),
+    path('history/', student_history_view, name='attendance-student-history'),
+    path('history/<int:student_id>/', student_history_view, name='attendance-student-history-detail'),
     path('corrections/', attendance_corrections_view, name='attendance-corrections'),
     path('calendar/', attendance_calendar_view, name='attendance-calendar'),
     path('holidays/', holidays_list_view, name='attendance-holidays'),

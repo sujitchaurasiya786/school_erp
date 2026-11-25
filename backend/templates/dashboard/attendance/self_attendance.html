@@ -143,6 +143,16 @@
                             <textarea name="exception_reason" id="exception_reason" class="form-control shadow-sm" rows="2" placeholder="e.g. Official school field duty, traffic congestion, illness..."></textarea>
                         </div>
 
+                        <!-- Privacy & Consent Notice -->
+                        {% if status_data.can_check_in or status_data.can_check_out %}
+                        <div class="form-check bg-light p-2 px-3 rounded border mb-3 small">
+                            <input class="form-check-input ms-0 me-2" type="checkbox" id="privacyConsentCheck" required>
+                            <label class="form-check-label text-muted" for="privacyConsentCheck">
+                                I consent to sharing my current GPS location and live verification photo strictly for school attendance verification.
+                            </label>
+                        </div>
+                        {% endif %}
+
                         <!-- Punch Action Buttons -->
                         <div class="d-grid gap-2">
                             {% if status_data.can_check_in %}

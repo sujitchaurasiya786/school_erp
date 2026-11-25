@@ -6,16 +6,16 @@ from rest_framework.permissions import IsAuthenticated
 from django.core.exceptions import ValidationError as DjangoValidationError
 
 from apps.attendance.models import (
-    Holiday, WorkingDayConfig, SpecialDayOverride,
+    Holiday, WorkingDayConfig, SpecialDayOverride, AttendanceSession,
     StudentDailyAttendance, AttendanceCorrectionRequest, WEEKDAY_CHOICES
 )
 from apps.attendance.serializers import (
     HolidaySerializer, VacationBreakSerializer,
     WorkingDayConfigSerializer, SpecialDayOverrideSerializer,
-    DayStatusSerializer,
+    DayStatusSerializer, AttendanceSessionSerializer,
     StudentDailyAttendanceSerializer, AttendanceCorrectionRequestSerializer
 )
-from apps.attendance.services import CalendarService, StudentDailyAttendanceService
+from apps.attendance.services import CalendarService, StudentDailyAttendanceService, AttendanceReportService
 from apps.audit.models import AuditAction
 from apps.audit.services import AuditService
 from apps.rbac.permissions import HasDynamicPermission
@@ -402,7 +402,7 @@ class CalendarResolutionViewSet(viewsets.ViewSet):
 
 
 class StudentDailyAttendanceViewSet(viewsets.ModelViewSet):
-    queryset = StudentDailyAttendance.objects.select_related('student', 'academic_year').all()
+    queryset = StudentDailyAttendance.objects.select_related('student', 'academic_year', 'session', 'enrollment').all()
     serializer_class = StudentDailyAttendanceSerializer
     permission_classes = [IsAuthenticated, HasDynamicPermission]
     module_name = 'attendance'
@@ -410,18 +410,25 @@ class StudentDailyAttendanceViewSet(viewsets.ModelViewSet):
         'list': 'attendance.record.view',
         'retrieve': 'attendance.record.view',
         'roster': 'attendance.record.view',
+        'daily_report': 'attendance.record.view',
+        'monthly_report': 'attendance.record.view',
+        'student_history': 'attendance.record.view',
+        'class_summary': 'attendance.record.view',
         'create': 'attendance.record.mark',
         'update': 'attendance.record.mark',
         'partial_update': 'attendance.record.mark',
         'destroy': 'attendance.record.mark',
         'mark_bulk': 'attendance.record.mark',
+        'save_draft': 'attendance.record.mark',
+        'submit': 'attendance.record.mark',
     }
     filterset_fields = ['class_name', 'section_name', 'date', 'status', 'academic_year']
 
     @action(detail=False, methods=['get'])
     def roster(self, request):
         """
-        Retrieves section roster with attendance for an academic year, class, section, date.
+        Retrieves section roster with attendance, session lock status, student photos,
+        and running attendance % for an academic year, class, section, and date.
         """
         ay_id = request.query_params.get('academic_year')
         class_name = request.query_params.get('class_name')
@@ -431,7 +438,6 @@ class StudentDailyAttendanceViewSet(viewsets.ModelViewSet):
         if not class_name or not section_name:
             return Response({'error': "class_name and section_name are required."}, status=status.HTTP_400_BAD_REQUEST)
 
-        current_ay = None
         if ay_id:
             try:
                 current_ay = AcademicYear.objects.get(pk=ay_id)
@@ -458,11 +464,15 @@ class StudentDailyAttendanceViewSet(viewsets.ModelViewSet):
 
         roster_data = []
         for r in data['roster']:
+            std = r['student']
+            photo_url = std.photo.url if std.photo else None
             roster_data.append({
-                'student_id': r['student'].id,
-                'admission_number': r['student'].admission_number,
-                'name': r['student'].full_name,
+                'student_id': std.id,
+                'admission_number': std.admission_number,
+                'name': std.full_name,
                 'roll_number': r['roll_number'],
+                'photo_url': photo_url,
+                'attendance_percentage': r['attendance_percentage'],
                 'status': r['current_status'],
                 'remarks': r['remarks'],
                 'attendance_id': r['attendance'].id if r['attendance'] else None,
@@ -470,6 +480,7 @@ class StudentDailyAttendanceViewSet(viewsets.ModelViewSet):
                 'pending_correction_id': r['pending_correction'].id if r['pending_correction'] else None,
             })
 
+        session_obj = data.get('session')
         return Response({
             'academic_year': current_ay.id,
             'academic_year_name': current_ay.name,
@@ -480,19 +491,31 @@ class StudentDailyAttendanceViewSet(viewsets.ModelViewSet):
             'calendar_reason': data['calendar_status'].get('reason'),
             'calendar_type': data['calendar_status'].get('type'),
             'is_already_marked': data['is_already_marked'],
+            'session_id': session_obj.id if session_obj else None,
+            'session_status': data['session_status'],
+            'is_locked': data['is_locked'],
+            'submitted_at': session_obj.submitted_at.isoformat() if (session_obj and session_obj.submitted_at) else None,
+            'submitted_by': (session_obj.submitted_by.get_full_name() or session_obj.submitted_by.username) if (session_obj and session_obj.submitted_by) else None,
+            'allow_late_status': data['allow_late_status'],
+            'shortage_threshold': data['shortage_threshold'],
             'counts': data['counts'],
             'roster': roster_data
         })
 
     def perform_create(self, serializer):
         data = serializer.validated_data
+        class_name = data.get('class_name', '')
+        section_name = data.get('section_name', '')
+        if not self.request.user.is_superuser and not StudentDailyAttendanceService.validate_user_attendance_scope(self.request.user, class_name, section_name):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("You are not authorized to mark attendance for this section.")
         try:
             record = StudentDailyAttendanceService.mark_attendance(
                 student_id=data['student'].pk,
                 academic_year_id=data['academic_year'].pk,
                 attendance_date=data['date'],
-                class_name=data.get('class_name', ''),
-                section_name=data.get('section_name', ''),
+                class_name=class_name,
+                section_name=section_name,
                 status=data.get('status'),
                 remarks=data.get('remarks', ''),
                 actor=self.request.user,
@@ -501,27 +524,202 @@ class StudentDailyAttendanceViewSet(viewsets.ModelViewSet):
             serializer.instance = record
         except DjangoValidationError as err:
             raise drf_serializers.ValidationError(err.message_dict if hasattr(err, 'message_dict') else err.messages)
+        except BusinessConflictError as err:
+            raise drf_serializers.ValidationError({'detail': str(err)})
+
+    def perform_update(self, serializer):
+        instance = self.get_object()
+        if instance.session and instance.session.is_locked:
+            raise drf_serializers.ValidationError({'detail': "Submitted attendance is locked and cannot be edited directly. Submit a correction request instead."})
+        if not self.request.user.is_superuser and not StudentDailyAttendanceService.validate_user_attendance_scope(self.request.user, instance.class_name, instance.section_name):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("You are not authorized to edit attendance for this section.")
+        data = serializer.validated_data
+        try:
+            record = StudentDailyAttendanceService.mark_attendance(
+                student_id=instance.student_id,
+                academic_year_id=instance.academic_year_id,
+                attendance_date=instance.date,
+                class_name=instance.class_name,
+                section_name=instance.section_name,
+                status=data.get('status', instance.status),
+                remarks=data.get('remarks', instance.remarks),
+                actor=self.request.user,
+                request=self.request
+            )
+            serializer.instance = record
+        except (DjangoValidationError, BusinessConflictError) as err:
+            raise drf_serializers.ValidationError(str(err))
+
+    def perform_destroy(self, instance):
+        if instance.session and instance.session.is_locked:
+            raise drf_serializers.ValidationError({'detail': "Submitted attendance is locked and cannot be deleted."})
+        instance.delete()
+
+    def _authorize_bulk_records(self, request, records):
+        if not isinstance(records, list) or not isinstance(records[0], dict):
+            return Response({'error': "records must be a non-empty list of objects."}, status=status.HTTP_400_BAD_REQUEST)
+        first = records[0]
+        class_name = first.get('class_name', '')
+        section_name = first.get('section_name', '')
+        if not request.user.is_superuser and not StudentDailyAttendanceService.validate_user_attendance_scope(request.user, class_name, section_name):
+            return Response({'error': "You are not authorized to mark attendance for this section."}, status=status.HTTP_403_FORBIDDEN)
+        return None
 
     @action(detail=False, methods=['post'])
     def mark_bulk(self, request):
         """
-        Mark attendance for an entire class/section in bulk with calendar validation.
+        Mark attendance for an entire class/section in bulk with calendar validation & session locking.
         """
         records = request.data.get('records', [])
         if not records:
             return Response({'error': 'No records provided.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        denied = self._authorize_bulk_records(request, records)
+        if denied:
+            return denied
+
+        submit_flag = bool(request.data.get('submit', False))
         try:
             created_ids = StudentDailyAttendanceService.mark_bulk_attendance(
                 records=records,
                 actor=request.user,
-                request=request
+                request=request,
+                submit=submit_flag
             )
-            return Response({'status': 'success', 'updated_count': len(created_ids), 'ids': created_ids})
+            return Response({
+                'status': 'success',
+                'session_status': 'SUBMITTED' if submit_flag else 'DRAFT',
+                'is_locked': submit_flag,
+                'updated_count': len(created_ids),
+                'ids': created_ids
+            })
         except DjangoValidationError as err:
             raise drf_serializers.ValidationError(err.message_dict if hasattr(err, 'message_dict') else err.messages)
+        except BusinessConflictError as err:
+            return Response({'error': str(err)}, status=status.HTTP_409_CONFLICT)
         except ResourceNotFoundError as err:
             return Response({'error': str(err)}, status=status.HTTP_404_NOT_FOUND)
+
+    @action(detail=False, methods=['post'], url_path='save-draft')
+    def save_draft(self, request):
+        """Saves daily attendance as an editable DRAFT session."""
+        records = request.data.get('records', [])
+        if not records:
+            return Response({'error': 'No records provided.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        denied = self._authorize_bulk_records(request, records)
+        if denied:
+            return denied
+
+        try:
+            created_ids = StudentDailyAttendanceService.mark_bulk_attendance(
+                records=records,
+                actor=request.user,
+                request=request,
+                submit=False
+            )
+            return Response({'status': 'success', 'session_status': 'DRAFT', 'is_locked': False, 'updated_count': len(created_ids)})
+        except DjangoValidationError as err:
+            raise drf_serializers.ValidationError(err.message_dict if hasattr(err, 'message_dict') else err.messages)
+        except BusinessConflictError as err:
+            return Response({'error': str(err)}, status=status.HTTP_409_CONFLICT)
+        except ResourceNotFoundError as err:
+            return Response({'error': str(err)}, status=status.HTTP_404_NOT_FOUND)
+
+    @action(detail=False, methods=['post'], url_path='submit')
+    def submit(self, request):
+        """Finalizes and locks an AttendanceSession (Draft -> Submitted)."""
+        ay_id = request.data.get('academic_year_id')
+        class_name = request.data.get('class_name')
+        section_name = request.data.get('section_name')
+        att_date = request.data.get('date')
+        records = request.data.get('records')
+
+        if not (ay_id and class_name and section_name and att_date):
+            return Response({'error': "academic_year_id, class_name, section_name, and date are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not request.user.is_superuser and not StudentDailyAttendanceService.validate_user_attendance_scope(request.user, class_name, section_name):
+            return Response({'error': "You are not authorized to submit attendance for this section."}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            session = StudentDailyAttendanceService.submit_session(
+                academic_year_id=ay_id,
+                class_name=class_name,
+                section_name=section_name,
+                attendance_date=att_date,
+                records=records,
+                actor=request.user,
+                request=request
+            )
+            return Response({
+                'status': 'success',
+                'session_id': session.id,
+                'session_status': session.status,
+                'is_locked': session.is_locked,
+                'submitted_at': session.submitted_at.isoformat() if session.submitted_at else None,
+            })
+        except DjangoValidationError as err:
+            raise drf_serializers.ValidationError(err.message_dict if hasattr(err, 'message_dict') else err.messages)
+        except BusinessConflictError as err:
+            return Response({'error': str(err)}, status=status.HTTP_409_CONFLICT)
+        except ResourceNotFoundError as err:
+            return Response({'error': str(err)}, status=status.HTTP_404_NOT_FOUND)
+
+    @action(detail=False, methods=['get'], url_path='daily-report')
+    def daily_report(self, request):
+        ay_id = request.query_params.get('academic_year')
+        target_date = request.query_params.get('date', str(date.today()))
+        class_name = request.query_params.get('class_name')
+        section_name = request.query_params.get('section_name')
+        ay = AcademicYear.objects.filter(pk=ay_id).first() if ay_id else AcademicYear.objects.filter(is_current=True).first()
+        if not ay:
+            return Response({'error': "Academic year not found."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(AttendanceReportService.get_daily_class_report(ay, target_date, class_name, section_name))
+
+    @action(detail=False, methods=['get'], url_path='monthly-report')
+    def monthly_report(self, request):
+        ay_id = request.query_params.get('academic_year')
+        class_name = request.query_params.get('class_name')
+        section_name = request.query_params.get('section_name')
+        year = request.query_params.get('year', date.today().year)
+        month = request.query_params.get('month', date.today().month)
+        if not (class_name and section_name):
+            return Response({'error': "class_name and section_name are required."}, status=status.HTTP_400_BAD_REQUEST)
+        ay = AcademicYear.objects.filter(pk=ay_id).first() if ay_id else AcademicYear.objects.filter(is_current=True).first()
+        if not ay:
+            return Response({'error': "Academic year not found."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(AttendanceReportService.get_monthly_attendance_report(ay, class_name, section_name, year, month))
+
+    @action(detail=False, methods=['get'], url_path='student-history')
+    def student_history(self, request):
+        from apps.students.models import Student
+        student_id = request.query_params.get('student_id')
+        ay_id = request.query_params.get('academic_year')
+
+        # Students can only view their own attendance history
+        if request.user.user_type == 'STUDENT' and not request.user.is_superuser:
+            student = getattr(request.user, 'student_profile', None)
+            if not student or (student_id and str(student.id) != str(student_id)):
+                return Response({'error': "Students may only view their own attendance history."}, status=status.HTTP_403_FORBIDDEN)
+        else:
+            if not student_id:
+                return Response({'error': "student_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+            student = Student.objects.filter(pk=student_id).first()
+            if not student:
+                return Response({'error': "Student not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        return Response(AttendanceReportService.get_student_attendance_history(student, academic_year=ay_id))
+
+    @action(detail=False, methods=['get'], url_path='class-summary')
+    def class_summary(self, request):
+        ay_id = request.query_params.get('academic_year')
+        start_date = request.query_params.get('start_date', str(date.today().replace(day=1)))
+        end_date = request.query_params.get('end_date', str(date.today()))
+        ay = AcademicYear.objects.filter(pk=ay_id).first() if ay_id else AcademicYear.objects.filter(is_current=True).first()
+        if not ay:
+            return Response({'error': "Academic year not found."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(AttendanceReportService.get_class_wise_summary(ay, start_date, end_date))
 
 
 class AttendanceCorrectionRequestViewSet(viewsets.ModelViewSet):

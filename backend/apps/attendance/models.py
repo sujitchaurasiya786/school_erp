@@ -10,6 +10,12 @@ class AttendanceStatus(models.TextChoices):
     ABSENT = 'ABSENT', _('Absent')
     HALF_DAY = 'HALF_DAY', _('Half Day')
     LEAVE = 'LEAVE', _('Approved Leave')
+    LATE = 'LATE', _('Late')
+
+
+class AttendanceSessionStatus(models.TextChoices):
+    DRAFT = 'DRAFT', _('Draft')
+    SUBMITTED = 'SUBMITTED', _('Submitted')
 
 
 class HolidayType(models.TextChoices):
@@ -188,6 +194,16 @@ class WorkingDayConfig(TimeStampedModel):
         help_text=_("Policy governing whether Saturdays are working, off, or alternate (2nd/4th off).")
     )
     notes = models.CharField(max_length=255, blank=True, default='')
+    shortage_threshold = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=75.00,
+        help_text=_("Minimum attendance percentage threshold before shortage alert (default 75%).")
+    )
+    allow_late_status = models.BooleanField(
+        default=False,
+        help_text=_("Allow marking students as LATE in daily attendance.")
+    )
 
     class Meta:
         db_table = 'attendance_working_day_configs'
@@ -268,10 +284,73 @@ class SpecialDayOverride(TimeStampedModel):
                 })
 
 
+class AttendanceSession(TimeStampedModel):
+    """
+    Represents a single daily attendance marking session for an academic year,
+    class, section, and date. Controls the Draft -> Submitted (locked) lifecycle.
+    """
+    academic_year = models.ForeignKey(
+        'school_config.AcademicYear',
+        on_delete=models.PROTECT,
+        related_name='attendance_sessions'
+    )
+    class_name = models.CharField(max_length=50, db_index=True)
+    section_name = models.CharField(max_length=10, db_index=True)
+    date = models.DateField(db_index=True)
+    status = models.CharField(
+        max_length=20,
+        choices=AttendanceSessionStatus.choices,
+        default=AttendanceSessionStatus.DRAFT,
+        db_index=True
+    )
+    marked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_attendance_sessions'
+    )
+    submitted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='submitted_attendance_sessions'
+    )
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    remarks = models.CharField(max_length=255, blank=True, default='')
+
+    class Meta:
+        db_table = 'attendance_sessions'
+        unique_together = ('academic_year', 'class_name', 'section_name', 'date')
+        ordering = ['-date', 'class_name', 'section_name']
+
+    def __str__(self):
+        return f"{self.class_name}-{self.section_name} ({self.date}) [{self.status}]"
+
+    @property
+    def is_locked(self):
+        return self.status == AttendanceSessionStatus.SUBMITTED
+
+
 class StudentDailyAttendance(TimeStampedModel):
     """
     Daily attendance per student per date. One record per student per day.
     """
+    session = models.ForeignKey(
+        AttendanceSession,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='records'
+    )
+    enrollment = models.ForeignKey(
+        'students.ClassEnrollment',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='daily_attendances'
+    )
     student = models.ForeignKey(
         'students.Student',
         on_delete=models.CASCADE,

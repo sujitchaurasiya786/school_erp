@@ -4,7 +4,7 @@ from django.utils.translation import gettext_lazy as _
 
 from apps.attendance.models import (
     Holiday, HolidayType, SaturdayRule, OverrideType,
-    WorkingDayConfig, SpecialDayOverride,
+    WorkingDayConfig, SpecialDayOverride, AttendanceSession,
     StudentDailyAttendance, AttendanceCorrectionRequest,
     WEEKDAY_CHOICES
 )
@@ -70,7 +70,7 @@ class WorkingDayConfigSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'academic_year', 'academic_year_name',
             'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'sunday',
-            'saturday_rule', 'saturday_rule_display', 'notes',
+            'saturday_rule', 'saturday_rule_display', 'shortage_threshold', 'allow_late_status', 'notes',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
@@ -113,6 +113,21 @@ class DayStatusSerializer(serializers.Serializer):
     timetable_weekday_display = serializers.CharField(allow_null=True)
 
 
+class AttendanceSessionSerializer(serializers.ModelSerializer):
+    academic_year_name = serializers.ReadOnlyField(source='academic_year.name')
+    marked_by_name = serializers.ReadOnlyField(source='marked_by.get_full_name')
+    submitted_by_name = serializers.ReadOnlyField(source='submitted_by.get_full_name')
+
+    class Meta:
+        model = AttendanceSession
+        fields = [
+            'id', 'academic_year', 'academic_year_name', 'class_name', 'section_name',
+            'date', 'status', 'marked_by', 'marked_by_name',
+            'submitted_by', 'submitted_by_name', 'submitted_at', 'remarks'
+        ]
+        read_only_fields = ['id', 'marked_by', 'submitted_by', 'submitted_at']
+
+
 class StudentDailyAttendanceSerializer(serializers.ModelSerializer):
     student_name = serializers.ReadOnlyField(source='student.full_name')
     admission_number = serializers.ReadOnlyField(source='student.admission_number')
@@ -121,10 +136,11 @@ class StudentDailyAttendanceSerializer(serializers.ModelSerializer):
     class Meta:
         model = StudentDailyAttendance
         fields = [
-            'id', 'student', 'student_name', 'admission_number', 'academic_year', 'academic_year_name',
+            'id', 'session', 'enrollment', 'student', 'student_name', 'admission_number',
+            'academic_year', 'academic_year_name',
             'class_name', 'section_name', 'date', 'status', 'remarks', 'marked_by'
         ]
-        read_only_fields = ['id', 'marked_by']
+        read_only_fields = ['id', 'session', 'enrollment', 'marked_by']
 
 
 class AttendanceCorrectionRequestSerializer(serializers.ModelSerializer):

@@ -9,6 +9,9 @@
             <p class="text-muted mb-0 small">Section-wise attendance percentage, shortage alerts (&lt;75%), and comprehensive exports.</p>
         </div>
         <div class="d-flex align-items-center gap-2">
+            <a href="{% url 'attendance-student-history' %}" class="btn btn-outline-primary btn-sm shadow-sm">
+                <i class="ti ti-history me-1"></i> Student History
+            </a>
             <a href="{% url 'attendance-daily' %}" class="btn btn-outline-secondary btn-sm shadow-sm">
                 <i class="ti ti-checklist me-1"></i> Student Attendance
             </a>
@@ -41,7 +44,17 @@
                 </li>
                 <li class="nav-item">
                     <a class="nav-link {% if report_type == 'shortage_alert' %}active{% endif %} py-1 px-3" href="?report_type=shortage_alert">
-                        <i class="ti ti-alert-triangle me-1"></i> Shortage Alert (&lt;75%)
+                        <i class="ti ti-alert-triangle me-1"></i> Shortage Alert (&lt;{{ threshold }}%)
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link {% if report_type == 'daily_absent' %}active{% endif %} py-1 px-3" href="?report_type=daily_absent">
+                        <i class="ti ti-user-x me-1"></i> Daily Absent List
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link {% if report_type == 'class_wise' %}active{% endif %} py-1 px-3" href="?report_type=class_wise">
+                        <i class="ti ti-school me-1"></i> Class-wise Summary
                     </a>
                 </li>
                 <li class="nav-item">
@@ -219,7 +232,78 @@
             </div>
 
             <div class="card-body p-0">
-                {% if report_data.rows %}
+                {% if report_type == 'daily_absent' and report_data %}
+                <div class="p-3 bg-light border-bottom d-flex flex-wrap gap-3 small">
+                    <span>Date: <strong>{{ report_data.date }}</strong></span>
+                    <span>Total Marked: <strong>{{ report_data.summary.total_marked }}</strong></span>
+                    <span class="text-success">Present: <strong>{{ report_data.summary.present }}</strong></span>
+                    <span class="text-danger">Absent: <strong>{{ report_data.summary.absent }}</strong></span>
+                    <span class="text-warning">Half Day: <strong>{{ report_data.summary.half_day }}</strong></span>
+                    <span class="text-info">Leave: <strong>{{ report_data.summary.leave }}</strong></span>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light text-muted small text-uppercase">
+                            <tr>
+                                <th class="ps-3">Class - Section</th>
+                                <th>Roll No</th>
+                                <th>Adm No</th>
+                                <th>Student Name</th>
+                                <th>Remarks</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for r in report_data.absent_students %}
+                            <tr>
+                                <td class="ps-3 fw-semibold">{{ r.class_name }} - {{ r.section_name }}</td>
+                                <td>{{ r.roll_number|default:"-" }}</td>
+                                <td><span class="badge bg-light text-dark border font-monospace">{{ r.admission_number }}</span></td>
+                                <td><a href="{% url 'attendance-student-history-detail' r.student_id %}" class="fw-semibold text-primary text-decoration-none">{{ r.name }}</a></td>
+                                <td class="small text-muted">{{ r.remarks|default:"-" }}</td>
+                            </tr>
+                            {% empty %}
+                            <tr><td colspan="5" class="text-center py-4 text-muted">No absent students recorded for this date.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% elif report_type == 'class_wise' and report_data %}
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light text-muted small text-uppercase">
+                            <tr>
+                                <th class="ps-3">Class</th>
+                                <th>Section</th>
+                                <th class="text-center">Total Students</th>
+                                <th>Average Attendance %</th>
+                                <th class="text-end pe-3">Shortage Count</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for s in report_data.sections %}
+                            <tr>
+                                <td class="ps-3 fw-bold">{{ s.class_name }}</td>
+                                <td>Section {{ s.section_name }}</td>
+                                <td class="text-center">{{ s.total_students }}</td>
+                                <td>
+                                    <div class="d-flex align-items-center gap-2">
+                                        <div class="progress flex-grow-1" style="height: 8px; max-width: 180px;">
+                                            <div class="progress-bar {% if s.average_percentage >= 75 %}bg-success{% else %}bg-warning{% endif %}" style="width: {{ s.average_percentage }}%;"></div>
+                                        </div>
+                                        <span class="fw-bold small">{{ s.average_percentage }}%</span>
+                                    </div>
+                                </td>
+                                <td class="text-end pe-3">
+                                    <span class="badge {% if s.shortage_count %}bg-danger-subtle text-danger{% else %}bg-success-subtle text-success{% endif %}">{{ s.shortage_count }}</span>
+                                </td>
+                            </tr>
+                            {% empty %}
+                            <tr><td colspan="5" class="text-center py-4 text-muted">No enrolled sections found for this academic year.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% elif report_data.rows %}
                 <div class="table-responsive">
                     <table class="table table-hover align-middle mb-0">
                         <thead class="table-light text-muted small text-uppercase">
@@ -256,7 +340,7 @@
                                     <span class="badge bg-light text-dark border font-monospace">{{ r.admission_number }}</span>
                                 </td>
                                 <td>
-                                    <div class="fw-semibold text-dark">{{ r.name }}</div>
+                                    <a href="{% url 'attendance-student-history-detail' r.student.pk %}" class="fw-semibold text-primary text-decoration-none">{{ r.name }}</a>
                                 </td>
                                 <td class="text-center fw-semibold text-success">{{ r.present_days }}</td>
                                 <td class="text-center fw-semibold text-warning">{{ r.half_days }}</td>

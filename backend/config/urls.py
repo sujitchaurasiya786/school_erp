@@ -58,6 +58,7 @@ api_v1_patterns = [
 ]
 
 from config.views import dashboard_view, teacher_dashboard_view, student_dashboard_view
+from common.media_views import serve_private_media
 from apps.identity.auth_views import login_view, logout_view, password_change_view
 from apps.rbac.web_views import users_list_view
 
@@ -76,8 +77,8 @@ urlpatterns = [
     path('dashboard/students/', include('apps.students.web_urls')),
     path('dashboard/users/', users_list_view, name='identity-users-direct'),
     path('api/v1/', include(api_v1_patterns)),
+    path('media/<path:file_path>', serve_private_media, name='private-media'),
 ]
 
 if settings.DEBUG:
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
     urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)

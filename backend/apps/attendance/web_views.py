@@ -259,6 +259,13 @@ def attendance_calendar_view(request):
             config.sunday = request.POST.get('sunday') == 'on'
             config.saturday_rule = request.POST.get('saturday_rule', SaturdayRule.ALL_WORKING)
             config.notes = request.POST.get('notes', '').strip()
+            threshold_val = request.POST.get('shortage_threshold', '').strip()
+            if threshold_val:
+                try:
+                    config.shortage_threshold = float(threshold_val)
+                except ValueError:
+                    pass
+            config.allow_late_status = request.POST.get('allow_late_status') == 'on'
 
             try:
                 config.clean()
@@ -608,7 +615,7 @@ def daily_attendance_view(request):
     if request.method == 'POST':
         action = request.POST.get('action')
 
-        if action == 'save_attendance':
+        if action in ('save_attendance', 'save_draft', 'submit_attendance'):
             if not can_mark:
                 messages.error(request, "You do not have permission to mark attendance.")
                 return redirect(request.get_full_path())
@@ -642,13 +649,18 @@ def daily_attendance_view(request):
                     'remarks': remarks_val
                 })
 
+            is_submit = (action == 'submit_attendance')
             try:
                 saved_ids = StudentDailyAttendanceService.mark_bulk_attendance(
                     records=records_to_save,
                     actor=request.user,
-                    request=request
+                    request=request,
+                    submit=is_submit
                 )
-                messages.success(request, f"Attendance saved successfully for {len(saved_ids)} students.")
+                if is_submit:
+                    messages.success(request, f"Attendance submitted and locked for {len(saved_ids)} students.")
+                else:
+                    messages.success(request, f"Attendance draft saved for {len(saved_ids)} students.")
             except (ValidationError, BusinessConflictError) as err:
                 messages.error(request, f"Failed to save attendance: {err}")
             except Exception as ex:
@@ -694,6 +706,23 @@ def daily_attendance_view(request):
                 target_date=selected_date
             )
 
+    import json
+    react_classes = []
+    for cl in classes.prefetch_related('sections'):
+        secs = [{'id': s.pk, 'name': s.name} for s in cl.sections.filter(is_active=True).order_by('name')]
+        react_classes.append({'id': cl.pk, 'name': cl.name, 'sections': secs})
+
+    react_config = {
+        'academic_years': [{'id': ay.pk, 'name': ay.name, 'is_current': ay.is_current} for ay in academic_years],
+        'classes': react_classes,
+        'selected_year_id': selected_year.pk if selected_year else None,
+        'selected_class_id': selected_class.pk if selected_class else None,
+        'selected_section_name': selected_section_name,
+        'selected_date': selected_date_str,
+        'can_mark': bool(can_mark),
+        'can_correct': bool(can_correct),
+    }
+
     context = {
         'academic_years': academic_years,
         'selected_year': selected_year,
@@ -709,6 +738,7 @@ def daily_attendance_view(request):
         'calendar_status': calendar_status,
         'roster_data': roster_data,
         'attendance_statuses': AttendanceStatus.choices,
+        'react_config_json': json.dumps(react_config),
     }
     return render(request, 'dashboard/attendance/daily_attendance.html', context)
 
@@ -1021,10 +1051,11 @@ def attendance_reports_view(request):
         end_date_str = end_date.isoformat()
 
     report_type = request.GET.get('report_type', 'student_summary')
+    default_threshold = StudentDailyAttendanceService.get_rule_config(selected_year)['shortage_threshold'] if selected_year else 75.0
     try:
-        threshold = float(request.GET.get('threshold', 75.0))
+        threshold = float(request.GET.get('threshold', default_threshold))
     except ValueError:
-        threshold = 75.0
+        threshold = default_threshold
 
     report_data = None
     export_format = request.GET.get('export')
@@ -1043,7 +1074,7 @@ def attendance_reports_view(request):
         report_data = summary
 
         if export_format == 'csv' and can_export:
-            headers = ['Roll No', 'Admission No', 'Student Name', 'Present Days', 'Half Days', 'Absent Days', 'Leave Days', 'Effective Days', 'Total Working Days', 'Percentage (%)', 'Shortage Alert']
+            headers = ['Roll No', 'Admission No', 'Student Name', 'Present Days', 'Late Days', 'Half Days', 'Absent Days', 'Leave Days', 'Effective Days', 'Total Working Days', 'Percentage (%)', 'Shortage Alert']
             csv_rows = []
             for r in report_data['rows']:
                 csv_rows.append([
@@ -1051,16 +1082,46 @@ def attendance_reports_view(request):
                     r['admission_number'],
                     r['name'],
                     r['present_days'],
+                    r.get('late_days', 0),
                     r['half_days'],
                     r['absent_days'],
                     r['leave_days'],
                     r['effective_attendance'],
                     r['total_working_days'],
                     f"{r['percentage']}%",
-                    'YES (<75%)' if r['is_shortage'] else 'NO'
+                    f'YES (<{threshold}%)' if r['is_shortage'] else 'NO'
                 ])
             fname = f"Attendance_Report_{selected_class.name}_{selected_section_name}_{start_date_str}_to_{end_date_str}.csv"
             return AttendanceReportService.export_csv(fname, headers, csv_rows)
+
+    elif report_type == 'daily_absent' and selected_year:
+        report_data = AttendanceReportService.get_daily_class_report(
+            academic_year=selected_year,
+            target_date=end_date,
+            class_name=selected_class.name if selected_class else None,
+            section_name=selected_section_name or None
+        )
+        if export_format == 'csv' and can_export:
+            headers = ['Class', 'Section', 'Roll No', 'Admission No', 'Student Name', 'Status', 'Remarks']
+            csv_rows = [
+                [r['class_name'], r['section_name'], r['roll_number'] or '-', r['admission_number'], r['name'], r['status'], r['remarks']]
+                for r in report_data['absent_students']
+            ]
+            return AttendanceReportService.export_csv(f"Absent_Students_{end_date_str}.csv", headers, csv_rows)
+
+    elif report_type == 'class_wise' and selected_year:
+        report_data = AttendanceReportService.get_class_wise_summary(
+            academic_year=selected_year,
+            start_date=start_date,
+            end_date=end_date
+        )
+        if export_format == 'csv' and can_export:
+            headers = ['Class', 'Section', 'Total Students', 'Average Attendance (%)', 'Shortage Count']
+            csv_rows = [
+                [s['class_name'], s['section_name'], s['total_students'], f"{s['average_percentage']}%", s['shortage_count']]
+                for s in report_data['sections']
+            ]
+            return AttendanceReportService.export_csv(f"Class_Wise_Summary_{start_date_str}_to_{end_date_str}.csv", headers, csv_rows)
 
     elif report_type == 'staff_summary':
         department_id = request.GET.get('department')
@@ -1106,3 +1167,39 @@ def attendance_reports_view(request):
         'can_export': can_export,
     }
     return render(request, 'dashboard/attendance/reports.html', context)
+
+
+@login_required(login_url='login')
+def student_history_view(request, student_id=None):
+    """
+    Chronological attendance history for a student.
+    Students can view only their own history; authorized teachers/admins can inspect any student.
+    """
+    from apps.students.models import Student
+
+    if request.user.user_type == 'STUDENT' and not request.user.is_superuser:
+        student = getattr(request.user, 'student_profile', None)
+        if not student or (student_id and student.pk != student_id):
+            messages.error(request, "You may only view your own attendance history.")
+            return redirect('student-dashboard')
+    else:
+        if not (request.user.is_superuser or _check_attendance_permission(request, 'attendance.record.view')):
+            messages.error(request, "You do not have permission to view student attendance history.")
+            return redirect('home-dashboard')
+        if student_id:
+            student = get_object_or_404(Student, pk=student_id)
+        else:
+            q_adm = request.GET.get('admission_number', '').strip()
+            student = Student.objects.filter(admission_number__iexact=q_adm).first() if q_adm else None
+
+    academic_years = AcademicYear.objects.all().order_by('-start_date')
+    ay_id = request.GET.get('year')
+    history_data = AttendanceReportService.get_student_attendance_history(student, academic_year=ay_id or None) if student else None
+
+    return render(request, 'dashboard/attendance/student_history.html', {
+        'student': student,
+        'academic_years': academic_years,
+        'selected_year_id': ay_id,
+        'history_data': history_data,
+        'admission_number_query': request.GET.get('admission_number', ''),
+    })

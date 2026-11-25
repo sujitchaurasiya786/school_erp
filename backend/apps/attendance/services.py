@@ -2,6 +2,7 @@
 Calendar and Attendance Services.
 Provides centralized operational calendar resolution for Attendance and Academics.
 """
+import calendar
 from datetime import date, datetime, timedelta
 import math
 from django.core.exceptions import ValidationError
@@ -11,6 +12,7 @@ from django.utils.translation import gettext_lazy as _
 
 from apps.attendance.models import (
     Holiday, HolidayType, SaturdayRule, SpecialDayOverride,
+    AttendanceSession, AttendanceSessionStatus,
     StudentDailyAttendance, AttendanceCorrectionRequest, StaffDailyAttendance, AttendanceStatus,
     StaffApprovalStatus, CheckInMethod,
     WorkingDayConfig, WEEKDAY_CHOICES
@@ -482,6 +484,15 @@ class StudentDailyAttendanceService:
         return False
 
     @classmethod
+    def get_rule_config(cls, academic_year):
+        ay = CalendarService._resolve_academic_year(academic_year)
+        cfg = WorkingDayConfig.objects.filter(academic_year=ay, is_active=True).first()
+        return {
+            'shortage_threshold': float(cfg.shortage_threshold) if cfg else 75.0,
+            'allow_late_status': bool(cfg.allow_late_status) if cfg else False,
+        }
+
+    @classmethod
     def get_section_roster_with_attendance(
         cls,
         academic_year,
@@ -490,35 +501,63 @@ class StudentDailyAttendanceService:
         target_date
     ):
         """
-        Retrieves enrolled students for the given section along with their attendance
-        and pending correction request status for the specified target date.
+        Retrieves enrolled students for the given section along with their attendance,
+        running attendance percentage, session lock status, and pending correction request status.
         """
         ay = CalendarService._resolve_academic_year(academic_year)
         t_date = CalendarService._coerce_date(target_date)
         cal_status = CalendarService.get_day_status(ay, t_date)
+        rules = cls.get_rule_config(ay)
+
+        clean_class = str(class_name or '').strip()
+        clean_section = str(section_name or '').strip()
 
         from apps.students.models import ClassEnrollment
-        enrollments = (
+        enrollments = list(
             ClassEnrollment.objects.filter(
                 academic_year=ay,
-                class_name__iexact=str(class_name or '').strip(),
-                section_name__iexact=str(section_name or '').strip(),
+                class_name__iexact=clean_class,
+                section_name__iexact=clean_section,
                 is_active=True
             )
             .select_related('student', 'student__primary_guardian')
             .order_by('roll_number', 'student__first_name', 'student__last_name')
         )
 
-        # Map existing attendance records
-        att_qs = StudentDailyAttendance.objects.filter(
+        # Fetch session for this section & date
+        session = AttendanceSession.objects.filter(
             academic_year=ay,
-            class_name__iexact=str(class_name or '').strip(),
-            section_name__iexact=str(section_name or '').strip(),
+            class_name__iexact=clean_class,
+            section_name__iexact=clean_section,
             date=t_date
-        ).select_related('marked_by')
+        ).select_related('marked_by', 'submitted_by').first()
+
+        # Map existing attendance records for target_date
+        att_qs = list(StudentDailyAttendance.objects.filter(
+            academic_year=ay,
+            class_name__iexact=clean_class,
+            section_name__iexact=clean_section,
+            date=t_date
+        ).select_related('marked_by'))
 
         att_by_student = {att.student_id: att for att in att_qs}
         att_ids = [att.id for att in att_qs]
+
+        # Running attendance % per student up to t_date in this academic year
+        student_ids = [ce.student_id for ce in enrollments]
+        hist_qs = StudentDailyAttendance.objects.filter(
+            academic_year=ay,
+            student_id__in=student_ids,
+            date__lte=t_date
+        ).values('student_id', 'status')
+        hist_stats = {}
+        for h in hist_qs:
+            st = hist_stats.setdefault(h['student_id'], {'total': 0, 'eff': 0.0})
+            st['total'] += 1
+            if h['status'] in (AttendanceStatus.PRESENT, AttendanceStatus.LATE):
+                st['eff'] += 1.0
+            elif h['status'] == AttendanceStatus.HALF_DAY:
+                st['eff'] += 0.5
 
         # Map pending correction requests
         corrections = {
@@ -535,6 +574,7 @@ class StudentDailyAttendanceService:
             'absent': 0,
             'half_day': 0,
             'leave': 0,
+            'late': 0,
             'marked': len(att_by_student),
             'unmarked': max(0, len(enrollments) - len(att_by_student))
         }
@@ -553,6 +593,11 @@ class StudentDailyAttendanceService:
                     counts['half_day'] += 1
                 elif existing.status == AttendanceStatus.LEAVE:
                     counts['leave'] += 1
+                elif existing.status == AttendanceStatus.LATE:
+                    counts['late'] += 1
+
+            st_hist = hist_stats.get(std.id, {'total': 0, 'eff': 0.0})
+            att_pct = round((st_hist['eff'] / st_hist['total'] * 100), 1) if st_hist['total'] > 0 else 100.0
 
             roster.append({
                 'student': std,
@@ -561,10 +606,12 @@ class StudentDailyAttendanceService:
                 'attendance': existing,
                 'current_status': current_status,
                 'remarks': existing.remarks if existing else '',
+                'attendance_percentage': att_pct,
                 'pending_correction': corrections.get(existing.id) if existing else None
             })
 
-        marked_by_user = next((att.marked_by for att in att_qs if att.marked_by), None)
+        marked_by_user = session.marked_by if (session and session.marked_by) else next((att.marked_by for att in att_qs if att.marked_by), None)
+        session_status = session.status if session else ('SUBMITTED' if len(att_by_student) > 0 and not session else 'NONE')
 
         return {
             'academic_year': ay,
@@ -576,6 +623,11 @@ class StudentDailyAttendanceService:
             'roster': roster,
             'counts': counts,
             'is_already_marked': len(att_by_student) > 0,
+            'session': session,
+            'session_status': session_status,
+            'is_locked': bool(session and session.is_locked),
+            'allow_late_status': rules['allow_late_status'],
+            'shortage_threshold': rules['shortage_threshold'],
             'marked_by': marked_by_user,
             'total_students': len(enrollments),
         }
@@ -592,7 +644,8 @@ class StudentDailyAttendanceService:
         status=AttendanceStatus.PRESENT,
         remarks="",
         actor=None,
-        request=None
+        request=None,
+        _session=None
     ):
         from apps.students.models import Student, ClassEnrollment
         try:
@@ -603,29 +656,64 @@ class StudentDailyAttendanceService:
         t_date = CalendarService._coerce_date(attendance_date)
         CalendarService.validate_attendance_date(academic_year_id, t_date)
 
-        # Validate that student is enrolled in this section/class
-        is_enrolled = ClassEnrollment.objects.filter(
+        clean_class = str(class_name or '').strip()
+        clean_section = str(section_name or '').strip()
+
+        # Validate that student is enrolled in this section/class and bind exact ClassEnrollment
+        enrollment = ClassEnrollment.objects.filter(
             student=student,
             academic_year_id=academic_year_id,
-            class_name__iexact=str(class_name or '').strip(),
-            section_name__iexact=str(section_name or '').strip(),
+            class_name__iexact=clean_class,
+            section_name__iexact=clean_section,
             is_active=True
-        ).exists()
-        if not is_enrolled:
+        ).first()
+        if not enrollment:
             raise ValidationError({
-                'student': _(f"Student '{student.admission_number}' ({student.full_name}) is not enrolled in Class '{class_name}' Section '{section_name}' for this academic year.")
+                'student': _(f"Student '{student.admission_number}' ({student.full_name}) is not enrolled in Class '{clean_class}' Section '{clean_section}' for this academic year.")
             })
 
         if status not in AttendanceStatus.values:
             raise ValidationError({'status': _(f"Invalid attendance status '{status}'.")})
 
+        if status == AttendanceStatus.LATE:
+            rules = cls.get_rule_config(academic_year_id)
+            if not rules['allow_late_status']:
+                raise ValidationError({'status': _("Late attendance status is disabled by school attendance policy.")})
+
+        session = _session
+        if session is None:
+            session = AttendanceSession.objects.filter(
+                academic_year_id=academic_year_id,
+                class_name__iexact=clean_class,
+                section_name__iexact=clean_section,
+                date=t_date
+            ).first()
+
+        if session and session.is_locked:
+            raise BusinessConflictError(
+                "Attendance for this class, section, and date is already submitted and locked. "
+                "Use the Correction Request workflow to modify a submitted record."
+            )
+
+        if session is None:
+            session = AttendanceSession.objects.create(
+                academic_year_id=academic_year_id,
+                class_name=clean_class,
+                section_name=clean_section,
+                date=t_date,
+                status=AttendanceSessionStatus.DRAFT,
+                marked_by=actor
+            )
+
         record, created = StudentDailyAttendance.objects.update_or_create(
             student=student,
             date=t_date,
             defaults={
+                'session': session,
+                'enrollment': enrollment,
                 'academic_year_id': academic_year_id,
-                'class_name': str(class_name or '').strip(),
-                'section_name': str(section_name or '').strip(),
+                'class_name': clean_class,
+                'section_name': clean_section,
                 'status': status,
                 'remarks': str(remarks or '').strip(),
                 'marked_by': actor
@@ -641,10 +729,12 @@ class StudentDailyAttendanceService:
             reason=f"{'Marked' if created else 'Updated'} attendance for {student.admission_number} on {t_date}: {status}",
             changes={
                 "student": student.admission_number,
+                "enrollment_id": enrollment.pk,
+                "session_id": session.pk,
                 "date": str(t_date),
                 "status": status,
-                "class_name": class_name,
-                "section_name": section_name,
+                "class_name": clean_class,
+                "section_name": clean_section,
                 "remarks": remarks
             },
             request=request
@@ -657,28 +747,48 @@ class StudentDailyAttendanceService:
         cls,
         records,
         actor=None,
-        request=None
+        request=None,
+        submit=False
     ):
         """
-        Marks attendance for multiple students atomically with calendar validation
-        and enrollment verification.
+        Marks attendance for multiple students atomically with calendar validation,
+        enrollment verification, and session locking checks.
         """
         if not records:
             raise ValidationError({'records': _("Attendance records list cannot be empty.")})
 
-        # Pre-validate date & calendar on first record
         first_item = records[0]
         ay_id = first_item.get('academic_year_id')
         att_date = CalendarService._coerce_date(first_item.get('date'))
+        clean_class = str(first_item.get('class_name', '')).strip()
+        clean_section = str(first_item.get('section_name', '')).strip()
+
         CalendarService.validate_attendance_date(ay_id, att_date)
+
+        session, _ = AttendanceSession.objects.select_for_update().get_or_create(
+            academic_year_id=ay_id,
+            class_name=clean_class,
+            section_name=clean_section,
+            date=att_date,
+            defaults={
+                'status': AttendanceSessionStatus.DRAFT,
+                'marked_by': actor
+            }
+        )
+
+        if session.is_locked:
+            raise BusinessConflictError(
+                "Attendance for this class, section, and date is already submitted and locked. "
+                "Use the Correction Request workflow to update records."
+            )
 
         processed_ids = []
         for item in records:
             student_id = item.get('student_id')
             item_ay = item.get('academic_year_id') or ay_id
             item_date = item.get('date') or att_date
-            class_name = item.get('class_name', '')
-            section_name = item.get('section_name', '')
+            class_name = item.get('class_name', clean_class)
+            section_name = item.get('section_name', clean_section)
             status_val = item.get('status', AttendanceStatus.PRESENT)
             remarks = item.get('remarks', '')
 
@@ -691,21 +801,102 @@ class StudentDailyAttendanceService:
                 status=status_val,
                 remarks=remarks,
                 actor=actor,
-                request=request
+                request=request,
+                _session=session
             )
             processed_ids.append(rec.pk)
 
+        if submit:
+            session.status = AttendanceSessionStatus.SUBMITTED
+            session.submitted_by = actor
+            session.submitted_at = timezone.now()
+            session.save(update_fields=['status', 'submitted_by', 'submitted_at', 'updated_at'])
+
         AuditService.log(
-            action=AuditAction.UPDATE,
+            action=AuditAction.APPROVE if submit else AuditAction.UPDATE,
             module="attendance",
-            entity_type="StudentDailyAttendanceBulk",
-            entity_id=f"{first_item.get('class_name')}-{first_item.get('section_name')}-{att_date}",
+            entity_type="AttendanceSession",
+            entity_id=str(session.pk),
             actor=actor,
-            reason=f"Bulk attendance recorded for {len(processed_ids)} students on {att_date}",
-            changes={"count": len(processed_ids), "date": str(att_date), "ids": processed_ids},
+            reason=f"{'Submitted and locked' if submit else 'Saved draft'} attendance for {clean_class}-{clean_section} on {att_date} ({len(processed_ids)} students)",
+            changes={"session_id": session.pk, "status": session.status, "count": len(processed_ids), "date": str(att_date)},
             request=request
         )
         return processed_ids
+
+    @classmethod
+    @transaction.atomic
+    def submit_session(
+        cls,
+        academic_year_id,
+        class_name,
+        section_name,
+        attendance_date,
+        records=None,
+        actor=None,
+        request=None
+    ):
+        """
+        Finalizes and locks an AttendanceSession (Draft -> Submitted).
+        Optionally saves `records` before locking. Prevents duplicate submission.
+        """
+        t_date = CalendarService._coerce_date(attendance_date)
+        CalendarService.validate_attendance_date(academic_year_id, t_date)
+        clean_class = str(class_name or '').strip()
+        clean_section = str(section_name or '').strip()
+
+        existing_session = AttendanceSession.objects.select_for_update().filter(
+            academic_year_id=academic_year_id,
+            class_name__iexact=clean_class,
+            section_name__iexact=clean_section,
+            date=t_date
+        ).first()
+
+        if existing_session and existing_session.is_locked:
+            raise BusinessConflictError("Attendance for this class, section, and date has already been submitted and locked.")
+
+        if records:
+            cls.mark_bulk_attendance(records=records, actor=actor, request=request, submit=True)
+            session = AttendanceSession.objects.get(
+                academic_year_id=academic_year_id,
+                class_name__iexact=clean_class,
+                section_name__iexact=clean_section,
+                date=t_date
+            )
+            return session
+
+        if not existing_session:
+            raise ValidationError({'session': _("Cannot submit an empty session. Please mark student attendance first.")})
+
+        from apps.students.models import ClassEnrollment
+        enrolled_count = ClassEnrollment.objects.filter(
+            academic_year_id=academic_year_id,
+            class_name__iexact=clean_class,
+            section_name__iexact=clean_section,
+            is_active=True
+        ).count()
+        marked_count = existing_session.records.count()
+        if enrolled_count > 0 and marked_count < enrolled_count:
+            raise ValidationError({
+                'records': _(f"All enrolled students must be marked before submitting ({marked_count}/{enrolled_count} marked).")
+            })
+
+        existing_session.status = AttendanceSessionStatus.SUBMITTED
+        existing_session.submitted_by = actor
+        existing_session.submitted_at = timezone.now()
+        existing_session.save(update_fields=['status', 'submitted_by', 'submitted_at', 'updated_at'])
+
+        AuditService.log(
+            action=AuditAction.APPROVE,
+            module="attendance",
+            entity_type="AttendanceSession",
+            entity_id=str(existing_session.pk),
+            actor=actor,
+            reason=f"Submitted and locked attendance session {clean_class}-{clean_section} on {t_date}",
+            changes={"session_id": existing_session.pk, "status": existing_session.status},
+            request=request
+        )
+        return existing_session
 
     @classmethod
     @transaction.atomic
@@ -1270,17 +1461,20 @@ class AttendanceReportService:
         section_name,
         start_date,
         end_date,
-        threshold=75.0
+        threshold=None
     ):
         ay = CalendarService._resolve_academic_year(academic_year)
         s_date = CalendarService._coerce_date(start_date)
         e_date = CalendarService._coerce_date(end_date)
 
+        if threshold is None:
+            threshold = StudentDailyAttendanceService.get_rule_config(ay)['shortage_threshold']
+
         working_dates = CalendarService.get_working_days_in_range(ay, s_date, e_date)
         total_working_days = len(working_dates)
 
         from apps.students.models import ClassEnrollment
-        enrollments = (
+        enrollments = list(
             ClassEnrollment.objects.filter(
                 academic_year=ay,
                 class_name__iexact=str(class_name or '').strip(),
@@ -1313,14 +1507,15 @@ class AttendanceReportService:
             student_records = att_map.get(std.id, [])
 
             present_count = sum(1 for r in student_records if r.status == AttendanceStatus.PRESENT)
+            late_count = sum(1 for r in student_records if r.status == AttendanceStatus.LATE)
             absent_count = sum(1 for r in student_records if r.status == AttendanceStatus.ABSENT)
             half_day_count = sum(1 for r in student_records if r.status == AttendanceStatus.HALF_DAY)
             leave_count = sum(1 for r in student_records if r.status == AttendanceStatus.LEAVE)
 
-            effective_present = present_count + (0.5 * half_day_count)
+            effective_present = present_count + late_count + (0.5 * half_day_count)
             pct = round((effective_present / total_working_days * 100), 1) if total_working_days > 0 else 0.0
 
-            is_shortage = pct < threshold
+            is_shortage = pct < float(threshold)
             if is_shortage:
                 shortage_count += 1
             total_pct += pct
@@ -1331,6 +1526,7 @@ class AttendanceReportService:
                 'admission_number': std.admission_number,
                 'name': std.full_name,
                 'present_days': present_count,
+                'late_days': late_count,
                 'half_days': half_day_count,
                 'absent_days': absent_count,
                 'leave_days': leave_count,
@@ -1351,9 +1547,201 @@ class AttendanceReportService:
             'total_working_days': total_working_days,
             'total_students': len(enrollments),
             'shortage_count': shortage_count,
-            'threshold': threshold,
+            'threshold': float(threshold),
             'average_percentage': avg_pct,
             'rows': rows,
+        }
+
+    @classmethod
+    def get_daily_class_report(cls, academic_year, target_date, class_name=None, section_name=None):
+        """
+        Returns daily attendance breakdown and absent student list for a given date.
+        """
+        ay = CalendarService._resolve_academic_year(academic_year)
+        t_date = CalendarService._coerce_date(target_date)
+        qs = StudentDailyAttendance.objects.filter(academic_year=ay, date=t_date).select_related('student', 'enrollment', 'session')
+        if class_name:
+            qs = qs.filter(class_name__iexact=str(class_name).strip())
+        if section_name:
+            qs = qs.filter(section_name__iexact=str(section_name).strip())
+
+        records = list(qs.order_by('class_name', 'section_name', 'enrollment__roll_number', 'student__first_name'))
+        absent_students = [
+            {
+                'student_id': r.student_id,
+                'admission_number': r.student.admission_number,
+                'name': r.student.full_name,
+                'roll_number': r.enrollment.roll_number if r.enrollment else None,
+                'class_name': r.class_name,
+                'section_name': r.section_name,
+                'status': r.status,
+                'remarks': r.remarks,
+            }
+            for r in records if r.status == AttendanceStatus.ABSENT
+        ]
+        summary = {
+            'total_marked': len(records),
+            'present': sum(1 for r in records if r.status == AttendanceStatus.PRESENT),
+            'late': sum(1 for r in records if r.status == AttendanceStatus.LATE),
+            'absent': len(absent_students),
+            'half_day': sum(1 for r in records if r.status == AttendanceStatus.HALF_DAY),
+            'leave': sum(1 for r in records if r.status == AttendanceStatus.LEAVE),
+        }
+        return {
+            'academic_year': ay.name,
+            'date': str(t_date),
+            'summary': summary,
+            'absent_students': absent_students,
+            'records': [
+                {
+                    'student_id': r.student_id,
+                    'admission_number': r.student.admission_number,
+                    'name': r.student.full_name,
+                    'roll_number': r.enrollment.roll_number if r.enrollment else None,
+                    'class_name': r.class_name,
+                    'section_name': r.section_name,
+                    'status': r.status,
+                    'remarks': r.remarks,
+                    'session_status': r.session.status if r.session else 'SUBMITTED',
+                }
+                for r in records
+            ],
+        }
+
+    @classmethod
+    def get_monthly_attendance_report(cls, academic_year, class_name, section_name, year, month):
+        """
+        Returns a monthly attendance summary and day-by-day status matrix for a class/section.
+        """
+        ay = CalendarService._resolve_academic_year(academic_year)
+        num_days = calendar.monthrange(int(year), int(month))[1]
+        s_date = date(int(year), int(month), 1)
+        e_date = date(int(year), int(month), num_days)
+        summary = cls.get_student_attendance_summary(ay, class_name, section_name, s_date, e_date)
+
+        records = StudentDailyAttendance.objects.filter(
+            academic_year=ay,
+            class_name__iexact=str(class_name or '').strip(),
+            section_name__iexact=str(section_name or '').strip(),
+            date__range=[s_date, e_date]
+        )
+        day_map = {}
+        for r in records:
+            day_map.setdefault(r.student_id, {})[str(r.date)] = r.status
+
+        serialized_rows = []
+        for row in summary['rows']:
+            std = row['student']
+            serialized_rows.append({
+                'student_id': std.id,
+                'admission_number': row['admission_number'],
+                'roll_number': row['roll_number'],
+                'name': row['name'],
+                'present_days': row['present_days'],
+                'late_days': row['late_days'],
+                'half_days': row['half_days'],
+                'absent_days': row['absent_days'],
+                'leave_days': row['leave_days'],
+                'effective_attendance': row['effective_attendance'],
+                'total_working_days': row['total_working_days'],
+                'percentage': row['percentage'],
+                'is_shortage': row['is_shortage'],
+                'daily_statuses': day_map.get(std.id, {}),
+            })
+
+        return {
+            'academic_year': ay.name,
+            'class_name': class_name,
+            'section_name': section_name,
+            'year': int(year),
+            'month': int(month),
+            'total_working_days': summary['total_working_days'],
+            'threshold': summary['threshold'],
+            'average_percentage': summary['average_percentage'],
+            'shortage_count': summary['shortage_count'],
+            'rows': serialized_rows,
+        }
+
+    @classmethod
+    def get_student_attendance_history(cls, student, academic_year=None, start_date=None, end_date=None):
+        """
+        Returns a student's attendance history preserving historical class/section/enrollment
+        across promotions.
+        """
+        qs = StudentDailyAttendance.objects.filter(student=student).select_related('academic_year', 'enrollment', 'session')
+        if academic_year:
+            ay = CalendarService._resolve_academic_year(academic_year)
+            qs = qs.filter(academic_year=ay)
+        if start_date:
+            qs = qs.filter(date__gte=CalendarService._coerce_date(start_date))
+        if end_date:
+            qs = qs.filter(date__lte=CalendarService._coerce_date(end_date))
+
+        records = list(qs.order_by('-date'))
+        total = len(records)
+        present = sum(1 for r in records if r.status == AttendanceStatus.PRESENT)
+        late = sum(1 for r in records if r.status == AttendanceStatus.LATE)
+        half_day = sum(1 for r in records if r.status == AttendanceStatus.HALF_DAY)
+        absent = sum(1 for r in records if r.status == AttendanceStatus.ABSENT)
+        leave = sum(1 for r in records if r.status == AttendanceStatus.LEAVE)
+        effective = present + late + (0.5 * half_day)
+        pct = round((effective / total * 100), 1) if total > 0 else 0.0
+
+        return {
+            'student_id': student.id,
+            'admission_number': student.admission_number,
+            'student_name': student.full_name,
+            'summary': {
+                'total_marked_days': total,
+                'present': present,
+                'late': late,
+                'half_day': half_day,
+                'absent': absent,
+                'leave': leave,
+                'percentage': pct,
+            },
+            'records': [
+                {
+                    'id': r.id,
+                    'date': str(r.date),
+                    'academic_year': r.academic_year.name,
+                    'class_name': r.enrollment.class_name if r.enrollment else r.class_name,
+                    'section_name': r.enrollment.section_name if r.enrollment else r.section_name,
+                    'roll_number': r.enrollment.roll_number if r.enrollment else None,
+                    'status': r.status,
+                    'remarks': r.remarks,
+                }
+                for r in records
+            ],
+        }
+
+    @classmethod
+    def get_class_wise_summary(cls, academic_year, start_date, end_date):
+        """
+        Returns aggregated attendance percentage per active class & section for an academic year.
+        """
+        ay = CalendarService._resolve_academic_year(academic_year)
+        s_date = CalendarService._coerce_date(start_date)
+        e_date = CalendarService._coerce_date(end_date)
+
+        from apps.academics.models import Section
+        sections = Section.objects.filter(is_active=True).select_related('school_class').order_by('school_class__order', 'name')
+        results = []
+        for sec in sections:
+            summary = cls.get_student_attendance_summary(ay, sec.school_class.name, sec.name, s_date, e_date)
+            if summary['total_students'] > 0:
+                results.append({
+                    'class_name': sec.school_class.name,
+                    'section_name': sec.name,
+                    'total_students': summary['total_students'],
+                    'average_percentage': summary['average_percentage'],
+                    'shortage_count': summary['shortage_count'],
+                })
+        return {
+            'academic_year': ay.name,
+            'start_date': str(s_date),
+            'end_date': str(e_date),
+            'sections': results,
         }
 
     @classmethod

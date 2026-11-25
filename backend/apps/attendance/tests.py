@@ -1821,3 +1821,271 @@ class StaffSelfAttendanceWebViewsTests(AttendanceTestBase):
         self.assertEqual(rec.approval_status, StaffApprovalStatus.APPROVED)
 
 
+# ==============================================================================
+# 14. Attendance Session Lifecycle, Enrollment FK, Promotion & API Tests
+# ==============================================================================
+class AttendanceLifecycleAndAPICompletionTests(AttendanceTestBase):
+
+    def setUp(self):
+        super().setUp()
+        from rest_framework.test import APIClient
+        self.client = APIClient()
+        from apps.academics.models import SchoolClass, Section
+        from apps.students.models import Guardian, Student, ClassEnrollment
+        from apps.rbac.models import Role, UserRoleAssignment, ScopeType, Permission
+
+        self.school_class = SchoolClass.objects.create(name="Class 8", code="CL-08", order=8)
+        self.teacher_user = User.objects.create_user(username="teach_lifecycle", email="teach_lifecycle@school.test", password="p", user_type="TEACHER")
+        self.other_teacher = User.objects.create_user(username="teach_other", email="teach_other@school.test", password="p", user_type="TEACHER")
+        self.section = Section.objects.create(school_class=self.school_class, name="A", class_teacher=self.teacher_user)
+
+        # Grant teacher attendance.record.view + attendance.record.mark
+        t_role = Role.objects.create(name="Lifecycle Teacher", code="lifecycle_teacher")
+        for codename in ['attendance.record.view', 'attendance.record.mark', 'attendance.record.correct']:
+            perm = Permission.objects.get(codename=codename)
+            t_role.permissions.add(perm)
+        UserRoleAssignment.objects.create(user=self.teacher_user, role=t_role, scope_type=ScopeType.SECTION, scope_id=str(self.section.pk), is_active=True)
+        UserRoleAssignment.objects.create(user=self.other_teacher, role=t_role, scope_type=ScopeType.SECTION, scope_id="999999", is_active=True)
+
+        self.guardian = Guardian.objects.create(first_name="Raj", last_name="Kumar", phone="9999900001")
+        self.student_user = User.objects.create_user(username="STU-LIFE-01", email="stu_life01@school.test", password="p", user_type="STUDENT")
+        self.student = Student.objects.create(
+            admission_number="STU-LIFE-01",
+            user_account=self.student_user,
+            first_name="Aarav",
+            last_name="Kumar",
+            date_of_birth=date(2013, 5, 1),
+            gender="M",
+            address="Lucknow",
+            admission_date=date(2026, 4, 1),
+            primary_guardian=self.guardian,
+        )
+        self.enrollment = ClassEnrollment.objects.create(
+            student=self.student,
+            academic_year=self.ay,
+            class_name="Class 8",
+            section_name="A",
+            roll_number=1,
+        )
+        # Monday inside self.ay
+        self.work_date = self.ay.start_date + timedelta(days=(7 - self.ay.start_date.weekday()) % 7)
+
+    def test_draft_edit_submit_lock_and_duplicate_prevention(self):
+        from apps.attendance.models import AttendanceSession, AttendanceSessionStatus
+        self.client.force_login(self.teacher_user)
+
+        # 1. Save Draft
+        draft_res = self.client.post(
+            '/api/v1/attendance/daily/save-draft/',
+            data={
+                'records': [{
+                    'student_id': self.student.pk,
+                    'academic_year_id': self.ay.pk,
+                    'date': str(self.work_date),
+                    'class_name': 'Class 8',
+                    'section_name': 'A',
+                    'status': 'PRESENT',
+                    'remarks': 'On time',
+                }]
+            },
+            format='json',
+        )
+        self.assertEqual(draft_res.status_code, 200)
+        self.assertEqual(draft_res.data['session_status'], 'DRAFT')
+
+        rec = StudentDailyAttendance.objects.get(student=self.student, date=self.work_date)
+        self.assertEqual(rec.enrollment_id, self.enrollment.pk)
+        self.assertEqual(rec.session.status, AttendanceSessionStatus.DRAFT)
+
+        # 2. Edit Draft before submission
+        draft_res_2 = self.client.post(
+            '/api/v1/attendance/daily/save-draft/',
+            data={
+                'records': [{
+                    'student_id': self.student.pk,
+                    'academic_year_id': self.ay.pk,
+                    'date': str(self.work_date),
+                    'class_name': 'Class 8',
+                    'section_name': 'A',
+                    'status': 'ABSENT',
+                    'remarks': 'Updated in draft',
+                }]
+            },
+            format='json',
+        )
+        self.assertEqual(draft_res_2.status_code, 200)
+        rec.refresh_from_db()
+        self.assertEqual(rec.status, 'ABSENT')
+
+        # 3. Submit and Lock
+        submit_res = self.client.post(
+            '/api/v1/attendance/daily/submit/',
+            data={
+                'academic_year_id': self.ay.pk,
+                'class_name': 'Class 8',
+                'section_name': 'A',
+                'date': str(self.work_date),
+            },
+            format='json',
+        )
+        self.assertEqual(submit_res.status_code, 200)
+        self.assertTrue(submit_res.data['is_locked'])
+
+        # 4. Duplicate submit / silent overwrite must be blocked with 409
+        dup_submit = self.client.post(
+            '/api/v1/attendance/daily/submit/',
+            data={
+                'academic_year_id': self.ay.pk,
+                'class_name': 'Class 8',
+                'section_name': 'A',
+                'date': str(self.work_date),
+            },
+            format='json',
+        )
+        self.assertEqual(dup_submit.status_code, 409)
+
+        overwrite_res = self.client.post(
+            '/api/v1/attendance/daily/save-draft/',
+            data={
+                'records': [{
+                    'student_id': self.student.pk,
+                    'academic_year_id': self.ay.pk,
+                    'date': str(self.work_date),
+                    'class_name': 'Class 8',
+                    'section_name': 'A',
+                    'status': 'PRESENT',
+                }]
+            },
+            format='json',
+        )
+        self.assertEqual(overwrite_res.status_code, 409)
+
+        # 5. Direct PATCH on locked record blocked
+        patch_res = self.client.patch(f'/api/v1/attendance/daily/{rec.pk}/', data={'status': 'PRESENT'}, format='json')
+        self.assertEqual(patch_res.status_code, 400)
+
+        # 6. Correction request & admin approval updates locked record
+        corr_res = self.client.post(
+            '/api/v1/attendance/corrections/',
+            data={'attendance': rec.pk, 'new_status': 'PRESENT', 'reason': 'Student arrived with medical slip'},
+            format='json',
+        )
+        self.assertEqual(corr_res.status_code, 201)
+        corr_id = corr_res.data['id']
+
+        self.client.force_login(self.superuser)
+        rev_res = self.client.post(
+            f'/api/v1/attendance/corrections/{corr_id}/review/',
+            data={'is_approved': True, 'review_notes': 'Verified'},
+            format='json',
+        )
+        self.assertEqual(rev_res.status_code, 200)
+        rec.refresh_from_db()
+        self.assertEqual(rec.status, 'PRESENT')
+
+    def test_unauthorized_teacher_and_late_policy_and_invalid_status(self):
+        # Unassigned teacher cannot view or mark section
+        self.client.force_login(self.other_teacher)
+        roster_res = self.client.get(
+            f'/api/v1/attendance/daily/roster/?academic_year={self.ay.pk}&class_name=Class%208&section_name=A&date={self.work_date}'
+        )
+        self.assertEqual(roster_res.status_code, 403)
+
+        # Assigned teacher: invalid status and disabled LATE status rejected
+        self.client.force_login(self.teacher_user)
+        bad_status = self.client.post(
+            '/api/v1/attendance/daily/save-draft/',
+            data={
+                'records': [{
+                    'student_id': self.student.pk,
+                    'academic_year_id': self.ay.pk,
+                    'date': str(self.work_date),
+                    'class_name': 'Class 8',
+                    'section_name': 'A',
+                    'status': 'INVALID_STATUS',
+                }]
+            },
+            format='json',
+        )
+        self.assertEqual(bad_status.status_code, 400)
+
+        late_disabled = self.client.post(
+            '/api/v1/attendance/daily/save-draft/',
+            data={
+                'records': [{
+                    'student_id': self.student.pk,
+                    'academic_year_id': self.ay.pk,
+                    'date': str(self.work_date),
+                    'class_name': 'Class 8',
+                    'section_name': 'A',
+                    'status': 'LATE',
+                }]
+            },
+            format='json',
+        )
+        self.assertEqual(late_disabled.status_code, 400)
+
+    def test_historical_attendance_preserved_after_promotion_and_reports(self):
+        from apps.school_config.models import AcademicYear
+        from apps.students.services import StudentService
+
+        self.client.force_login(self.superuser)
+        # Mark & submit attendance in 2026-2027 (Class 8 - A)
+        self.client.post(
+            '/api/v1/attendance/daily/submit/',
+            data={
+                'academic_year_id': self.ay.pk,
+                'class_name': 'Class 8',
+                'section_name': 'A',
+                'date': str(self.work_date),
+                'records': [{
+                    'student_id': self.student.pk,
+                    'academic_year_id': self.ay.pk,
+                    'date': str(self.work_date),
+                    'class_name': 'Class 8',
+                    'section_name': 'A',
+                    'status': 'ABSENT',
+                    'remarks': 'Sick',
+                }]
+            },
+            format='json',
+        )
+
+        # Promote student to next academic year Class 9 - B
+        next_ay = AcademicYear.objects.create(name="2028-2029", start_date=date(2028, 4, 1), end_date=date(2029, 3, 31))
+        StudentService.promote_students(
+            target_academic_year=next_ay,
+            target_class="Class 9",
+            target_section="B",
+            student_ids=[self.student.pk],
+            roll_numbers={self.student.pk: 12},
+            user=self.superuser
+        )
+
+        # Verify historical attendance still reflects Class 8 - A (Roll 1)
+        hist_res = self.client.get(f'/api/v1/attendance/daily/student-history/?student_id={self.student.pk}')
+        self.assertEqual(hist_res.status_code, 200)
+        self.assertEqual(len(hist_res.data['records']), 1)
+        self.assertEqual(hist_res.data['records'][0]['class_name'], 'Class 8')
+        self.assertEqual(hist_res.data['records'][0]['section_name'], 'A')
+        self.assertEqual(hist_res.data['records'][0]['roll_number'], 1)
+
+        # Verify Daily, Monthly, and Class Summary APIs
+        daily_rep = self.client.get(f'/api/v1/attendance/daily/daily-report/?academic_year={self.ay.pk}&date={self.work_date}')
+        self.assertEqual(daily_rep.status_code, 200)
+        self.assertEqual(daily_rep.data['summary']['absent'], 1)
+
+        monthly_rep = self.client.get(f'/api/v1/attendance/daily/monthly-report/?academic_year={self.ay.pk}&class_name=Class%208&section_name=A&year=2026&month=4')
+        self.assertEqual(monthly_rep.status_code, 200)
+        self.assertEqual(len(monthly_rep.data['rows']), 1)
+
+        summary_rep = self.client.get(f'/api/v1/attendance/daily/class-summary/?academic_year={self.ay.pk}&start_date=2026-04-01&end_date=2026-04-30')
+        self.assertEqual(summary_rep.status_code, 200)
+
+    def test_private_media_requires_authentication(self):
+        # Anonymous user cannot access /media/... directly
+        res = self.client.get('/media/student_documents/2026/birth_cert.pdf')
+        self.assertEqual(res.status_code, 302)
+        self.assertIn('/login/', res.url)
+
+
