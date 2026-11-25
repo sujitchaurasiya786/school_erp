@@ -723,6 +723,19 @@ def daily_attendance_view(request):
         'can_correct': bool(can_correct),
     }
 
+    today_date = date.today()
+    from apps.students.models import Student, StudentStatus
+    today_stu_qs = StudentDailyAttendance.objects.filter(date=today_date)
+    if selected_year:
+        today_stu_qs = today_stu_qs.filter(academic_year=selected_year)
+    overall_student_stats = {
+        'date': today_date,
+        'total_students': Student.objects.filter(status=StudentStatus.ACTIVE).count(),
+        'present': today_stu_qs.filter(status__in=[AttendanceStatus.PRESENT, AttendanceStatus.LATE]).count(),
+        'absent': today_stu_qs.filter(status=AttendanceStatus.ABSENT).count(),
+        'other': today_stu_qs.filter(status__in=[AttendanceStatus.HALF_DAY, AttendanceStatus.LEAVE]).count(),
+    }
+
     context = {
         'academic_years': academic_years,
         'selected_year': selected_year,
@@ -738,6 +751,7 @@ def daily_attendance_view(request):
         'calendar_status': calendar_status,
         'roster_data': roster_data,
         'attendance_statuses': AttendanceStatus.choices,
+        'overall_student_stats': overall_student_stats,
         'react_config_json': json.dumps(react_config),
     }
     return render(request, 'dashboard/attendance/daily_attendance.html', context)
@@ -1011,6 +1025,7 @@ def attendance_reports_view(request):
         return redirect('home-dashboard')
 
     can_export = request.user.is_superuser or _check_attendance_permission(request, 'attendance.report.export')
+    can_view_staff_att = request.user.is_superuser or _check_attendance_permission(request, 'attendance.staff.view') or request.user.user_type in ['ADMIN', 'PRINCIPAL']
 
     academic_years = AcademicYear.objects.all().order_by('-start_date')
     current_year = AcademicYear.objects.filter(is_current=True).first()
@@ -1124,6 +1139,9 @@ def attendance_reports_view(request):
             return AttendanceReportService.export_csv(f"Class_Wise_Summary_{start_date_str}_to_{end_date_str}.csv", headers, csv_rows)
 
     elif report_type == 'staff_summary':
+        if not can_view_staff_att:
+            messages.error(request, "You do not have permission to view staff attendance reports.")
+            return redirect('attendance-reports')
         department_id = request.GET.get('department')
         report_data = AttendanceReportService.get_staff_attendance_summary(
             start_date=start_date,
@@ -1165,6 +1183,7 @@ def attendance_reports_view(request):
         'department_id': request.GET.get('department'),
         'report_data': report_data,
         'can_export': can_export,
+        'can_view_staff_att': can_view_staff_att,
     }
     return render(request, 'dashboard/attendance/reports.html', context)
 

@@ -8,7 +8,7 @@ from django.utils import timezone
 
 from apps.academics.models import ClassSubject, SchoolClass, Section, TimetableSlot
 from apps.admissions.models import AdmissionApplication
-from apps.attendance.models import AttendanceStatus, Holiday, StudentDailyAttendance
+from apps.attendance.models import AttendanceStatus, Holiday, StaffDailyAttendance, StudentDailyAttendance
 from apps.examinations.models import Assessment, ExamMark
 from apps.finance.models import StudentInvoice
 from apps.helpdesk.models import Ticket, TicketStatus
@@ -44,12 +44,35 @@ def dashboard_view(request):
     can_view_staff = RBACService.has_permission(request.user, 'hrms.staff.view')
     can_view_roles = RBACService.has_permission(request.user, 'rbac.role.view')
     can_view_users = RBACService.has_permission(request.user, 'identity.users.view')
+    can_view_student_att = RBACService.has_permission(request.user, 'attendance.record.view')
+    can_view_staff_att = RBACService.has_permission(request.user, 'attendance.staff.view')
 
+    today = timezone.localdate()
     total_students = Student.objects.filter(status=StudentStatus.ACTIVE).count() if can_view_students else 0
     total_applications = AdmissionApplication.objects.count() if can_view_applications else 0
     total_staff = StaffProfile.objects.count() if can_view_staff else 0
+    total_staff_users = User.objects.filter(
+        is_active=True,
+        user_type__in=[UserType.TEACHER, UserType.STAFF, UserType.PRINCIPAL, UserType.ADMIN, UserType.ACCOUNTANT]
+    ).count() if (can_view_staff or can_view_staff_att) else 0
     total_roles = Role.objects.count() if can_view_roles else 0
     total_users = User.objects.count() if can_view_users else 0
+
+    student_present_today = 0
+    student_absent_today = 0
+    if can_view_students or can_view_student_att:
+        stu_att_today = StudentDailyAttendance.objects.filter(date=today)
+        if current_year:
+            stu_att_today = stu_att_today.filter(academic_year=current_year)
+        student_present_today = stu_att_today.filter(status__in=[AttendanceStatus.PRESENT, AttendanceStatus.LATE]).count()
+        student_absent_today = stu_att_today.filter(status=AttendanceStatus.ABSENT).count()
+
+    staff_present_today = 0
+    staff_absent_today = 0
+    if can_view_staff or can_view_staff_att:
+        stf_att_today = StaffDailyAttendance.objects.filter(date=today)
+        staff_present_today = stf_att_today.filter(status__in=[AttendanceStatus.PRESENT, AttendanceStatus.LATE]).count()
+        staff_absent_today = stf_att_today.filter(status=AttendanceStatus.ABSENT).count()
 
     recent_users = User.objects.order_by('-date_joined')[:5] if can_view_users else []
     recent_applications = AdmissionApplication.objects.order_by('-created_at')[:5] if can_view_applications else []
@@ -60,9 +83,15 @@ def dashboard_view(request):
     context = {
         'school_profile': school_profile,
         'current_year': current_year,
+        'today': today,
         'total_students': total_students,
+        'student_present_today': student_present_today,
+        'student_absent_today': student_absent_today,
         'total_applications': total_applications,
         'total_staff': total_staff,
+        'total_staff_users': total_staff_users,
+        'staff_present_today': staff_present_today,
+        'staff_absent_today': staff_absent_today,
         'total_roles': total_roles,
         'total_users': total_users,
         'recent_users': recent_users,
@@ -72,6 +101,8 @@ def dashboard_view(request):
         'can_view_staff': can_view_staff,
         'can_view_roles': can_view_roles,
         'can_view_users': can_view_users,
+        'can_view_student_att': can_view_student_att,
+        'can_view_staff_att': can_view_staff_att,
         'user_roles': user_roles,
         'user_permissions_count': len(user_permissions),
     }
@@ -160,9 +191,14 @@ def teacher_dashboard_view(request):
 
     attendance_classes = []
     pending_attendance_count = 0
+    ct_total_students = 0
+    ct_present_today = 0
+    ct_absent_today = 0
+    ct_section_labels = []
     for sec in assigned_sections:
         is_marked = False
         present_count = 0
+        absent_count = 0
         total_students = Student.objects.filter(
             enrollments__academic_year=current_year,
             enrollments__class_name=sec.school_class.name,
@@ -179,19 +215,35 @@ def teacher_dashboard_view(request):
             )
             is_marked = att_qs.exists()
             if is_marked:
-                present_count = att_qs.filter(status=AttendanceStatus.PRESENT).count()
+                present_count = att_qs.filter(status__in=[AttendanceStatus.PRESENT, AttendanceStatus.LATE]).count()
+                absent_count = att_qs.filter(status=AttendanceStatus.ABSENT).count()
             else:
                 pending_attendance_count += 1
 
         is_class_teacher = (sec.class_teacher_id == teacher_user.id)
+        if is_class_teacher:
+            ct_total_students += total_students
+            ct_present_today += present_count
+            ct_absent_today += absent_count
+            ct_section_labels.append(f"{sec.school_class.name} - {sec.name}")
+
         attendance_classes.append({
             'section': sec,
             'is_class_teacher': is_class_teacher,
             'is_marked': is_marked,
             'present_count': present_count,
+            'absent_count': absent_count,
             'total_students': total_students,
             'direct_url': f"/dashboard/attendance/daily/?year={current_year.id if current_year else ''}&class_id={sec.school_class.id}&section_name={sec.name}&date={today.strftime('%Y-%m-%d')}"
         })
+
+    ct_stats = {
+        'has_class': len(ct_section_labels) > 0,
+        'classes_label': ", ".join(ct_section_labels),
+        'total_students': ct_total_students,
+        'present_today': ct_present_today,
+        'absent_today': ct_absent_today,
+    }
 
     # 3. ASSIGNMENT & GRADING QUEUE
     teacher_subject_ids = ClassSubject.objects.filter(teacher=teacher_user).values_list('subject_id', flat=True)
@@ -286,6 +338,7 @@ def teacher_dashboard_view(request):
         'all_teachers': all_teachers,
         'timetable_slots': timetable_slots,
         'attendance_classes': attendance_classes,
+        'ct_stats': ct_stats,
         'pending_attendance_count': pending_attendance_count,
         'assessments_queue': assessments_queue,
         'at_risk_students': at_risk_students[:10],

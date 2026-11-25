@@ -76,22 +76,31 @@
             </div>
         </div>
 
-        <!-- 2. Attendance Status -->
+        <!-- 2. Class Teacher Daily Attendance Count -->
         <div class="col-6 col-lg-3">
             <div class="card border-0 shadow-sm h-100">
                 <div class="card-body p-3">
                     <div class="d-flex align-items-center justify-content-between mb-2">
-                        <span class="text-muted small fw-semibold text-uppercase">Roll Call Status</span>
-                        <div class="{% if pending_attendance_count > 0 %}bg-danger bg-opacity-10 text-danger{% else %}bg-success bg-opacity-10 text-success{% endif %} rounded-3 p-2">
+                        <span class="text-muted small fw-semibold text-uppercase">My Class Today</span>
+                        <div class="{% if ct_stats.has_class %}bg-success bg-opacity-10 text-success{% else %}bg-secondary bg-opacity-10 text-secondary{% endif %} rounded-3 p-2">
                             <i class="ti ti-user-check fs-4"></i>
                         </div>
                     </div>
+                    {% if ct_stats.has_class %}
+                    <h3 class="fw-bold mb-1 text-success">
+                        {{ ct_stats.present_today }} <span class="fs-6 text-muted fw-normal">/ {{ ct_stats.total_students }} Present</span>
+                    </h3>
+                    <small class="text-muted d-block text-truncate" title="{{ ct_stats.classes_label }}">
+                        <span class="text-danger fw-semibold">{{ ct_stats.absent_today }} Absent</span> &bull; {{ ct_stats.classes_label }}
+                    </small>
+                    {% else %}
                     <h3 class="fw-bold mb-1 {% if pending_attendance_count > 0 %}text-danger{% else %}text-success{% endif %}">
                         {% if pending_attendance_count > 0 %}{{ pending_attendance_count }} Pending{% else %}All Done{% endif %}
                     </h3>
                     <small class="{% if pending_attendance_count > 0 %}text-danger{% else %}text-success{% endif %}">
                         <i class="ti ti-alert-circle me-1"></i>Classes requiring roll call
                     </small>
+                    {% endif %}
                 </div>
             </div>
         </div>

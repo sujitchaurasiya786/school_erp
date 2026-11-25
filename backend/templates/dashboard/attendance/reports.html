@@ -15,9 +15,11 @@
             <a href="{% url 'attendance-daily' %}" class="btn btn-outline-secondary btn-sm shadow-sm">
                 <i class="ti ti-checklist me-1"></i> Student Attendance
             </a>
+            {% if can_view_staff_att %}
             <a href="{% url 'attendance-staff' %}" class="btn btn-outline-secondary btn-sm shadow-sm">
                 <i class="ti ti-clipboard-check me-1"></i> Staff Attendance
             </a>
+            {% endif %}
         </div>
     </div>
 
@@ -57,11 +59,13 @@
                         <i class="ti ti-school me-1"></i> Class-wise Summary
                     </a>
                 </li>
+                {% if can_view_staff_att %}
                 <li class="nav-item">
                     <a class="nav-link {% if report_type == 'staff_summary' %}active{% endif %} py-1 px-3" href="?report_type=staff_summary">
                         <i class="ti ti-briefcase me-1"></i> Staff Attendance Summary
                     </a>
                 </li>
+                {% endif %}
             </ul>
         </div>
 
